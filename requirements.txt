@@ -5,10 +5,11 @@ pydantic>=2.10.0
 pydantic-settings>=2.7.0
 python-dotenv>=1.0.0
 
-# AI / LangChain
+# AI / LangChain & MQTT
 langchain>=0.3.0
 langchain-openai>=0.3.0
 langgraph>=0.2.0
+paho-mqtt==2.0.0
 
 # Database (uncomment as needed)
 # sqlalchemy>=2.0.0
