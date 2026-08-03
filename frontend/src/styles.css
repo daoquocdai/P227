@@ -49,6 +49,8 @@ nav { display: grid; gap: 6px; }
 .route-content { min-height: calc(100dvh - 76px); width: 100%; }
 .topbar-spacer { flex: 1; }
 .profile { display: flex; align-items: center; gap: 10px; padding-left: 18px; border-left: 1px solid var(--color-border); }
+.topbar-protection { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 0 11px; border: 1px solid #ccebd6; border-radius: 999px; background: #effaf3; color: #17813d; font-size: 12px; font-weight: 750; white-space: nowrap; }
+.topbar-protection svg { width: 16px; height: 16px; }
 .profile strong { display: block; font-size: 15px; }
 .avatar { display: grid; place-items: center; border-radius: 50%; background: #d9eaff; color: #1e5eaa; font-weight: 700; flex: 0 0 auto; }
 .avatar.small { width: 40px; height: 40px; }
@@ -379,6 +381,7 @@ html, body, #root { height: 100%; min-height: 0; overflow: hidden; }
   scrollbar-gutter: stable;
 }
 .route-content.overview-route { overflow-y: auto; }
+.app-shell.alerts-active .route-content { overflow: hidden; scrollbar-gutter: auto; }
 
 @media (max-width: 600px) {
   .main-content {
@@ -387,6 +390,8 @@ html, body, #root { height: 100%; min-height: 0; overflow: hidden; }
     padding-bottom: calc(72px + env(safe-area-inset-bottom));
   }
   .route-content { height: 100%; min-height: 0; }
+  .topbar-protection { min-height: 30px; padding: 0 8px; font-size: 10px; }
+  .topbar-protection svg { width: 14px; height: 14px; }
 }
 
 /* Desktop navigation rail: compact at rest, expanded on interaction. */
