@@ -1,0 +1,24 @@
+{
+  "name": "an-tam-home-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "lucide-react": "latest",
+    "msw": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "vite": "^6.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "typescript": "latest"
+  }
+}
