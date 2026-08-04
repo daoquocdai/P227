@@ -1,16 +1,4 @@
 services:
-  # 1. TRẠM TRUNG CHUYỂN MQTT
-  mqtt-broker:
-    image: eclipse-mosquitto:latest
-    container_name: guardiancam_mqtt
-    ports:
-      - "1883:1883"
-      - "9001:9001"
-    volumes:
-      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
-    restart: unless-stopped
-
-  # 2. BACKEND API & AI AGENT
   backend:
     build:
       context: .
@@ -22,9 +10,7 @@ services:
       - .env
     volumes:
       - ./data:/app/data
-      - ./snapshots:/app/snapshots  # Mount thêm thư mục ảnh vào container
-    depends_on:
-      - mqtt-broker                 # Đảm bảo MQTT khởi động trước Backend
+      - ./snapshots:/app/snapshots
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]

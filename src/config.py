@@ -19,12 +19,8 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     cors_origins: str = "http://localhost:3000"
-    
-    # --- CÁC BIẾN MỚI THÊM CHO GUARDIANCAM ---
+
     api_base_url: str = "http://localhost:8000"
-    mqtt_host: str = "mqtt-broker" # Để là localhost nếu chạy ngoài Docker
-    mqtt_port: int = Field(default=1883, ge=1, le=65535)
-    # ----------------------------------------
 
     # LLM
     openai_api_key: str = ""

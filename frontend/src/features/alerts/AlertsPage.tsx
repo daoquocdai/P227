@@ -2,9 +2,10 @@ import { ShieldCheck } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { AlertConversation } from "./AlertConversation";
 import { AlertList } from "./AlertList";
-import { fetchAlerts } from "./alertMockService";
+import { fetchAlerts, updateAlertStatus } from "./alertService";
 import type { AlertEvent, AlertFilter } from "./alert.types";
 import "./alerts.css";
+import "./snapshotApi.css";
 
 export default function AlertsPage() {
   const routeAlertId = () => decodeURIComponent(window.location.pathname.split("/")[2] ?? "");
@@ -38,8 +39,15 @@ export default function AlertsPage() {
   const selectAlert = (id: string) => { window.history.pushState({}, "", `/alerts/${encodeURIComponent(id)}`); setSelectedId(id); setAlerts((items) => items.map((item) => item.id === id ? { ...item, unread: false } : item)); setMobileConversation(true); };
   const backToList = () => { window.history.pushState({}, "", "/alerts"); setMobileConversation(false); };
   const updateStatus = (status: AlertEvent["status"]) => {
+    const previousStatus = alerts.find((item) => item.id === selectedId)?.status;
     setAlerts((items) => items.map((item) => item.id === selectedId ? { ...item, status, unread: false } : item));
     window.dispatchEvent(new CustomEvent("antam:alert-status", { detail: { id: selectedId, status } }));
+    void updateAlertStatus(selectedId, status).then((updated) => {
+      setAlerts((items) => items.map((item) => item.id === selectedId ? updated : item));
+    }).catch(() => {
+      if (previousStatus) setAlerts((items) => items.map((item) => item.id === selectedId ? { ...item, status: previousStatus } : item));
+      window.alert("Không thể lưu trạng thái cảnh báo. Vui lòng kiểm tra kết nối backend.");
+    });
   };
   return <section className={`alerts-page ${mobileConversation ? "conversation-open" : ""}`}>
     <div className="alerts-page-heading"><div><h1><span className="alerts-title-desktop">Trợ lý cảnh báo</span><span className="alerts-title-mobile">Cảnh báo</span></h1><p><span className="alerts-description-desktop">An Tâm giúp bạn hiểu và xử lý các tình huống cần chú ý.</span><span className="alerts-description-mobile">Kiểm tra những tình huống cần bạn chú ý.</span></p></div><span><ShieldCheck /> Đang bảo vệ</span></div>

@@ -21,6 +21,7 @@ export interface AlertEvent {
   preview: string;
   confidence?: number;
   immobileSeconds?: number;
+  snapshotUrl?: string;
 }
 
 export interface ChatMessage {
