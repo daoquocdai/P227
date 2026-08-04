@@ -1,4 +1,3 @@
-import { ShieldCheck } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { AlertConversation } from "./AlertConversation";
 import { AlertList } from "./AlertList";
@@ -50,7 +49,6 @@ export default function AlertsPage() {
     });
   };
   return <section className={`alerts-page ${mobileConversation ? "conversation-open" : ""}`}>
-    <div className="alerts-page-heading"><div><h1><span className="alerts-title-desktop">Trợ lý cảnh báo</span><span className="alerts-title-mobile">Cảnh báo</span></h1><p><span className="alerts-description-desktop">An Tâm giúp bạn hiểu và xử lý các tình huống cần chú ý.</span><span className="alerts-description-mobile">Kiểm tra những tình huống cần bạn chú ý.</span></p></div><span><ShieldCheck /> Đang bảo vệ</span></div>
     <div className="alerts-workspace"><AlertList alerts={visibleAlerts} selectedId={selectedId} loading={loading} error={error} search={search} filter={filter} onSearch={setSearch} onFilter={setFilter} onSelect={selectAlert} onRetry={load} />{selected ? <AlertConversation key={selected.id} alert={selected} onBack={backToList} onStatus={updateStatus} /> : <div className="alerts-empty">Chọn một cảnh báo để bắt đầu.</div>}</div>
   </section>;
 }

@@ -58,8 +58,8 @@ function App() {
     </aside>
     {isMobileLayout && mobileOpen && <button className="scrim" aria-label="Đóng menu" onClick={() => setMobileOpen(false)} />}
     <main className="main-content">
-      <header className="topbar"><button className="icon-button menu-button" onClick={() => setMobileOpen(true)} aria-label="Mở menu"><Menu /></button><div className="topbar-spacer" /><div className="profile"><span className="avatar small">M</span><span><strong>Minh Nguyễn</strong><small>Người chăm sóc</small></span></div></header>
-      <div className={`route-content ${activeNav === "Tổng quan" ? "overview-route" : ""}`} key={`${activePath}-${routeRevision}`}><RouteContent path={activePath} /></div>
+      <header className="topbar"><button className="icon-button menu-button" onClick={() => setMobileOpen(true)} aria-label="Mở menu"><Menu /></button><div className="topbar-spacer" />{activePath === "/alerts" && <span className="topbar-protection"><ShieldCheck /> Đang bảo vệ</span>}<div className="profile"><span className="avatar small">M</span><span><strong>Minh Nguyễn</strong><small>Người chăm sóc</small></span></div></header>
+      <div className={`route-content ${activeNav === "Tổng quan" ? "overview-route" : ""} ${activePath === "/history" ? "history-route" : ""} ${activePath === "/family" ? "family-route" : ""}`} key={`${activePath}-${routeRevision}`}><RouteContent path={activePath} /></div>
     </main>
     {activePath !== "/alerts" && <FloatingAssistant />}
     {isMobileLayout && <nav className="mobile-bottom-nav" aria-label="Điều hướng nhanh trên điện thoại">{navItems.slice(0,4).map(({ label,path,icon:Icon,badge }) => <a key={path} href={path} className={activePath === path ? "active" : ""} onClick={(event) => { event.preventDefault(); navigate(path); }} aria-current={activePath === path ? "page" : undefined}><span className="mobile-nav-icon"><Icon />{badge ? <span className="mobile-nav-badge">{badge}</span> : null}</span><span>{label}</span></a>)}</nav>}
