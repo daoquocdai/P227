@@ -1,0 +1,97 @@
+from typing import Literal
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+
+from src.services.settings_service import SettingsConflictError, SettingsNotFoundError, settings_service
+
+router = APIRouter(prefix="/settings", tags=["Settings"])
+
+
+class GeneralUpdate(BaseModel):
+    retention_days: Literal[7, 30, 90] | None = None
+    stranger_threshold: int | None = Field(default=None, ge=50, le=99)
+    fall_threshold: int | None = Field(default=None, ge=70, le=99)
+    sensitive_enabled: bool | None = None
+    sensitive_from: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    sensitive_to: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+class NotificationUpdate(BaseModel):
+    app: bool | None = None
+    email: bool | None = None
+    sms: bool | None = None
+    level: Literal["all", "important"] | None = None
+    grouped: bool | None = None
+    quiet_enabled: bool | None = None
+    quiet_from: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    quiet_to: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+class UserCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255, pattern=r".*\S.*")
+    email: str = Field(min_length=4, max_length=255)
+    role: Literal["admin", "caregiver"] = "caregiver"
+
+
+class UserStatusUpdate(BaseModel):
+    active: bool
+
+
+class PermissionUpdate(BaseModel):
+    granted: bool
+
+
+class CameraStatusUpdate(BaseModel):
+    active: bool
+
+
+@router.get("")
+async def get_settings():
+    return settings_service.get()
+
+
+@router.patch("/general")
+async def update_general(data: GeneralUpdate):
+    return settings_service.update_group("general", data.model_dump(exclude_none=True))
+
+
+@router.patch("/notifications")
+async def update_notifications(data: NotificationUpdate):
+    return settings_service.update_group("notifications", data.model_dump(exclude_none=True))
+
+
+@router.post("/users", status_code=201)
+async def create_user(data: UserCreate):
+    try:
+        return settings_service.create_user(data)
+    except SettingsConflictError as exc:
+        raise HTTPException(status_code=409, detail="Email đã tồn tại") from exc
+
+
+@router.patch("/users/{user_id}")
+async def update_user(user_id: str, data: UserStatusUpdate):
+    try:
+        return settings_service.update_user(user_id, data.active)
+    except SettingsNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Không tìm thấy người dùng") from exc
+    except SettingsConflictError as exc:
+        raise HTTPException(status_code=409, detail="Không thể khóa admin cuối cùng") from exc
+
+
+@router.patch("/users/{user_id}/permissions/{permission}")
+async def update_permission(user_id: str, permission: str, data: PermissionUpdate):
+    try:
+        return settings_service.update_permission(user_id, permission, data.granted)
+    except SettingsNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Không tìm thấy người dùng hoặc quyền") from exc
+    except SettingsConflictError as exc:
+        raise HTTPException(status_code=409, detail="Admin luôn có toàn quyền") from exc
+
+
+@router.patch("/cameras/{camera_id}")
+async def update_camera(camera_id: str, data: CameraStatusUpdate):
+    try:
+        return settings_service.update_camera(camera_id, data.active)
+    except SettingsNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Không tìm thấy camera") from exc

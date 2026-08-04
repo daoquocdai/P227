@@ -1,16 +1,16 @@
-version: "3.8"
-
 services:
   backend:
     build:
       context: .
       dockerfile: Dockerfile
+    container_name: guardiancam_backend
     ports:
       - "8000:8000"
     env_file:
       - .env
     volumes:
       - ./data:/app/data
+      - ./snapshots:/app/snapshots
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]

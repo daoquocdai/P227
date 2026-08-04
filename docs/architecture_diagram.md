@@ -1,38 +1,37 @@
-# Architecture Diagram
-
-## System Overview
+# Sơ đồ kiến trúc GuardianCam — Central Local Hub
 
 ```mermaid
-graph TB
-    User([User]) --> UI[Frontend<br/>React/Next.js]
-    UI -->|REST API| API[FastAPI Backend]
-    API --> Agent[LangGraph Agent]
-    Agent --> LLM[LLM Service<br/>GPT-4o / Gemini]
-    Agent --> Tools[Agent Tools]
-    Tools --> DB[(Database)]
-    Agent --> VS[Vector Store<br/>ChromaDB]
+flowchart LR
+    subgraph CAM[Camera thường]
+        C1[RTSP Camera 1]
+        C2[RTSP Camera 2]
+        C3[USB/RTSP Camera N]
+    end
+
+    subgraph HUB[Local Smart Hub]
+        ING[Video Ingest]
+        VIS[YOLO + Tracker]
+        AUX[Pose + Face<br/>on demand]
+        EVT[Temporal Event Engine]
+        Q[In-memory Event Queue]
+        BE[FastAPI + LangGraph]
+        DB[(Local DB)]
+        FS[(Encrypted Media)]
+    end
+
+    UI[React/PWA<br/>LAN or VPN]
+
+    C1 --> ING
+    C2 --> ING
+    C3 --> ING
+    ING --> VIS --> AUX --> EVT
+    EVT --> Q --> BE
+    AUX --> FS
+    BE --> DB
+    FS --> BE
+    BE <-->|REST + WebSocket/SSE| UI
 ```
 
-## Agent Flow
+Video thô chỉ đi từ camera đến Local Hub trong mạng nội bộ. Vision truyền event object qua bounded queue; snapshot và clip nằm trên shared local volume. Event Engine quyết định cảnh báo an toàn trước khi phần diễn giải tùy chọn hoạt động.
 
-```mermaid
-graph LR
-    START((Start)) --> Input[Parse Input]
-    Input --> Analyze[Analyze Query]
-    Analyze --> Decide{Need Tool?}
-    Decide -->|Yes| CallTool[Call Tool]
-    CallTool --> Analyze
-    Decide -->|No| Generate[Generate Response]
-    Generate --> END((End))
-```
-
-## Component Details
-
-| Component | Technology | Purpose |
-|-----------|-----------|---------|
-| Frontend | React/Next.js | User interface |
-| Backend | FastAPI | API server |
-| Agent | LangGraph | AI agent orchestration |
-| LLM | OpenAI/Gemini | Language model |
-| Database | PostgreSQL/SQLite | Data persistence |
-| Vector Store | ChromaDB | RAG / embeddings |
+Chi tiết contract, trách nhiệm thành phần và ràng buộc bảo mật nằm tại [`../ARCHITECTURE.md`](../ARCHITECTURE.md).
