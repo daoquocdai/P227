@@ -1,27 +1,28 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ArrowLeft, BellRing, CalendarDays, Camera, Check, ChevronRight, CirclePause, Expand, Home, MessageCircle, MoreHorizontal, Phone, Play, RotateCcw, Settings, ShieldCheck, UserRound, UsersRound, Video, Volume2, VolumeX, Wifi, X } from "lucide-react";
-import { alertRecipients, emergencyContact, getCameraDetail, getCameraEvents } from "./cameraDetail.mock";
+import { alertRecipients, emergencyContact } from "./cameraDetail.mock";
+import { fetchCameraDetail } from "./cameraDetail.service";
 import type { CameraDetail, CameraEvent, CameraEventType, HistoryFilter } from "./cameraDetail.types";
 import { formatAlertDateTime } from "../alerts/alertDateTime";
+import { updateAlertStatus } from "../alerts/alertService";
 import "./cameraDetail.css";
 
 const eventIcons: Record<CameraEventType, typeof Camera> = { fall_detection:AlertTriangle, immobility:CirclePause, person_detected:UserRound, unknown_person:UsersRound, member_recognized:ShieldCheck, camera_offline:Wifi, camera_online:Wifi, motion_detected:Video, monitoring_paused:CirclePause, monitoring_resumed:Play };
 type Dialog = "emergency"|"message"|"recipients"|"pause"|null;
 
 export default function CameraDetailPage({ cameraId }: { cameraId: string }) {
-  const activeCamera=getCameraDetail(cameraId);
   const sourceParams=new URLSearchParams(window.location.search); const sourceAlertId=sourceParams.get("alert"); const sourceEventId=sourceParams.get("event"); const sourceTime=sourceParams.get("at");
-  const [loading,setLoading]=useState(true); const [muted,setMuted]=useState(true); const [fullscreen,setFullscreen]=useState(false); const [dialog,setDialog]=useState<Dialog>(null); const [selectedEvent,setSelectedEvent]=useState<CameraEvent|null>(null); const [filter,setFilter]=useState<HistoryFilter>("today"); const [pausedUntil,setPausedUntil]=useState(""); const [events,setEvents]=useState(()=>getCameraEvents(cameraId)); const [videoError,setVideoError]=useState(false);
+  const [activeCamera,setActiveCamera]=useState<CameraDetail|null>(null); const [loading,setLoading]=useState(true); const [loadError,setLoadError]=useState(false); const [muted,setMuted]=useState(true); const [fullscreen,setFullscreen]=useState(false); const [dialog,setDialog]=useState<Dialog>(null); const [selectedEvent,setSelectedEvent]=useState<CameraEvent|null>(null); const [filter,setFilter]=useState<HistoryFilter>("today"); const [pausedUntil,setPausedUntil]=useState(""); const [events,setEvents]=useState<CameraEvent[]>([]); const [videoError,setVideoError]=useState(false);
   const [highlightedEventId,setHighlightedEventId]=useState<string|null>(null); const [linkNotice,setLinkNotice]=useState<string|null>(null);
-  useEffect(()=>{const timer=window.setTimeout(()=>setLoading(false),450);return()=>window.clearTimeout(timer)},[]);
-  useEffect(()=>{setEvents(getCameraEvents(cameraId));setSelectedEvent(null);setVideoError(false)},[cameraId]);
-  useEffect(()=>{if(loading||!sourceEventId)return;const linkedEvent=events.find(event=>event.id===sourceEventId);if(!linkedEvent){setLinkNotice("Không tìm thấy sự kiện, đang hiển thị camera hiện tại.");return}setFilter("today");setHighlightedEventId(sourceEventId);const scrollTimer=window.setTimeout(()=>document.getElementById(`camera-event-${sourceEventId}`)?.scrollIntoView({behavior:"smooth",block:"center"}),120);const clearTimer=window.setTimeout(()=>setHighlightedEventId(null),3000);return()=>{window.clearTimeout(scrollTimer);window.clearTimeout(clearTimer)}},[loading,sourceEventId,events]);
+  useEffect(()=>{setLoading(true);setLoadError(false);fetchCameraDetail(cameraId).then(({camera,events})=>{setActiveCamera(camera);setEvents(events);setSelectedEvent(null);setVideoError(false)}).catch(()=>setLoadError(true)).finally(()=>setLoading(false))},[cameraId]);
+  useEffect(()=>{if(loading||!sourceEventId)return;const linkedEvent=events.find(event=>event.id===sourceEventId||event.eventId===sourceEventId);if(!linkedEvent){setLinkNotice("Không tìm thấy sự kiện, đang hiển thị camera hiện tại.");return}setFilter("today");setHighlightedEventId(linkedEvent.id);const scrollTimer=window.setTimeout(()=>document.getElementById(`camera-event-${linkedEvent.id}`)?.scrollIntoView({behavior:"smooth",block:"center"}),120);const clearTimer=window.setTimeout(()=>setHighlightedEventId(null),3000);return()=>{window.clearTimeout(scrollTimer);window.clearTimeout(clearTimer)}},[loading,sourceEventId,events]);
   const visibleEvents=useMemo(()=>filter==="today"?events.filter(event=>event.dayGroup==="Hôm nay"):filter==="custom"?events.filter(event=>event.dayGroup==="28 tháng 7"):events,[events,filter]);
   const groups=useMemo(()=>["Hôm nay","Hôm qua","28 tháng 7"].map(day=>({day,items:visibleEvents.filter(event=>event.dayGroup===day)})).filter(group=>group.items.length),[visibleEvents]);
   const pendingEvent=useMemo(()=>events.find(event=>event.status==="new"||event.status==="need_help"),[events]);
   const navigate=(path:string)=>{window.history.pushState({},"",path);window.dispatchEvent(new PopStateEvent("popstate"))};
-  const updateEvent=(status:CameraEvent["status"])=>{if(!selectedEvent)return;setEvents(items=>items.map(item=>item.id===selectedEvent.id?{...item,status}:item));setSelectedEvent(current=>current?{...current,status}:current)};
+  const updateEvent=(status:CameraEvent["status"])=>{if(!selectedEvent)return;const previous=selectedEvent.status;setEvents(items=>items.map(item=>item.id===selectedEvent.id?{...item,status}:item));setSelectedEvent(current=>current?{...current,status}:current);if(selectedEvent.type==="fall_detection"||selectedEvent.type==="unknown_person"){const apiStatus=status==="need_help"?"need_help":status==="false_alarm"?"false_alarm":status==="safe"?"safe":"resolved";void updateAlertStatus(selectedEvent.id,apiStatus).catch(()=>{setEvents(items=>items.map(item=>item.id===selectedEvent.id?{...item,status:previous}:item));setSelectedEvent(current=>current?{...current,status:previous}:current)})}};
   if(loading)return <div className="camera-detail-page camera-detail-loading"><i/><i/><i/><i/></div>;
+  if(loadError||!activeCamera)return <div className="camera-detail-page camera-detail-loading"><strong>Không tải được dữ liệu camera từ backend.</strong></div>;
   return <div className="camera-detail-page">
     <CameraDetailHeader camera={activeCamera} onBack={()=>navigate("/camera")} />
     {sourceAlertId&&<AlertSourceBanner alertId={sourceAlertId} event={events.find(event=>event.id===sourceEventId)} occurredAt={sourceTime} onOpenAlert={()=>navigate(`/alerts/${encodeURIComponent(sourceAlertId)}`)} />}

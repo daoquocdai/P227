@@ -84,6 +84,20 @@ flowchart TB
 - LangGraph diễn giải sự kiện và điều phối tương tác; không quyết định trực tiếp một người có ngã hay không.
 - Local SLM là tùy chọn. Khi SLM lỗi hoặc timeout, hệ thống dùng mô tả theo template.
 
+### SQLite persistence
+
+- Backend tự tạo `data/app.db` từ `database/schema.sql` trong lần khởi động đầu tiên.
+- Vision output được lưu vào `events`, `event_persons`, `fall_event_details` và `media_assets`.
+- Cảnh báo hiện hành nằm trong `alerts`; mọi thao tác HITL được ghi append-only vào `alert_actions`.
+- `EventService` dùng `SQLiteEventRepository`; restart backend không làm mất sự kiện.
+
+### Camera sources and playback
+
+- `cameras` lưu danh tính, vị trí và trạng thái hoạt động; `camera_sources` lưu cấu hình nguồn riêng biệt.
+- `source_uri` là đầu vào cục bộ cho Vision Service (`videos/...`, webcam index hoặc RTSP URL). Trường này không được trả về frontend vì RTSP URL có thể chứa thông tin đăng nhập.
+- `playback_path` là đường dẫn an toàn mà trình duyệt được phép phát. Với video mẫu, đây là file trong `frontend/public/videos`. Với camera thật, media gateway trên Local Hub có thể cập nhật trường này thành đầu ra HLS/WebRTC mà không phải đổi API Camera hay giao diện.
+- API chỉ trả `playback_url`, `source_kind` và `stream_ready`; đổi nguồn camera qua `PATCH /api/v1/cameras/{id}/source`.
+
 ## Event contract
 
 ```json

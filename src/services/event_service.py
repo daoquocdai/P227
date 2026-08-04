@@ -1,87 +1,49 @@
 import asyncio
 from dataclasses import dataclass
-from pathlib import Path
 
 from src.models.schemas import AlertReviewRequest, VisionEventAccepted, VisionEventRequest
-
-
-class EventNotFoundError(Exception):
-    pass
+from src.services.alert_broadcaster import alert_broadcaster
+from src.services.sqlite_event_repository import EventNotFoundError, SQLiteEventRepository
 
 
 class EventService:
-    """Baseline in-memory repository and application service.
+    """Application service shared by Vision ingestion and dashboard APIs."""
 
-    API và Vision pipeline chỉ làm việc qua service này. Có thể thay phần lưu RAM
-    bằng SQLite mà không đổi contract của hai phía.
-    """
-
-    def __init__(self) -> None:
-        self._alerts: list[dict] = []
-        self._by_event_id: dict[str, dict] = {}
+    def __init__(self, repository: SQLiteEventRepository | None = None) -> None:
+        self._repository = repository or SQLiteEventRepository()
         self._lock = asyncio.Lock()
 
     async def create(self, event: VisionEventRequest) -> VisionEventAccepted:
         async with self._lock:
-            existing = self._by_event_id.get(event.event_id)
-            if existing:
-                return VisionEventAccepted(
-                    id=existing["id"], event_id=event.event_id, duplicate=True, status=existing["status"]
-                )
-
-            snapshot_url = None
-            if event.snapshot_path:
-                snapshot_url = f"/snapshots/{Path(event.snapshot_path).name}"
-
-            alert = {
-                "id": len(self._alerts) + 1,
-                "event_id": event.event_id,
-                "timestamp": event.occurred_at.isoformat(),
-                "event_type": event.event_type,
-                "description": self._description(event),
-                "camera_id": event.camera_id,
-                "camera_location": event.camera_location,
-                "confidence": event.confidence,
-                "track_id": event.track_id,
-                "identity_status": event.identity_status,
-                "identity_name": event.identity_name,
-                "immobile_seconds": event.immobile_seconds,
-                "snapshot_url": snapshot_url,
-                "status": "pending",
-                "feedback": None,
-                "review_note": None,
-                "metadata": event.metadata,
-            }
-            self._alerts.append(alert)
-            self._by_event_id[event.event_id] = alert
-            return VisionEventAccepted(id=alert["id"], event_id=event.event_id, status=alert["status"])
+            result = self._repository.create(event, self._description(event))
+            alert = self._repository.get_alert(result.id) if result.status == "pending" and not result.duplicate else None
+        if alert:
+            await alert_broadcaster.publish({"type": "alert_created", "alert": alert})
+        return result
 
     async def list_alerts(self) -> list[dict]:
         async with self._lock:
-            return [dict(item) for item in reversed(self._alerts)]
+            return self._repository.list_alerts()
 
-    async def review(self, alert_id: int, review: AlertReviewRequest) -> dict:
+    async def get_alert(self, alert_id: str) -> dict:
         async with self._lock:
-            alert = self._find(alert_id)
-            alert["status"] = review.status
-            alert["feedback"] = review.status
-            alert["review_note"] = review.note
-            return dict(alert)
+            return self._repository.get_alert(alert_id)
 
-    async def confirm_legacy(self, alert_id: int, feedback: str) -> None:
+    async def mark_read(self, alert_id: str) -> dict:
         async with self._lock:
-            self._find(alert_id)["feedback"] = feedback
+            alert = self._repository.mark_read(alert_id)
+        await alert_broadcaster.publish({"type": "alert_updated", "alert": alert})
+        return alert
 
-    async def clear(self) -> None:
+    async def review(self, alert_id: str, review: AlertReviewRequest) -> dict:
         async with self._lock:
-            self._alerts.clear()
-            self._by_event_id.clear()
+            alert = self._repository.review(alert_id, review)
+        await alert_broadcaster.publish({"type": "alert_updated", "alert": alert})
+        return alert
 
-    def _find(self, alert_id: int) -> dict:
-        for alert in self._alerts:
-            if alert["id"] == alert_id:
-                return alert
-        raise EventNotFoundError(alert_id)
+    async def confirm_legacy(self, alert_id: str, feedback: str) -> None:
+        async with self._lock:
+            self._repository.confirm_legacy(alert_id, feedback)
 
     @staticmethod
     def _description(event: VisionEventRequest) -> str:
@@ -112,7 +74,6 @@ class VisionEventSink:
         self._queue: asyncio.Queue[QueuedEvent] | None = None
 
     def start(self) -> None:
-        """Bind a fresh queue to the application's current event loop."""
         self._queue = asyncio.Queue(maxsize=self._maxsize)
 
     async def publish(self, event: VisionEventRequest) -> VisionEventAccepted:
@@ -141,3 +102,5 @@ class VisionEventSink:
 
 event_service = EventService()
 vision_event_sink = VisionEventSink(event_service)
+
+__all__ = ["EventNotFoundError", "EventService", "event_service", "vision_event_sink"]

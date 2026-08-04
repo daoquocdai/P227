@@ -2,8 +2,8 @@ import { apiClient } from "../../api/client";
 import type { AlertEvent, AlertSeverity, AlertStatus, AlertType } from "./alert.types";
 
 interface BackendAlert {
-  id: number;
-  event_id?: string;
+  id: string;
+  event_id: string;
   timestamp: string;
   event_type: string;
   description: string;
@@ -15,6 +15,11 @@ interface BackendAlert {
   snapshot_url?: string | null;
   status?: string | null;
   feedback?: string | null;
+  severity: AlertSeverity;
+  review_note?: string | null;
+  created_at: string;
+  updated_at: string;
+  is_read: boolean;
 }
 
 const statusValues: AlertStatus[] = ["pending", "checking", "resolved", "safe", "false_alarm", "need_help"];
@@ -49,9 +54,10 @@ function toAlertEvent(alert: BackendAlert): AlertEvent {
     subject: alert.identity_name ?? (presentation.type === "stranger" ? "Người chưa xác định" : "Camera gia đình"),
     location: alert.camera_location ?? "Khu vực chưa xác định",
     time: new Intl.DateTimeFormat("vi-VN", { hour: "2-digit", minute: "2-digit" }).format(new Date(occurredAt)),
-    timestamp: occurredAt, severity: presentation.severity, status: normalizeStatus(alert.status ?? alert.feedback),
-    unread: !alert.feedback, preview: alert.description, confidence,
+    timestamp: occurredAt, severity: alert.severity ?? presentation.severity, status: normalizeStatus(alert.status),
+    unread: !alert.is_read, preview: alert.description, confidence,
     immobileSeconds: alert.immobile_seconds ?? undefined, snapshotUrl: alert.snapshot_url ?? undefined,
+    reviewNote: alert.review_note ?? undefined,
   };
 }
 
@@ -64,4 +70,12 @@ export async function updateAlertStatus(id: string, status: AlertStatus, note?: 
     method: "PATCH", body: JSON.stringify({ status, note }),
   });
   return toAlertEvent(alert);
+}
+
+export async function fetchAlert(id: string): Promise<AlertEvent> {
+  return toAlertEvent(await apiClient<BackendAlert>(`/alerts/${encodeURIComponent(id)}`));
+}
+
+export async function markAlertRead(id: string): Promise<AlertEvent> {
+  return toAlertEvent(await apiClient<BackendAlert>(`/alerts/${encodeURIComponent(id)}/read`, { method: "POST" }));
 }

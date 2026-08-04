@@ -1,10 +1,11 @@
 from src.agents.state import AgentState
 
+
 async def reasoning_node(state: AgentState) -> dict:
     """Đọc dữ liệu từ state và đưa ra quyết định an ninh."""
     event_type = state.get("event")
     location = state.get("location")
-    
+
     # Logic suy luận (Rule-based test luồng trước)
     if event_type == "FALL_DETECTED":
         threat = "CRITICAL"
@@ -18,7 +19,7 @@ async def reasoning_node(state: AgentState) -> dict:
         threat = "UNKNOWN"
         action = "WAIT"
         reason = "Chưa rõ sự kiện, tiếp tục theo dõi."
-        
+
     # Trả về output để LangGraph ghi đè vào AgentState
     return {
         "threat_level": threat,

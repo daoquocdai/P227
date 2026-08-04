@@ -1,4 +1,3 @@
-
 from datetime import datetime
 from typing import Literal
 
@@ -11,8 +10,11 @@ class EventRequest(BaseModel):
     event_type: str = Field(..., description="Loại sự kiện phát hiện (VD: FALL_DETECTED, UNKNOWN_PERSON)")
     camera_location: str = Field(..., description="Vị trí camera (VD: Phòng khách, Hành lang)")
     timestamp: str = Field(..., description="Thời gian xảy ra sự kiện")
-    confidence: float = Field(default=0.9, ge=0.0, le=1.0, description="Độ tin cậy do Vision Service trên Local Hub cung cấp")
+    confidence: float = Field(
+        default=0.9, ge=0.0, le=1.0, description="Độ tin cậy do Vision Service trên Local Hub cung cấp"
+    )
     snapshot_filename: str | None = Field(default=None, description="Tên file ảnh chụp bằng chứng (nếu có)")
+
 
 # 2. SCHEMA ĐẦU RA: Quyết định và phân tích của LangGraph Agent
 class AgentDecisionResponse(BaseModel):
@@ -27,6 +29,27 @@ AlertStatus = Literal["pending", "checking", "resolved", "safe", "false_alarm", 
 class AlertReviewRequest(BaseModel):
     status: AlertStatus
     note: str | None = Field(default=None, max_length=1000)
+
+
+class AlertResponse(BaseModel):
+    id: str
+    event_id: str
+    timestamp: str
+    event_type: str
+    description: str
+    camera_id: str
+    camera_location: str
+    confidence: float | None = None
+    identity_name: str | None = None
+    immobile_seconds: float | None = None
+    snapshot_url: str | None = None
+    severity: Literal["low", "medium", "high", "critical"]
+    status: AlertStatus
+    feedback: str | None = None
+    review_note: str | None = None
+    created_at: str
+    updated_at: str
+    is_read: bool
 
 
 EventType = Literal[
@@ -60,7 +83,7 @@ class VisionEventRequest(BaseModel):
 
 
 class VisionEventAccepted(BaseModel):
-    id: int
+    id: str
     event_id: str
     accepted: bool = True
     duplicate: bool = False

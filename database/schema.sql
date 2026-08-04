@@ -32,6 +32,12 @@ CREATE TABLE user_permissions (
 
 CREATE INDEX idx_user_permissions_user ON user_permissions(user_id);
 
+CREATE TABLE system_settings (
+    setting_key TEXT PRIMARY KEY NOT NULL,
+    value_json TEXT NOT NULL CHECK (json_valid(value_json)),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
 -- Admins implicitly have every permission and do not need rows here.
 -- UUIDs include hyphens because every id in this schema must be 36 characters.
 CREATE TRIGGER trg_default_permissions_on_caregiver_insert
@@ -68,6 +74,7 @@ CREATE TABLE face_profiles (
     embedding_dimension INTEGER NOT NULL CHECK (embedding_dimension > 0),
     quality_score REAL CHECK (quality_score BETWEEN 0.0 AND 1.0),
     is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+    angle_label TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
@@ -99,6 +106,25 @@ CREATE TABLE cameras (
 
 CREATE INDEX idx_cameras_status_last_seen
     ON cameras(operational_status, last_seen_at);
+
+CREATE TABLE camera_sources (
+    camera_id TEXT PRIMARY KEY NOT NULL REFERENCES cameras(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    source_kind TEXT NOT NULL CHECK (source_kind IN ('video_file', 'webcam', 'rtsp')),
+    source_uri TEXT,
+    playback_path TEXT,
+    config_json TEXT,
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    CHECK (source_kind = 'webcam' OR length(trim(source_uri)) > 0),
+    CHECK (
+        playback_path IS NULL OR (
+            playback_path NOT LIKE '/%' AND playback_path NOT LIKE '\%' AND
+            playback_path NOT GLOB '[A-Za-z]:*' AND
+            '/' || replace(playback_path, '\', '/') || '/' NOT LIKE '%/../%'
+        )
+    )
+);
+
+CREATE INDEX idx_camera_sources_kind ON camera_sources(source_kind);
 
 CREATE TABLE events (
     id TEXT PRIMARY KEY NOT NULL CHECK (length(id) = 36),
@@ -188,6 +214,7 @@ CREATE TABLE alerts (
         CHECK (severity IN ('low', 'medium', 'high', 'critical')),
     status TEXT NOT NULL DEFAULT 'open'
         CHECK (status IN ('open', 'acknowledged', 'resolved', 'dismissed')),
+    is_read INTEGER NOT NULL DEFAULT 0 CHECK (is_read IN (0, 1)),
     assigned_user_id TEXT REFERENCES users(id) ON UPDATE CASCADE ON DELETE SET NULL,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),

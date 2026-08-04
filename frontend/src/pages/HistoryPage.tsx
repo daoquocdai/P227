@@ -3,10 +3,11 @@ import { createPortal } from "react-dom";
 import type { LucideIcon } from "lucide-react";
 import {
   AlertTriangle, CalendarDays, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3,
-  Eye, History, Image, MapPin, PersonStanding, RotateCcw, Search, ShieldAlert, User,
+  Eye, History, Image, MapPin, PersonStanding, RefreshCw, RotateCcw, Search, ShieldAlert, User,
   UserRoundCheck, UserRoundX, UsersRound, X,
 } from "lucide-react";
 import "./history.css";
+import { getHistory } from "../api/history";
 
 type EventKind = "person_detected" | "fall_suspected";
 type AlertStatus = "open" | "acknowledged" | "resolved" | "dismissed";
@@ -27,6 +28,7 @@ type HistoryMedia = {
   subjectType: "known_person" | "unknown_person" | "fall" | "scene";
   isBlurred: boolean;
   label: string;
+  url?: string;
 };
 
 type HistoryEvent = {
@@ -208,15 +210,16 @@ function HistoryThumbnail({ media, kind }: { media?: HistoryMedia; kind: EventKi
   const unknown = media?.subjectType === "unknown_person";
   return <div className={`history-thumbnail ${kind === "fall_suspected" ? "is-fall" : ""} ${unknown ? "is-unknown" : ""}`}>
     <div className={unknown && media?.isBlurred ? "privacy-blur" : ""}>
-      {kind === "fall_suspected" ? <PersonStanding /> : unknown ? <UserRoundX /> : <UserRoundCheck />}
-      <span>{kind === "fall_suspected" ? "Phát hiện tư thế" : unknown ? "Ảnh đã làm mờ" : "Ảnh nhận diện"}</span>
+      {media?.url ? <img src={media.url} alt={media.label} /> : <>{kind === "fall_suspected" ? <PersonStanding /> : unknown ? <UserRoundX /> : <UserRoundCheck />}<span>{kind === "fall_suspected" ? "Phát hiện tư thế" : unknown ? "Ảnh đã làm mờ" : "Ảnh nhận diện"}</span></>}
     </div>
     {unknown && <small><ShieldAlert /> Riêng tư</small>}
   </div>;
 }
 
 export default function HistoryPage() {
-  const [events] = useState(initialEvents);
+  const [events, setEvents] = useState<HistoryEvent[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [range, setRange] = useState("7d");
   const [kind, setKind] = useState("all");
   const [cameraId, setCameraId] = useState("all");
@@ -229,6 +232,8 @@ export default function HistoryPage() {
   const [pageSize, setPageSize] = useState(20);
   const [selected, setSelected] = useState<HistoryEvent | null>(null);
   const [lightboxMedia, setLightboxMedia] = useState<HistoryMedia | null>(null);
+  const loadHistory = () => { setLoading(true); setLoadError(false); getHistory().then((items) => setEvents(items as HistoryEvent[])).catch(() => setLoadError(true)).finally(() => setLoading(false)); };
+  useEffect(loadHistory, []);
 
   const cameras = useMemo(() => Array.from(new Map(events.map((event) => [event.cameraId, { id: event.cameraId, name: event.cameraName }])).values()), [events]);
   const persons = useMemo(() => Array.from(new Map(events.flatMap((event) => event.person ? [[event.person.id, event.person] as const] : [])).values()), [events]);
@@ -258,6 +263,8 @@ export default function HistoryPage() {
   const pageEnd = Math.min(currentPage * pageSize, filtered.length);
   const changeFilter = (setter: (value: string) => void, value: string) => { setter(value); setPage(1); };
   const resetFilters = () => { setRange("7d"); setKind("all"); setCameraId("all"); setStatus("all"); setPerson("all"); setSearch(""); setCustomFrom(""); setCustomTo(""); setPage(1); };
+  if (loading) return <div className="history-page page-wrap"><section className="history-empty"><span><RefreshCw /></span><h2>Đang tải lịch sử…</h2></section></div>;
+  if (loadError) return <div className="history-page page-wrap"><section className="history-empty"><span><AlertTriangle /></span><h2>Không tải được lịch sử</h2><p>Hãy kiểm tra kết nối tới backend Local Hub.</p><div><button onClick={loadHistory}>Thử lại</button></div></section></div>;
   return <div className="history-page page-wrap">
     <div className="history-heading">
       <div className="history-title-line"><h1>Lịch sử</h1><i /><p>Theo dõi những gì camera đã ghi nhận và cách gia đình xử lý cảnh báo.</p></div>

@@ -1,4 +1,5 @@
-from src.agents.tools.security_tool import trigger_siren, send_notification, require_human_validation
+from src.agents.tools.security_tool import require_human_validation, send_notification, trigger_siren
+
 
 def test_trigger_siren():
     """Kiểm tra công cụ bật còi báo động[cite: 5]."""
