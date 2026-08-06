@@ -10,7 +10,7 @@ Các script vision sử dụng đường dẫn tương đối. Vì vậy, hãy c
 
 ```bash
 cd vision
-pip install -r requirements.txt
+pip install -r ../requirements.txt
 pip install -e torchlight
 ```
 
