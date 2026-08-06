@@ -1,0 +1,121 @@
+index,label,action_name
+0,A1,drink water
+1,A2,eat meal
+2,A3,brush teeth
+3,A4,brush hair
+4,A5,drop
+5,A6,pick up
+6,A7,throw
+7,A8,sit down
+8,A9,stand up
+9,A10,clapping
+10,A11,reading
+11,A12,writing
+12,A13,tear up paper
+13,A14,put on jacket
+14,A15,take off jacket
+15,A16,put on a shoe
+16,A17,take off a shoe
+17,A18,put on glasses
+18,A19,take off glasses
+19,A20,put on a hat/cap
+20,A21,take off a hat/cap
+21,A22,cheer up
+22,A23,hand waving
+23,A24,kicking something
+24,A25,reach into pocket
+25,A26,hopping
+26,A27,jump up
+27,A28,phone call
+28,A29,play with phone/tablet
+29,A30,type on a keyboard
+30,A31,point to something
+31,A32,taking a selfie
+32,A33,check time (from watch)
+33,A34,rub two hands
+34,A35,nod head/bow
+35,A36,shake head
+36,A37,wipe face
+37,A38,salute
+38,A39,put palms together
+39,A40,cross hands in front
+40,A41,sneeze/cough
+41,A42,staggering
+42,A43,falling down
+43,A44,headache
+44,A45,chest pain
+45,A46,back pain
+46,A47,neck pain
+47,A48,nausea/vomiting
+48,A49,fan self
+49,A50,punch/slap
+50,A51,kicking
+51,A52,pushing
+52,A53,pat on back
+53,A54,point finger
+54,A55,hugging
+55,A56,giving object
+56,A57,touch pocket
+57,A58,shaking hands
+58,A59,walking towards
+59,A60,walking apart
+60,A61,put on headphone
+61,A62,take off headphone
+62,A63,shoot at basket
+63,A64,bounce ball
+64,A65,tennis bat swing
+65,A66,juggle table tennis ball
+66,A67,hush
+67,A68,flick hair
+68,A69,thumb up
+69,A70,thumb down
+70,A71,make OK sign
+71,A72,make victory sign
+72,A73,staple book
+73,A74,counting money
+74,A75,cutting nails
+75,A76,cutting paper
+76,A77,snap fingers
+77,A78,open bottle
+78,A79,sniff/smell
+79,A80,squat down
+80,A81,toss a coin
+81,A82,fold paper
+82,A83,ball up paper
+83,A84,play magic cube
+84,A85,apply cream on face
+85,A86,apply cream on hand
+86,A87,put on bag
+87,A88,take off bag
+88,A89,put object into bag
+89,A90,take object out of bag
+90,A91,open a box
+91,A92,move heavy objects
+92,A93,shake fist
+93,A94,throw up cap/hat
+94,A95,capitulate
+95,A96,cross arms
+96,A97,arm circles
+97,A98,arm swings
+98,A99,run on the spot
+99,A100,butt kicks
+100,A101,cross toe touch
+101,A102,side kick
+102,A103,yawn
+103,A104,stretch oneself
+104,A105,blow nose
+105,A106,hit with object
+106,A107,wield knife
+107,A108,knock over
+108,A109,grab stuff
+109,A110,shoot with gun
+110,A111,step on foot
+111,A112,high-five
+112,A113,cheers and drink
+113,A114,carry object
+114,A115,take a photo
+115,A116,follow
+116,A117,whisper
+117,A118,exchange things
+118,A119,support somebody
+119,A120,rock-paper-scissors
