@@ -21,8 +21,4 @@ async def reasoning_node(state: AgentState) -> dict:
         reason = "Chưa rõ sự kiện, tiếp tục theo dõi."
 
     # Trả về output để LangGraph ghi đè vào AgentState
-    return {
-        "threat_level": threat,
-        "action": action,
-        "reasoning": reason
-    }
+    return {"threat_level": threat, "action": action, "reasoning": reason}

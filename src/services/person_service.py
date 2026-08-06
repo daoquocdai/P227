@@ -32,7 +32,14 @@ class PersonService:
                 """INSERT INTO persons
                    (id, display_name, relationship_label, date_of_birth, notes, is_active)
                    VALUES (?, ?, ?, ?, ?, ?)""",
-                (person_id, data.name.strip(), data.relationship, data.birth.isoformat() if data.birth else None, data.notes, int(data.active)),
+                (
+                    person_id,
+                    data.name.strip(),
+                    data.relationship,
+                    data.birth.isoformat() if data.birth else None,
+                    data.notes,
+                    int(data.active),
+                ),
             )
         return self.get_person(person_id)
 

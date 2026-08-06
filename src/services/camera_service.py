@@ -35,7 +35,9 @@ class CameraService:
     ) -> dict[str, Any]:
         self._validate_source(source_kind, source_uri, playback_path)
         with database_connection() as connection:
-            row = connection.execute("SELECT id FROM cameras WHERE id = ? OR name = ?", (camera_id, camera_id)).fetchone()
+            row = connection.execute(
+                "SELECT id FROM cameras WHERE id = ? OR name = ?", (camera_id, camera_id)
+            ).fetchone()
             if not row:
                 raise CameraNotFoundError(camera_id)
             connection.execute(
@@ -70,9 +72,8 @@ class CameraService:
             "active": bool(row["is_active"]),
             "source_kind": row["source_kind"] or "webcam",
             "playback_url": cls._playback_url(row["source_kind"], row["playback_path"]),
-            "stream_ready": row["operational_status"] == "online" and (
-                row["source_kind"] == "webcam" or bool(row["playback_path"])
-            ),
+            "stream_ready": row["operational_status"] == "online"
+            and (row["source_kind"] == "webcam" or bool(row["playback_path"])),
         }
 
     @staticmethod

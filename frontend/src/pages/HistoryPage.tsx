@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -138,13 +138,13 @@ function FilterDropdown({ label, icon: Icon, value, options, onChange, align = "
   const menuRef = useRef<HTMLDivElement>(null);
   const selected = options.find((option) => option.value === value) ?? options[0];
 
-  const placeMenu = () => {
+  const placeMenu = useCallback(() => {
     const rect = buttonRef.current?.getBoundingClientRect();
     if (!rect) return;
     const width = Math.max(rect.width, 180);
     const preferredLeft = align === "right" ? rect.right - width : rect.left;
     setPosition({ top: rect.bottom + 6, left: Math.max(10, Math.min(preferredLeft, window.innerWidth - width - 10)), width });
-  };
+  }, [align]);
 
   useEffect(() => {
     if (!open) return;
@@ -158,14 +158,14 @@ function FilterDropdown({ label, icon: Icon, value, options, onChange, align = "
     document.addEventListener("mousedown", clickOutside);
     document.addEventListener("keydown", escape);
     window.addEventListener("resize", placeMenu);
-    window.addEventListener("scroll", close, true);
+    window.addEventListener("scroll", close, { capture: true, passive: true, once: true });
     return () => {
       document.removeEventListener("mousedown", clickOutside);
       document.removeEventListener("keydown", escape);
       window.removeEventListener("resize", placeMenu);
       window.removeEventListener("scroll", close, true);
     };
-  }, [open, align]);
+  }, [open, placeMenu]);
 
   return <div className="filter-dropdown">
     <button ref={buttonRef} type="button" className={`filter-dropdown-trigger ${open ? "is-open" : ""}`} aria-label={label} aria-haspopup="listbox" aria-expanded={open} onClick={() => { if (!open) placeMenu(); setOpen((current) => !current); }}>
@@ -206,6 +206,19 @@ function normalizeSearchText(value: string) {
     .trim();
 }
 
+function parseLocalDateBoundary(value: string, endOfDay: boolean): number | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const date = new Date(year, month, day, endOfDay ? 23 : 0, endOfDay ? 59 : 0, endOfDay ? 59 : 0, endOfDay ? 999 : 0);
+
+  if (date.getFullYear() !== year || date.getMonth() !== month || date.getDate() !== day) return null;
+  return date.getTime();
+}
+
 function HistoryThumbnail({ media, kind }: { media?: HistoryMedia; kind: EventKind }) {
   const unknown = media?.subjectType === "unknown_person";
   return <div className={`history-thumbnail ${kind === "fall_suspected" ? "is-fall" : ""} ${unknown ? "is-unknown" : ""}`}>
@@ -238,23 +251,33 @@ export default function HistoryPage() {
   const cameras = useMemo(() => Array.from(new Map(events.map((event) => [event.cameraId, { id: event.cameraId, name: event.cameraName }])).values()), [events]);
   const persons = useMemo(() => Array.from(new Map(events.flatMap((event) => event.person ? [[event.person.id, event.person] as const] : [])).values()), [events]);
 
-  const filtered = useMemo(() => events.filter((event) => {
-    const age = Date.now() - new Date(event.occurredAt).getTime();
-    const withinRange = range === "today" ? age <= 86_400_000 : range === "7d" ? age <= 7 * 86_400_000 : range === "30d" ? age <= 30 * 86_400_000 : true;
-    const withinCustom = range !== "custom" || ((!customFrom || event.occurredAt >= new Date(`${customFrom}T00:00:00`).toISOString()) && (!customTo || event.occurredAt <= new Date(`${customTo}T23:59:59`).toISOString()));
+  const filtered = useMemo(() => {
+    const customStart = customFrom ? parseLocalDateBoundary(customFrom, false) : null;
+    const customEnd = customTo ? parseLocalDateBoundary(customTo, true) : null;
+    const invalidCustomRange = (Boolean(customFrom) && customStart === null) || (Boolean(customTo) && customEnd === null);
     const keyword = normalizeSearchText(search);
-    const searchableText = normalizeSearchText([
-      event.person?.name ?? (event.unknown ? "Người lạ" : ""),
-      event.cameraName,
-      event.location,
-    ].join(" "));
-    const matchesSearch = !keyword || searchableText.includes(keyword);
-    return withinRange && withinCustom && matchesSearch
-      && (kind === "all" || event.kind === kind)
-      && (cameraId === "all" || event.cameraId === cameraId)
-      && (status === "all" || event.alert?.status === status)
-      && (person === "all" || (person === "unknown" ? event.unknown : event.person?.id === person));
-  }).sort((a, b) => b.occurredAt.localeCompare(a.occurredAt)), [events, range, customFrom, customTo, kind, cameraId, status, person, search]);
+    const now = Date.now();
+
+    return events.filter((event) => {
+      const occurredAt = Date.parse(event.occurredAt);
+      if (!Number.isFinite(occurredAt)) return false;
+
+      const age = now - occurredAt;
+      const withinRange = range === "today" ? age >= 0 && age <= 86_400_000 : range === "7d" ? age >= 0 && age <= 7 * 86_400_000 : range === "30d" ? age >= 0 && age <= 30 * 86_400_000 : true;
+      const withinCustom = range !== "custom" || (!invalidCustomRange && (customStart === null || occurredAt >= customStart) && (customEnd === null || occurredAt <= customEnd));
+      const searchableText = normalizeSearchText([
+        event.person?.name ?? (event.unknown ? "Người lạ" : ""),
+        event.cameraName,
+        event.location,
+      ].join(" "));
+      const matchesSearch = !keyword || searchableText.includes(keyword);
+      return withinRange && withinCustom && matchesSearch
+        && (kind === "all" || event.kind === kind)
+        && (cameraId === "all" || event.cameraId === cameraId)
+        && (status === "all" || event.alert?.status === status)
+        && (person === "all" || (person === "unknown" ? event.unknown : event.person?.id === person));
+    }).sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt));
+  }, [events, range, customFrom, customTo, kind, cameraId, status, person, search]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const currentPage = Math.min(page, totalPages);

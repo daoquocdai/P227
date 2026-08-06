@@ -13,6 +13,7 @@ async def test_reasoning_node_fall_detected():
     assert result["action"] == "REQUIRE_HITL"
     assert "Phát hiện sự cố ngã tại Phòng khách" in result["reasoning"]
 
+
 @pytest.mark.asyncio
 async def test_reasoning_node_unknown_person():
     """Kiểm tra logic suy luận khi phát hiện người lạ."""
@@ -22,6 +23,7 @@ async def test_reasoning_node_unknown_person():
     assert result["threat_level"] == "WARNING"
     assert result["action"] == "TRIGGER_ALERT"
     assert "Có người lạ xuất hiện tại Sân trước" in result["reasoning"]
+
 
 @pytest.mark.asyncio
 async def test_reasoning_node_other_event():
