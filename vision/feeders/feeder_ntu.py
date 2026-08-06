@@ -7,7 +7,7 @@ from feeders import tools
 
 class Feeder(Dataset):
     def __init__(self, data_path, label_path=None, p_interval=[1], split='train', random_choose=False,
-                 random_shift=False, random_move=False, random_rot=False, window_size=64, normalization=False, 
+                 random_shift=False, random_move=False, random_rot=False, window_size=64, normalization=False,
                  debug=False, use_mmap=False, bone=False):
 
         self.debug = debug
@@ -104,12 +104,12 @@ class Feeder(Dataset):
 
         # 4. TÍNH ĐỘ DÀI XƯƠNG (BONE) CHO BỘ 25 ĐIỂM
         if self.bone:
-            from .bone_pairs import ntu_pairs 
+            from .bone_pairs import ntu_pairs
             bone_data_numpy = np.zeros_like(data_numpy)
             for v1, v2 in ntu_pairs:
-                bone_data_numpy[:, :, v1] = data_numpy[:, :, v1] - data_numpy[:, :, v2]          
+                bone_data_numpy[:, :, v1] = data_numpy[:, :, v1] - data_numpy[:, :, v2]
             data_numpy = bone_data_numpy
-            
+
         return data_numpy, label, index
 
     def top_k(self, score, top_k):

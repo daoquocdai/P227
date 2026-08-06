@@ -52,7 +52,7 @@ def get_hierarchical_graph(num_node, edges):
 
 def get_groups(dataset='NTU', CoM=20):
     groups = []
-    
+
     if dataset == 'NTU':
         # Center of Mass: 1 (Middle of Spine - Index cũ là 2)
         if CoM == 1:
@@ -86,13 +86,13 @@ def get_groups(dataset='NTU', CoM=20):
 
         else:
             raise ValueError(f"Tham số CoM={CoM} không hợp lệ cho dữ liệu {dataset}")
-        
+
     return groups
 
 def get_edgeset(dataset='NTU', CoM=20):
     # Lấy các mảng nhóm đã chuẩn hóa sẵn ở index 0-24
     groups = get_groups(dataset=dataset, CoM=CoM)
-    
+
     identity = []
     forward_hierarchy = []
     reverse_hierarchy = []
@@ -101,13 +101,13 @@ def get_edgeset(dataset='NTU', CoM=20):
         self_link = groups[i] + groups[i + 1]
         self_link = [(node, node) for node in self_link] # Sửa biến i thành node để không trùng lặp
         identity.append(self_link)
-        
+
         forward_g = []
         for j in groups[i]:
             for k in groups[i + 1]:
                 forward_g.append((j, k))
         forward_hierarchy.append(forward_g)
-        
+
         reverse_g = []
         for j in groups[-1 - i]:
             for k in groups[-2 - i]:

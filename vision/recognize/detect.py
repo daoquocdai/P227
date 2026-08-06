@@ -22,7 +22,7 @@ while True:
     if not ret:
         print("Không nhận được luồng hình ảnh từ Camera/Video.")
         break
-        
+
     # Đổi kích cỡ frame thành 1024x1024 không làm méo (Letterbox padding)
     h, w = frame.shape[:2]
     scale = 1024 / max(h, w)
@@ -46,10 +46,10 @@ while True:
 
             # Vẽ khung chữ nhật quanh người được phát hiện
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            
+
             # Hiển thị độ tin cậy (Confidence score)
             label = f"Person: {confidence:.2f}"
-            cv2.putText(frame, label, (x1, y1 - 10), 
+            cv2.putText(frame, label, (x1, y1 - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
             # --- MẸO DÙNG SAU NÀY CHO INSIGHTFACE ---

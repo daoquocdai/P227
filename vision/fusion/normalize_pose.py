@@ -3,7 +3,7 @@ import numpy as np
 def normalize_pose(pose):
     """
     pose shape: (T, 25, 3)
-    Hàm này làm nhiệm vụ Chuẩn hóa tỷ lệ (Scaling) dựa trên chiều dài thân mình 
+    Hàm này làm nhiệm vụ Chuẩn hóa tỷ lệ (Scaling) dựa trên chiều dài thân mình
     (khoảng cách cột sống) để quy đổi kích thước cơ thể về một chuẩn chung.
     """
     data = np.copy(pose)
@@ -33,7 +33,7 @@ def normalize_pose(pose):
     # Lúc này chiều dài thân mình của mọi đối tượng đều được ép về hệ số ~ 1.0
     data[:, :, 0] /= scale
     data[:, :, 1] /= scale
-    
+
     if C > 2:
         # Scale luôn cả trục Z (chiều sâu) nếu có
         data[:, :, 2] /= scale

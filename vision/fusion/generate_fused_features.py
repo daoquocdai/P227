@@ -2,12 +2,12 @@ import pandas as pd
 import numpy as np
 import os
 import sys
-import glob 
+import glob
 from tqdm import tqdm
 import random
 import math
 
-current_dir = os.path.dirname(os.path.abspath(__file__)) 
+current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 sys.path.append(parent_dir)
 
@@ -18,7 +18,7 @@ from fusion.normalize_pose import normalize_pose
 
 CONFIG = {
     "RAW_KEYPOINTS_DIR": "data/keypoint",
-    "CSV_DIR": "data", 
+    "CSV_DIR": "data",
     "OUTPUT_ROOT": "data/fused_features",
     "TRAIN_CSV": "train.csv",
     "VAL_CSV": "val.csv",
@@ -42,16 +42,16 @@ def aug_random_rotate(kpts):
 def process_one_sample(file_path, max_frames=64, augment=False):
     try:
         kpt = np.load(file_path) # Shape gốc: (T, 25, 3)
-        
-   
-        kpt = kpt - kpt[:, 0:1, :] 
-        
+
+
+        kpt = kpt - kpt[:, 0:1, :]
+
         kpt = normalize_pose(kpt)
         kpt = interpolate_missing(kpt)
-        
+
         if augment:
             kpt = aug_random_rotate(kpt)
-            
+
         kpt = apply_kalman_filter(kpt)
 
         T = kpt.shape[0]

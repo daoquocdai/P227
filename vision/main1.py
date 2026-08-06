@@ -460,7 +460,7 @@ class Processor():
             with torch.no_grad():
                 num_classes = output.size(1)
                 k_val = min(5, num_classes)  # Tự động chọn k = 2 nếu chỉ có 2 class, hoặc k = 5 nếu đủ lớp
-                
+
                 _, predict_label = torch.topk(output.data, k_val, dim=1)
                 true_label = label.data.view(-1, 1).expand_as(predict_label)
                 correct = predict_label == true_label
@@ -613,7 +613,7 @@ class Processor():
 
                 # 2. Chạy quá trình Validation (Nếu có cấu hình)
                 eval_loader = ['val'] if 'val' in self.data_loader else ['test']
-                
+
                 # 🚀 FIX: Nhận đủ 3 giá trị từ hàm eval mới
                 current_acc, each_acc, confusion = self.eval(epoch, save_score=False, loader_name=eval_loader)
 
@@ -631,7 +631,7 @@ class Processor():
                 # =======================================================
                 # Thêm epoch hiện tại vào danh sách
                 self.top5_models.append({
-                    'acc': current_acc, 
+                    'acc': current_acc,
                     'epoch': epoch + 1,
                     'each_acc': each_acc,
                     'confusion': confusion
@@ -646,29 +646,29 @@ class Processor():
                     weights = OrderedDict([[k.split('module.')[-1], v.cpu()] for k, v in state_dict.items()])
                     pt_path = self.arg.model_saved_name + f"-top_epoch{epoch + 1}_acc_{current_acc*100:.2f}.pt"
                     torch.save(weights, pt_path)
-                    
+
                     # Lưu file .csv
                     csv_path = self.arg.model_saved_name + f"-top_epoch{epoch + 1}_acc_{current_acc*100:.2f}_matrix.csv"
                     with open(csv_path, 'w') as f:
                         writer = csv.writer(f)
                         writer.writerow(each_acc)
                         writer.writerows(confusion)
-                    
+
                     self.print_log(f'\t=> Epoch {epoch + 1} lọt vào Top 5, đã lưu tệp .pt và .csv!')
 
                 # Nếu bảng xếp hạng phình to hơn 5, "trảm" thằng bét bảng
                 if len(self.top5_models) > 5:
                     worst_model = self.top5_models.pop(-1) # Rút thằng bét ra khỏi list
-                    
+
                     # Tìm file vật lý trên ổ cứng và xóa sạch
                     old_pt = self.arg.model_saved_name + f"-top_epoch{worst_model['epoch']}_acc_{worst_model['acc']*100:.2f}.pt"
                     old_csv = self.arg.model_saved_name + f"-top_epoch{worst_model['epoch']}_acc_{worst_model['acc']*100:.2f}_matrix.csv"
-                    
+
                     if os.path.exists(old_pt):
                         os.remove(old_pt)
                     if os.path.exists(old_csv):
                         os.remove(old_csv)
-                        
+
             # 🚀 FIX LỖI SPAM: KÉO KHỐI TỔNG KẾT NÀY RA HẲN NGOÀI VÒNG LẶP FOR
             self.print_log('\n=========================================')
             self.print_log('Training Complete!')
@@ -687,16 +687,16 @@ class Processor():
                 if len(weight_paths) == 0:
                     raise ValueError(f'Không tìm thấy file *top_epoch*.pt nào trong {self.arg.work_dir}.')
             else:
-                weight_paths = [self.arg.weights] 
+                weight_paths = [self.arg.weights]
 
             self.print_log('\n🚀 ĐANG QUÉT NGẦM TÌM MODEL MẠNH NHẤT TRÊN TẬP TEST (Vui lòng đợi)...')
-            
+
             best_test_acc = 0.0
             best_w_path = None
             best_fake_epoch = 0
             original_print_log = self.arg.print_log
             self.arg.print_log = False
-            
+
             # 1. VÒNG SƠ KHẢO: Cho 5 model thi đấu âm thầm
             for w_path in weight_paths:
                 weights = torch.load(w_path)
@@ -708,11 +708,11 @@ class Processor():
 
                 try:
                     ep_str = w_path.split('epoch')[1].split('_')[0]
-                    fake_epoch = int(ep_str) - 1 
+                    fake_epoch = int(ep_str) - 1
                 except:
-                    fake_epoch = 9999 
+                    fake_epoch = 9999
                 test_acc, _, _ = self.eval(epoch=fake_epoch, save_score=False, loader_name=['test'])
-                
+
                 # Cập nhật bảng xếp hạng
                 if test_acc > best_test_acc:
                     best_test_acc = test_acc
@@ -721,7 +721,7 @@ class Processor():
 
             self.arg.print_log = original_print_log # Bật lại log
             self.arg.save_score = True              # Bật công tắc xuất file Score
-            
+
             self.print_log('\n' + '='*55)
             self.print_log('👑 ĐÃ TÌM THẤY VUA TRÊN TẬP TEST: {}'.format(os.path.basename(best_w_path)))
             self.print_log('Tiến hành trích xuất file Score (.pkl) và Matrix (.csv)...')
@@ -729,11 +729,11 @@ class Processor():
             weights = torch.load(best_w_path)
             weights = OrderedDict([[k.split('module.')[-1], v.cuda(self.output_device)] for k, v in weights.items()])
             self.model.load_state_dict(weights)
-            
+
             wf = best_w_path.replace('.pt', '_wrong.txt')
             rf = best_w_path.replace('.pt', '_right.txt')
             self.eval(epoch=best_fake_epoch, save_score=True, loader_name=['test'], wrong_file=wf, result_file=rf)
-            
+
             self.print_log('\n HOÀN THÀNH!\n')
 if __name__ == '__main__':
     parser = get_parser()

@@ -21,21 +21,21 @@ def str2bool(v):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    
+
     # 🔥 THAM SỐ 4 ĐƯỜNG DẪN SCORE
     parser.add_argument('--s1', required=True, help='Score SDA-GCN Joint')
     parser.add_argument('--s2', required=True, help='Score SDA-GCN Bone')
     parser.add_argument('--s3', required=True, help='Score HDS-GCN Joint')
     parser.add_argument('--s4', required=True, help='Score HDS-GCN Bone')
-    
+
     parser.add_argument('--label-csv', required=True, help='Đường dẫn file label .csv')
-    
+
     # 🔥 THAM SỐ 4 TRỌNG SỐ
     parser.add_argument('--w1', type=float, default=1.0, help='Trọng số SDA-GCN Joint')
     parser.add_argument('--w2', type=float, default=1.0, help='Trọng số SDA-GCN Bone')
     parser.add_argument('--w3', type=float, default=1.0, help='Trọng số HDS-GCN Joint')
     parser.add_argument('--w4', type=float, default=1.0, help='Trọng số HDS-GCN Bone')
-    
+
     arg = parser.parse_args()
 
     # 1. ĐỌC NHÃN (GROUND TRUTH) TỪ FILE CSV
@@ -44,10 +44,10 @@ if __name__ == "__main__":
         df = pd.read_csv(arg.label_csv, header=None)
         df[0] = df[0].astype(str)
         df[1] = df[1].astype(int)
-        
+
         if df[1].min() == 1:
             df[1] = df[1] - 1
-            
+
         label_dict = dict(zip(df[0], df[1]))
         print(f"[INFO] Nạp thành công {len(label_dict)} nhãn từ: {arg.label_csv}")
     except Exception as e:
@@ -68,14 +68,14 @@ if __name__ == "__main__":
     # 3. ĐỒNG BỘ DỮ LIỆU
     norm = lambda x: x / (np.linalg.norm(x) + 1e-10)
     y_true_list, list_s1, list_s2, list_s3, list_s4 = [], [], [], [], []
-    
+
     print("[INFO] Đang đồng bộ hóa dữ liệu từ 4 luồng...")
     for video_name in score1.keys():
-        if (video_name in label_dict and 
-            video_name in score2 and 
-            video_name in score3 and 
+        if (video_name in label_dict and
+            video_name in score2 and
+            video_name in score3 and
             video_name in score4):
-            
+
             y_true_list.append(label_dict[video_name])
             list_s1.append(norm(np.array(score1[video_name])))
             list_s2.append(norm(np.array(score2[video_name])))
@@ -97,10 +97,10 @@ if __name__ == "__main__":
     print(f"\n[INFO] >>> Đang tính toán: ({arg.w1}*S1) + ({arg.w2}*S2) + ({arg.w3}*S3) + ({arg.w4}*S4)")
     score_fusion = (arg.w1 * arr_s1) + (arg.w2 * arr_s2) + (arg.w3 * arr_s3) + (arg.w4 * arr_s4)
     pred = np.argmax(score_fusion, axis=1)
-    
+
     # Accuracy
     top1_acc = (pred == labels).sum() / total_samples * 100
-    
+
     # Top-5 Accuracy
     rank_5 = score_fusion.argsort()[:, -5:]
     correct_5 = sum([1 for i in range(total_samples) if labels[i] in rank_5[i]])
@@ -120,7 +120,7 @@ if __name__ == "__main__":
     plt.figure(figsize=(20, 20))
     sns.heatmap(cm, cmap='Blues', xticklabels=False, yticklabels=False)
     plt.title(f'Confusion Matrix 4-Stream (Acc: {top1_acc:.2f}%)', fontsize=20)
-    
+
     if not os.path.exists('./results'): os.makedirs('./results')
     save_path = f'./results/ensemble_4stream_w{arg.w1}_{arg.w2}_{arg.w3}_{arg.w4}.png'
     plt.savefig(save_path, bbox_inches='tight')

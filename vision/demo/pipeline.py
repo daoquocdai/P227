@@ -26,7 +26,7 @@ def extract_from_frame(rgb_frame, hands_model, pose_model):
         keypoints[22] = [lm[11].x, lm[11].y, lm[11].z] # LEFT SHOULDER
         keypoints[23] = [lm[12].x, lm[12].y, lm[12].z] # RIGHT SHOULDER
         keypoints[24] = [lm[0].x, lm[0].y, lm[0].z]    # NECK ≈ Nose
-        
+
         lx, ly, lz = lm[23].x, lm[23].y, lm[23].z
         rx, ry, rz = lm[24].x, lm[24].y, lm[24].z
         keypoints[25] = [(lx + rx) / 2, (ly + ry) / 2, (lz + rz) / 2] # HIP_CENTER
@@ -59,7 +59,7 @@ def process_video_to_npy(input_video, output_npy, target_size=512):
     H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
     print("[*] Đang quét video để tìm vị trí Cổ (Neck center)...")
-    
+
     # ---------------------------------------------------------
     # PASS 1: Quét tìm vị trí Cổ trung bình
     # ---------------------------------------------------------
@@ -88,7 +88,7 @@ def process_video_to_npy(input_video, output_npy, target_size=512):
     neck_y = int((avg_ls_y + avg_rs_y) / 2)
     print("[*] Đang Crop và Trích xuất 28 Keypoints...")
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-    
+
     side_length = int(H * 0.9)
     half_side = side_length // 2
     frames_kpts = []
@@ -127,7 +127,7 @@ def process_video_to_npy(input_video, output_npy, target_size=512):
         print(f"🎉 Hoàn thành! File .npy đã được lưu tại: {output_npy}")
         print(f"   Shape của dữ liệu: {frames_kpts.shape} (Frames, Joints, 3)")
         return True
-    
+
     print("[!] Không có frame nào được trích xuất.")
     return False
 

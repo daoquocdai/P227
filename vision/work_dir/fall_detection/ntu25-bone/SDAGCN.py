@@ -52,8 +52,8 @@ def weights_init(m):
             m.weight.data.normal_(1.0, 0.02)
         if hasattr(m, 'bias') and m.bias is not None:
             m.bias.data.fill_(0)
-            
-            
+
+
 class TemporalConv(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, dilation=1):
         super(TemporalConv, self).__init__()
@@ -95,7 +95,7 @@ class MultiScale_TemporalConv(nn.Module):
             assert len(kernel_size) == len(dilations)
         else:
             kernel_size = [kernel_size] * len(dilations)
-            
+
         self.branches = nn.ModuleList([
             nn.Sequential(
                 nn.Conv2d(
@@ -167,117 +167,117 @@ class residual_conv(nn.Module):
 class EdgeConv(nn.Module):
     def __init__(self, in_channels, out_channels, k):
         super(EdgeConv, self).__init__()
-        
+
         self.k = k
-        
+
         self.conv = nn.Sequential(
             nn.Conv2d(in_channels*2, out_channels, kernel_size=1, bias=False),
             nn.BatchNorm2d(out_channels),
             nn.LeakyReLU(inplace=True, negative_slope=0.2)
         )
-        
+
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 conv_init(m)
             elif isinstance(m, nn.BatchNorm2d):
                 bn_init(m, 1)
-    
+
     def forward(self, x, dim=4):
         if dim == 3:
             N, C, L = x.size()
             pass
         else:
             N, C, T, V = x.size()
-            x = x.mean(dim=-2, keepdim=False) 
-        
+            x = x.mean(dim=-2, keepdim=False)
+
         x = self.get_graph_feature(x, self.k)
         x = self.conv(x)
         x = x.max(dim=-1, keepdim=False)[0]
-        
+
         if dim == 3:
             pass
         else:
             x = repeat(x, 'n c v -> n c t v', t=T)
-        
+
         return x
-        
+
     def knn(self, x, k):
         inner = -2 * torch.matmul(x.transpose(2, 1), x)
         xx = torch.sum(x**2, dim=1, keepdim=True)
         pairwise_distance = - xx - inner - xx.transpose(2, 1)
-        
-        idx = pairwise_distance.topk(k=k, dim=-1)[1] 
+
+        idx = pairwise_distance.topk(k=k, dim=-1)[1]
         return idx
-    
+
     def get_graph_feature(self, x, k, idx=None):
         N, C, V = x.size()
         if idx is None:
             idx = self.knn(x, k=k)
         device = x.get_device()
-        
+
         idx_base = torch.arange(0, N, device=device).view(-1, 1, 1) * V
-        
+
         idx = idx + idx_base
         idx = idx.view(-1)
-        
+
         x = rearrange(x, 'n c v -> n v c')
         feature = rearrange(x, 'n v c -> (n v) c')[idx, :]
         feature = feature.view(N, V, k, C)
         x = repeat(x, 'n v c -> n v k c', k=k)
-        
+
         feature = torch.cat((feature - x, x), dim=3)
         feature = rearrange(feature, 'n v k c -> n c v k')
-        
+
         return feature
-    
+
 
 class AHA(nn.Module):
     def __init__(self, in_channels, num_layers, CoM):
         super(AHA, self).__init__()
-        
+
         self.num_layers = num_layers
-        
+
         # SỬA: Đổi dataset='VSL' thành 'NTU' để lấy đúng cấu trúc đồ thị
         groups = get_groups(dataset='NTU', CoM=CoM)
 
-        # ĐÃ XÓA đoạn "group = [i - 1 for i in group]" vì trong file tools.py 
+        # ĐÃ XÓA đoạn "group = [i - 1 for i in group]" vì trong file tools.py
         # chúng ta đã chuẩn hóa index về 0-24 rồi. Trừ thêm 1 sẽ gây lỗi.
-            
+
         inter_channels = in_channels // 4
-            
+
         self.layers = [groups[i] + groups[i + 1] for i in range(len(groups) - 1)]
-        
+
         self.conv_down = nn.Sequential(
             nn.Conv2d(in_channels, inter_channels, kernel_size=1),
             nn.BatchNorm2d(inter_channels),
             nn.ReLU(inplace=True)
         )
-        
+
         self.edge_conv = EdgeConv(inter_channels, inter_channels, k=3)
-        
+
         self.aggregate = nn.Conv1d(inter_channels, in_channels, kernel_size=1)
         self.sigmoid = nn.Sigmoid()
-        
+
     def forward(self, x):
         N, C, L, T, V = x.size()
-        
+
         x_t = x.max(dim=-2, keepdim=False)[0]
         x_t = self.conv_down(x_t)
-        
+
         x_sampled = []
         for i in range(self.num_layers):
             s_t = x_t[:, :, i, self.layers[i]]
             s_t = s_t.mean(dim=-1, keepdim=True)
             x_sampled.append(s_t)
         x_sampled = torch.cat(x_sampled, dim=2)
-        
+
         att = self.edge_conv(x_sampled, dim=3)
         att = self.aggregate(att).view(N, C, L, 1, 1)
-        
+
         out = (x * self.sigmoid(att)).sum(dim=2, keepdim=False)
-        
+
         return out
-        
+
 
 # SỬA: Thay mặc định CoM=21 thành CoM=0
 class HD_Gconv(nn.Module):
@@ -285,12 +285,12 @@ class HD_Gconv(nn.Module):
         super(HD_Gconv, self).__init__()
         self.num_layers = A.shape[0]
         self.num_subset = A.shape[1]
-        
+
         self.att = att
-        
+
         inter_channels = out_channels // (self.num_subset + 1)
         self.adaptive = adaptive
-        
+
         if adaptive:
             self.PA = nn.Parameter(torch.from_numpy(A.astype(np.float32)), requires_grad=True)
         else:
@@ -313,10 +313,10 @@ class HD_Gconv(nn.Module):
 
             self.conv_d.append(EdgeConv(inter_channels, inter_channels, k=7))
             self.conv.append(self.conv_d)
-            
+
         if self.att:
             self.aha = AHA(out_channels, num_layers=self.num_layers, CoM=CoM)
-            
+
         if residual:
             if in_channels != out_channels:
                 self.down = nn.Sequential(
@@ -327,7 +327,7 @@ class HD_Gconv(nn.Module):
                 self.down = lambda x: x
         else:
             self.down = lambda x: 0
-            
+
         self.bn = nn.BatchNorm2d(out_channels)
         self.relu = nn.ReLU(inplace=True)
 
@@ -352,13 +352,13 @@ class HD_Gconv(nn.Module):
             y.append(y_edge)
             y = torch.cat(y, dim=1)
             out.append(y)
-            
+
         out = torch.stack(out, dim=2)
         if self.att:
             out = self.aha(out)
         else:
             out = out.sum(dim=2, keepdim=False)
-            
+
         out = self.bn(out)
         out += self.down(x)
         out = self.relu(out)
@@ -387,7 +387,7 @@ class TCN_GCN_unit(nn.Module):
 
 
 class Model(nn.Module):
-    # SỬA: Đưa num_point mặc định về 25 để tránh cảnh báo. 
+    # SỬA: Đưa num_point mặc định về 25 để tránh cảnh báo.
     # num_class để 60 hoặc bao nhiêu tùy bạn set trong file YAML khi train.
     def __init__(self, num_class=60, num_point=25, num_person=1, graph=None, graph_args=dict(), in_channels=3,
                  drop_out=0, adaptive=True):
@@ -399,7 +399,7 @@ class Model(nn.Module):
             Graph = import_class(graph)
             self.graph = Graph(**graph_args)
             A, CoM = self.graph.A
-        
+
         # Đã cập nhật thành NTU
         self.dataset = 'NTU'
 

@@ -8,7 +8,7 @@ def main():
     if not name:
         print("[LỖI] Tên không hợp lệ. Đang thoát...")
         return
-        
+
     # 2. Tạo thư mục 'register face/<name>'
     save_dir = os.path.join("register face", name)
     if not os.path.exists(save_dir):
@@ -34,7 +34,7 @@ def main():
         if not ret:
             print("[LỖI] Không thể đọc được hình ảnh từ Webcam.")
             break
-            
+
         # Đổi kích cỡ frame thành 1024x1024 không làm méo (Letterbox padding)
         h, w = frame.shape[:2]
         scale = 1024 / max(h, w)
@@ -42,9 +42,9 @@ def main():
         frame = cv2.resize(frame, (new_w, new_h))
         pad_w, pad_h = 1024 - new_w, 1024 - new_h
         frame = cv2.copyMakeBorder(frame, pad_h // 2, pad_h - pad_h // 2, pad_w // 2, pad_w - pad_w // 2, cv2.BORDER_CONSTANT, value=(0, 0, 0))
-            
+
         display_frame = frame.copy()
-        
+
         if is_recording:
             tick_count += 1
             if tick_count % 4 == 0:
@@ -55,9 +55,9 @@ def main():
             cv2.putText(display_frame, f"Recording: {frame_count}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
         else:
             cv2.putText(display_frame, "Ready - Press 'c' to record", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            
+
         cv2.imshow("Thu Thap Du Lieu Khuon Mat", display_frame)
-        
+
         key = cv2.waitKey(1) & 0xFF
         if key == ord('c'):
             is_recording = not is_recording

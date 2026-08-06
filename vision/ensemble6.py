@@ -126,30 +126,30 @@ def get_tta_loader(config, tta_enabled=False):
     feeder_name = config.get('test_feeder', config.get('feeder'))
     if not feeder_name:
         raise ValueError("[ERROR] File config.yaml của bạn không có khai báo 'feeder' hoặc 'test_feeder'!")
-        
+
     Feeder = import_class(feeder_name)
     args = config.get('test_feeder_args', {})
-    
+
     if tta_enabled:
         args['random_shift'] = True
         args['random_move'] = True
     else:
         args['random_shift'] = False
         args['random_move'] = False
-    
+
     batch_size = 32
     if 'test_batch_size' in config:
         batch_size = config['test_batch_size']
     elif 'test' in config and 'test_batch_size' in config['test']:
         batch_size = config['test']['test_batch_size']
-        
-    loader = DataLoader(Feeder(**args), batch_size=batch_size, 
+
+    loader = DataLoader(Feeder(**args), batch_size=batch_size,
                         shuffle=False, num_workers=4, drop_last=False)
     return loader
 
 def run_inference_tta(config_path, weight_path, device_id, tta_times=1):
     if not config_path or not weight_path: return None, None
-    
+
     print(f"[INFO] Evaluating: {os.path.basename(config_path)}")
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
@@ -157,52 +157,52 @@ def run_inference_tta(config_path, weight_path, device_id, tta_times=1):
     except UnicodeDecodeError:
         with open(config_path, 'r', encoding='utf-8-sig') as f:
             config = yaml.safe_load(f)
-    
+
     device = torch.device(f"cuda:{device_id}" if torch.cuda.is_available() else "cpu")
     Model = import_class(config['model'])
     model = Model(**config['model_args']).to(device)
-    
+
     checkpoint = torch.load(weight_path, map_location=device)
     if 'model_state_dict' in checkpoint: model.load_state_dict(checkpoint['model_state_dict'])
     elif 'model' in checkpoint: model.load_state_dict(checkpoint['model'])
     else: model.load_state_dict(checkpoint)
     model.eval()
-    
+
     final_scores = None
     final_labels = None
 
     for i in range(tta_times):
         is_aug = (i > 0)
         loader = get_tta_loader(config, tta_enabled=is_aug)
-        
+
         score_frag = []
         label_frag = []
-        
+
         desc = f"   Round {i+1}/{tta_times} [{'Aug' if is_aug else 'Orig'}]"
-        
+
         with torch.no_grad():
             # [FIXED] Dùng 'batch_data' để hứng toàn bộ, tránh lỗi unpacking
             for batch_data in tqdm(loader, ncols=100, unit="batch", desc=desc):
-                
+
                 inputs = batch_data[0].to(device)
                 targets = batch_data[1].numpy()
-                
+
                 outputs = model(inputs)
                 score_frag.append(outputs.cpu().numpy())
                 label_frag.append(targets)
         scores = np.concatenate(score_frag)
         labels = np.concatenate(label_frag)
-        
+
         if final_scores is None:
             final_scores = scores
             final_labels = labels
         else:
             final_scores += scores
-            
+
     final_scores /= tta_times
     acc = (np.argmax(final_scores, axis=1) == final_labels).sum() / len(final_labels) * 100
     print(f"   -> Accuracy TTA: {acc:.2f}%\n")
-    
+
     return final_scores, final_labels
 
 # =======================================================
@@ -223,33 +223,33 @@ def get_weight_combinations(num_weights, total_steps=20):
 def main():
     parser = argparse.ArgumentParser()
     # Khai báo đến 6 config/weight
-    parser.add_argument('--config1', default='') 
+    parser.add_argument('--config1', default='')
     parser.add_argument('--weight1', default='')
-    parser.add_argument('--config2', default='') 
+    parser.add_argument('--config2', default='')
     parser.add_argument('--weight2', default='')
-    parser.add_argument('--config3', default='') 
+    parser.add_argument('--config3', default='')
     parser.add_argument('--weight3', default='')
-    parser.add_argument('--config4', default='') 
+    parser.add_argument('--config4', default='')
     parser.add_argument('--weight4', default='')
-    parser.add_argument('--config5', default='') 
+    parser.add_argument('--config5', default='')
     parser.add_argument('--weight5', default='')
-    parser.add_argument('--config6', default='') 
+    parser.add_argument('--config6', default='')
     parser.add_argument('--weight6', default='')
-    
+
     parser.add_argument('--tta_times', type=int, default=5, help='Số lần lặp TTA')
     parser.add_argument('--device', type=int, default=0)
     parser.add_argument('--lookup_csv', default='', help='Đường dẫn lookuptable.csv')
-    parser.add_argument('--grid_steps', type=int, default=20, 
+    parser.add_argument('--grid_steps', type=int, default=20,
                         help='Số bước nhảy Grid Search. 20 (0.05), 10 (0.1). Nên dùng 10 nếu 6 model để tìm nhanh hơn.')
     args = parser.parse_args()
 
     # Thu thập tất cả các model được cung cấp
     inputs = [
-        (args.config1, args.weight1), (args.config2, args.weight2), 
-        (args.config3, args.weight3), (args.config4, args.weight4), 
+        (args.config1, args.weight1), (args.config2, args.weight2),
+        (args.config3, args.weight3), (args.config4, args.weight4),
         (args.config5, args.weight5), (args.config6, args.weight6)
     ]
-    
+
     valid_models = [(c, w) for c, w in inputs if c and w]
     if not valid_models:
         print("[ERROR] Cần cung cấp ít nhất 1 cặp config và weight!")
@@ -269,29 +269,29 @@ def main():
         torch.cuda.empty_cache() # Dọn dẹp GPU memory sau mỗi model
 
     num_models = len(scores_list)
-    
+
     # Grid Search tự động dựa trên số model thực tế được nạp vào
     print(f"\n[INFO] >>> Searching Best Ensemble ({num_models} Models)...")
     best_acc = 0
     best_weights = [0] * num_models
-    
+
     # Lấy danh sách các cấu hình trọng số
     combos = list(get_weight_combinations(num_models, args.grid_steps))
-    
+
     # Quét tất cả các tổ hợp
     for weights_int in tqdm(combos, desc=f"Grid Search (Step {1/args.grid_steps:.2f})", ncols=100):
         # Chuyển đổi số nguyên sang số thập phân (VD: [10, 5, 5] -> [0.5, 0.25, 0.25])
         current_weights = np.array(weights_int) / args.grid_steps
-        
+
         # Tính toán ma trận score tổng hợp
         score_fusion = np.zeros_like(scores_list[0])
         for w, s in zip(current_weights, scores_list):
             if w > 0: # Bỏ qua phép nhân nếu trọng số = 0 để tối ưu tốc độ
                 score_fusion += w * s
-        
+
         pred = np.argmax(score_fusion, axis=1)
         acc = (pred == labels).sum() / len(labels) * 100
-        
+
         if acc > best_acc:
             best_acc = acc
             best_weights = current_weights
@@ -303,7 +303,7 @@ def main():
     print(f"   Trọng số tối ưu: {weights_str}")
     print(f"   ACCURACY (Top-1): {best_acc:.2f}%")
     print("=" * 50)
-    
+
     # Check Top-5 Accuracy với Best Weights
     final_score = np.zeros_like(scores_list[0])
     for w, s in zip(best_weights, scores_list):
@@ -352,10 +352,10 @@ def main():
     if len(imperfect_indices) > 0:
         imperfect_save_path = './results/confusion_matrix_imperfect.png'
         plot_confusion_matrix_subset(
-            y_true, 
-            y_pred, 
-            imperfect_indices, 
-            imperfect_names, 
+            y_true,
+            y_pred,
+            imperfect_indices,
+            imperfect_names,
             imperfect_save_path
         )
         print(f"[SUCCESS] Đã vẽ và lưu Confusion Matrix cho {len(imperfect_indices)} class (<100%) tại: {imperfect_save_path}\n")

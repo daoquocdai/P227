@@ -50,7 +50,7 @@ while True:
     ret, frame = cap.read()
     if not ret:
         break
-        
+
     # Đổi kích cỡ frame thành 1024x1024 không làm méo (Letterbox padding)
     h, w = frame.shape[:2]
     scale = 1024 / max(h, w)
@@ -67,21 +67,21 @@ while True:
         # 1. Lấy tọa độ khuôn mặt (Bounding Box)
         box = face.bbox.astype(int)
         x1, y1, x2, y2 = box[0], box[1], box[2], box[3]
-        
+
         # 2. Lấy vector đặc trưng của khuôn mặt trên webcam
         current_embedding = face.embedding
-        
+
         # 3. So sánh với khuôn mặt mẫu đã đăng ký
         similarity = compute_similarity(known_embedding, current_embedding)
-        
+
         # 4. Kiểm tra xem có phải người quen không
         color = (0, 0, 255) # Mặc định màu Đỏ (Người lạ)
         name = f"Unknown ({similarity:.2f})"
-        
+
         if similarity > THRESHOLD:
             color = (0, 255, 0) # Chuyển sang Xanh lá (Người quen)
             name = f"Nguoi Quen ({similarity:.2f})"
-            
+
         # Vẽ khung và tên lên màn hình
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
         cv2.putText(frame, name, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
