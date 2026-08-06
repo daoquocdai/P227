@@ -5,8 +5,12 @@ from uuid import uuid4
 from src.database import database_connection
 
 PERMISSIONS = (
-    "view_history", "acknowledge_alert", "resolve_alert",
-    "manage_cameras", "manage_persons", "manage_users",
+    "view_history",
+    "acknowledge_alert",
+    "resolve_alert",
+    "manage_cameras",
+    "manage_persons",
+    "manage_users",
 )
 
 
@@ -42,7 +46,9 @@ class SettingsService:
         if group not in {"general", "notifications"}:
             raise SettingsNotFoundError(group)
         with database_connection() as connection:
-            row = connection.execute("SELECT value_json FROM system_settings WHERE setting_key = ?", (group,)).fetchone()
+            row = connection.execute(
+                "SELECT value_json FROM system_settings WHERE setting_key = ?", (group,)
+            ).fetchone()
             current = json.loads(row["value_json"])
             current.update(values)
             connection.execute(
@@ -115,15 +121,21 @@ class SettingsService:
     def _user(connection, user) -> dict[str, Any]:
         permissions = {key: user["role"] == "admin" for key in PERMISSIONS}
         if user["role"] != "admin":
-            permissions.update({
-                row["permission_key"]: bool(row["is_granted"])
-                for row in connection.execute(
-                    "SELECT permission_key, is_granted FROM user_permissions WHERE user_id = ?", (user["id"],)
-                )
-            })
+            permissions.update(
+                {
+                    row["permission_key"]: bool(row["is_granted"])
+                    for row in connection.execute(
+                        "SELECT permission_key, is_granted FROM user_permissions WHERE user_id = ?", (user["id"],)
+                    )
+                }
+            )
         return {
-            "id": user["id"], "name": user["display_name"], "email": user["email"],
-            "role": user["role"], "active": bool(user["is_active"]), "created_at": user["created_at"],
+            "id": user["id"],
+            "name": user["display_name"],
+            "email": user["email"],
+            "role": user["role"],
+            "active": bool(user["is_active"]),
+            "created_at": user["created_at"],
             "permissions": permissions,
         }
 

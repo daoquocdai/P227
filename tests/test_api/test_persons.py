@@ -19,9 +19,7 @@ async def test_person_and_face_profile_crud(client):
     assert updated.json()["active"] is False
     assert updated.json()["notes"] == "Đã cập nhật"
 
-    with_face = await client.post(
-        f"/api/v1/persons/{person_id}/faces", json={"quality": 0.91, "angle": "Chính diện"}
-    )
+    with_face = await client.post(f"/api/v1/persons/{person_id}/faces", json={"quality": 0.91, "angle": "Chính diện"})
     assert with_face.status_code == 201
     face_id = with_face.json()["faces"][0]["id"]
     assert with_face.json()["faces"][0]["quality"] == 0.91

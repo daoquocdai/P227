@@ -78,7 +78,9 @@ class HistoryService:
                 }
             )
 
-        public_camera_id = row["camera_public_id"] if row["camera_public_id"].startswith("camera-") else row["camera_id"]
+        public_camera_id = (
+            row["camera_public_id"] if row["camera_public_id"].startswith("camera-") else row["camera_id"]
+        )
         return {
             "id": row["id"],
             "event_id": metadata.get("external_event_id", row["id"]),
@@ -97,9 +99,12 @@ class HistoryService:
                 "posture": row["posture"],
                 "immobility_ms": row["immobility_duration_ms"] or 0,
                 "confidence": row["fall_confidence"],
-            } if row["posture"] else None,
+            }
+            if row["posture"]
+            else None,
             "alert": {"id": row["alert_id"], "severity": row["severity"], "status": row["alert_status"]}
-            if row["alert_id"] else None,
+            if row["alert_id"]
+            else None,
             "verdict": verdict,
             "media": media_payload,
             "actions": actions,

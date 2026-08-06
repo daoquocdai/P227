@@ -16,7 +16,9 @@ class EventService:
     async def create(self, event: VisionEventRequest) -> VisionEventAccepted:
         async with self._lock:
             result = self._repository.create(event, self._description(event))
-            alert = self._repository.get_alert(result.id) if result.status == "pending" and not result.duplicate else None
+            alert = (
+                self._repository.get_alert(result.id) if result.status == "pending" and not result.duplicate else None
+            )
         if alert:
             await alert_broadcaster.publish({"type": "alert_created", "alert": alert})
         return result

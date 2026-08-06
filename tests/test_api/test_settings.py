@@ -8,11 +8,15 @@ async def test_settings_persist_users_permissions_and_camera_state(client):
     settings = await client.get("/api/v1/settings")
     assert settings.status_code == 200
     assert settings.json()["general"]["fall_threshold"] >= 70
-    assert len(settings.json()["cameras"]) == 2
+    cameras = settings.json()["cameras"]
+    assert len(cameras) == 3
+    assert {camera["name"] for camera in cameras} == {
+        "Webcam phòng khách",
+        "Video mô phỏng",
+        "Video hành lang",
+    }
 
-    general = await client.patch(
-        "/api/v1/settings/general", json={"retention_days": 7, "fall_threshold": 80}
-    )
+    general = await client.patch("/api/v1/settings/general", json={"retention_days": 7, "fall_threshold": 80})
     assert general.json()["retention_days"] == 7
     assert general.json()["fall_threshold"] == 80
 
