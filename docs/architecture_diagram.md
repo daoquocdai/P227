@@ -1,37 +1,29 @@
-# Sơ đồ kiến trúc GuardianCam — Central Local Hub
+# Architecture Diagram
+
+Tài liệu chuẩn của kiến trúc nằm tại [architecture.md](architecture.md). File này giữ sơ đồ rút gọn để tương thích checklist deliverable.
 
 ```mermaid
 flowchart LR
-    subgraph CAM[Camera thường]
-        C1[RTSP Camera 1]
-        C2[RTSP Camera 2]
-        C3[USB/RTSP Camera N]
+    C[Camera thường / Video / RTSP]
+    subgraph H[Một Local Smart Hub]
+        V[Ingest + Vision AI]
+        Q[Temporal engine + queue]
+        B[FastAPI + LangGraph/HITL]
+        D[(SQLite + local media)]
+        V -->|VisionEvent| Q --> B --> D
     end
-
-    subgraph HUB[Local Smart Hub]
-        ING[Video Ingest]
-        VIS[YOLO + Tracker]
-        AUX[Pose + Face<br/>on demand]
-        EVT[Temporal Event Engine]
-        Q[In-memory Event Queue]
-        BE[FastAPI + LangGraph]
-        DB[(Local DB)]
-        FS[(Encrypted Media)]
-    end
-
-    UI[React/PWA<br/>LAN or VPN]
-
-    C1 --> ING
-    C2 --> ING
-    C3 --> ING
-    ING --> VIS --> AUX --> EVT
-    EVT --> Q --> BE
-    AUX --> FS
-    BE --> DB
-    FS --> BE
-    BE <-->|REST + WebSocket/SSE| UI
+    C -->|video thô trong LAN| V
+    B --> R[SSE]
+    R --> U[React Dashboard]
+    D --> U
 ```
 
-Video thô chỉ đi từ camera đến Local Hub trong mạng nội bộ. Vision truyền event object qua bounded queue; snapshot và clip nằm trên shared local volume. Event Engine quyết định cảnh báo an toàn trước khi phần diễn giải tùy chọn hoạt động.
+Ảnh xuất tĩnh dành cho slide: [architecture_diagram.png](architecture_diagram.png). Bản nguồn chỉnh sửa được lưu tại [architecture_diagram.svg](architecture_diagram.svg).
 
-Chi tiết contract, trách nhiệm thành phần và ràng buộc bảo mật nằm tại [`../ARCHITECTURE.md`](../ARCHITECTURE.md).
+Các nguyên tắc chính:
+
+- Vision và dữ liệu nhạy cảm chạy local.
+- Camera không chạy AI và không có edge computer riêng.
+- Event JSON không chứa video thô hoặc embedding khuôn mặt.
+- LangGraph xử lý workflow sau khi vision đã tạo tín hiệu.
+- SQLite phù hợp một Local Hub; kiến trúc nhiều node cần broker và PostgreSQL.
