@@ -1,8 +1,4 @@
-import sys
-import numpy as np
-
-sys.path.extend(['../'])
-from graph import tools
+from . import tools
 
 # Đồng bộ với chuẩn NTU-25 (đánh index 0-24)
 num_node = 25

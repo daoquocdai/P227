@@ -14,13 +14,20 @@ logger = logging.getLogger(__name__)
 class VisionManager:
     """In-memory lifecycle and status facade for the local Vision worker."""
 
-    def __init__(self, frame_hub: FrameHub, engine: VisionEngine, event_dispatcher=None) -> None:
+    def __init__(
+        self,
+        frame_hub: FrameHub,
+        engine: VisionEngine,
+        event_dispatcher=None,
+        sample_buffer=None,
+    ) -> None:
         self._lock = threading.RLock()
         self._frame_hub = frame_hub
         self._last_results: dict[str, VisionResult] = {}
         self._current_errors: dict[str, str] = {}
         self._last_errors: dict[str, dict] = {}
         self._event_dispatcher = event_dispatcher
+        self._sample_buffer = sample_buffer
         self._event_handler_errors: dict[str, int] = {}
         self._last_event_handler_errors: dict[str, str] = {}
         self.worker = VisionWorker(
@@ -28,6 +35,7 @@ class VisionManager:
             engine=engine,
             on_result=self._handle_result,
             on_error=self._handle_error,
+            sample_buffer=sample_buffer,
         )
 
     def start(self) -> None:
@@ -97,6 +105,31 @@ class VisionManager:
             "current_error": current_error,
             "last_error": last_error,
             "event_dispatch": dispatch_status,
+            "temporal": self._temporal_status(camera_id),
+        }
+
+    def _temporal_status(self, camera_id: str) -> dict:
+        if self._sample_buffer is not None:
+            return self._sample_buffer.get_status(camera_id)
+        return {
+            "target_sample_rate": None,
+            "target_input_rate": None,
+            "effective_sample_rate": 0.0,
+            "service_rate": 0.0,
+            "buffer_depth": 0,
+            "buffer_capacity": 0,
+            "temporal_drop_count": 0,
+            "input_drop_count": 0,
+            "overload_count": 0,
+            "epoch_temporal_drop_count": 0,
+            "epoch_input_drop_count": 0,
+            "epoch_overload_count": 0,
+            "window_source_time_span": None,
+            "temporal_fidelity": "unavailable",
+            "degraded_reason": "temporal_sampling_not_configured",
+            "last_discontinuity": None,
+            "source_epoch": None,
+            "source_time_kind": None,
         }
 
     def _handle_result(self, result: VisionResult) -> None:

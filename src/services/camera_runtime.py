@@ -39,9 +39,11 @@ class CameraRuntime:
     def __init__(
         self,
         frame_hub: FrameHub,
-        reconnect_delay: float = 1.0
+        reconnect_delay: float = 1.0,
+        vision_sample_buffer=None,
     ):
         self.frame_hub = frame_hub
+        self.vision_sample_buffer = vision_sample_buffer
 
         self.reconnect_delay = reconnect_delay
 
@@ -133,6 +135,9 @@ class CameraRuntime:
         if remove_frame:
             self.frame_hub.remove(camera_id)
 
+        if self.vision_sample_buffer is not None:
+            self.vision_sample_buffer.clear(camera_id, reason="camera_stopped")
+
         return self.get_status(camera_id)
 
     def stop_all(self):
@@ -208,6 +213,7 @@ class CameraRuntime:
     ):
 
         frame_id = -1
+        source_epoch = -1
 
         is_file = self._is_file(source)
 
@@ -239,6 +245,9 @@ class CameraRuntime:
                 )
 
                 continue
+
+            source_epoch += 1
+            frame_in_epoch = -1
 
             # Quan trọng với video file:
             # OpenCV nếu không throttle sẽ đọc nhanh hết file.
@@ -278,6 +287,9 @@ class CameraRuntime:
                                     time.monotonic()
                                 )
 
+                                source_epoch += 1
+                                frame_in_epoch = -1
+
                                 continue
 
                             self._set_state(
@@ -313,17 +325,29 @@ class CameraRuntime:
                         )
 
                     frame_id += 1
+                    frame_in_epoch += 1
 
                     captured_at = time.time()
+                    source_timestamp = (
+                        frame_in_epoch / source_fps
+                        if is_file
+                        else time.monotonic()
+                    )
 
                     packet = FramePacket(
                         camera_id=camera_id,
                         frame_id=frame_id,
                         captured_at=captured_at,
                         frame=frame,
+                        source_timestamp=source_timestamp,
+                        source_time_kind=("media_timeline" if is_file else "monotonic_arrival"),
+                        source_epoch=source_epoch,
+                        discontinuity=frame_in_epoch == 0,
                     )
 
                     self.frame_hub.publish(packet)
+                    if self.vision_sample_buffer is not None:
+                        self.vision_sample_buffer.offer(packet)
 
                     self._set_state(
                         camera_id,
