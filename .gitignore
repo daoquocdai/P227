@@ -65,13 +65,13 @@ out/
 .ai-log/archive/
 
 # Vision local data and generated artifacts
-/vision/models/
-/vision/register face/
-/vision/work_dir/**/runs/
-/vision/work_dir/**/*.pt
-/vision/work_dir/**/*_matrix.csv
-/vision/work_dir/**/log.txt
-/vision/demo/**/*.npy
-/vision/**/*.onnx
-/vision/**/*.engine
-/vision/yolov8n.pt
+src/vision/models/
+src/vision/register face/
+src/vision/work_dir/**/runs/
+src/vision/work_dir/**/*.pt
+src/vision/work_dir/**/*_matrix.csv
+src/vision/work_dir/**/log.txt
+src/vision/demo/**/*.npy
+src/vision/**/*.onnx
+src/vision/**/*.engine
+src/vision/yolov8n.pt
