@@ -1,13 +1,8 @@
-import cv2
-import numpy as np
-import mediapipe as mp
 import os
-from tqdm import tqdm
-from concurrent.futures import ProcessPoolExecutor
-from ultralytics import YOLO  # Thêm thư viện YOLO
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+import cv2
+import mediapipe as mp
+import numpy as np
 
 # ==============================
 # Mediapipe Modules
@@ -126,6 +121,8 @@ def extract_from_crop(rgb_crop, pose_model, x_min, y_min, crop_w, crop_h, orig_w
 # Xử lý 1 video trọn vẹn (Tích hợp YOLO)
 # ==============================
 def process_video_task(task):
+    from ultralytics import YOLO
+
     video_path, out_dir = task 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -202,6 +199,10 @@ def process_video_task(task):
 # Xử lý song song thư mục
 # ==============================
 def extract_keypoints_folder(video_dir, out_dir):
+    from concurrent.futures import ProcessPoolExecutor
+
+    from tqdm import tqdm
+
     os.makedirs(out_dir, exist_ok=True)
     videos = [v for v in os.listdir(video_dir) if v.lower().endswith((".mp4", ".avi", ".mov"))]
 

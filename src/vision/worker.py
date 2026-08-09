@@ -19,11 +19,13 @@ class VisionWorker:
         engine: VisionEngine,
         on_result: Callable[[VisionResult], None] | None = None,
         on_error: Callable[[str, int, Exception], None] | None = None,
+        sample_buffer=None,
     ) -> None:
         self.frame_hub = frame_hub
         self.engine = engine
         self.on_result = on_result
         self.on_error = on_error
+        self.sample_buffer = sample_buffer
         self._lock = threading.RLock()
         self._enabled: set[str] = set()
         self._sessions: dict[str, VisionSession] = {}
@@ -59,9 +61,14 @@ class VisionWorker:
     def enable(self, camera_id: str) -> VisionSession:
         with self._lock:
             self._enabled.add(camera_id)
-            return self._sessions.setdefault(camera_id, VisionSession(camera_id=camera_id))
+            session = self._sessions.setdefault(camera_id, VisionSession(camera_id=camera_id))
+        if self.sample_buffer is not None:
+            self.sample_buffer.enable(camera_id)
+        return session
 
     def disable(self, camera_id: str, clear_session: bool = True) -> None:
+        if self.sample_buffer is not None:
+            self.sample_buffer.disable(camera_id)
         with self._lock:
             self._enabled.discard(camera_id)
             if clear_session:
@@ -81,16 +88,28 @@ class VisionWorker:
 
     def _run(self) -> None:
         while not self._stop_event.is_set():
-            current_version = self.frame_hub.version
+            source = self.frame_hub if self.sample_buffer is None else self.sample_buffer
+            current_version = source.version
             for camera_id in self._enabled_snapshot():
                 if self._stop_event.is_set():
                     return
-                packet = self.frame_hub.get_latest(camera_id)
+                packet = (
+                    self.frame_hub.get_latest(camera_id)
+                    if self.sample_buffer is None
+                    else self.sample_buffer.get_nowait(camera_id)
+                )
                 session = self.get_session(camera_id)
                 if packet is None or session is None or not self.is_enabled(camera_id):
                     continue
                 if packet.frame_id <= session.last_processed_frame_id:
                     continue
+
+                previous_epoch = session.state.get("vision_source_epoch")
+                if packet.discontinuity or (
+                    previous_epoch is not None and previous_epoch != packet.source_epoch
+                ):
+                    session.state.clear()
+                session.state["vision_source_epoch"] = packet.source_epoch
 
                 session.note_frame(packet.frame_id)
                 try:
@@ -103,7 +122,9 @@ class VisionWorker:
                     continue
 
                 session.mark_processed(packet.frame_id)
+                if self.sample_buffer is not None:
+                    self.sample_buffer.note_result(packet, result.metadata)
                 if self.on_result and self.is_enabled(camera_id):
                     self.on_result(result)
 
-            self.frame_hub.wait_for_update(after_version=current_version, timeout=0.5)
+            source.wait_for_update(after_version=current_version, timeout=0.5)

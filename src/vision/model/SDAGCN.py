@@ -213,7 +213,7 @@ class EdgeConv(nn.Module):
         N, C, V = x.size()
         if idx is None:
             idx = self.knn(x, k=k)
-        device = x.get_device()
+        device = x.device
         
         idx_base = torch.arange(0, N, device=device).view(-1, 1, 1) * V
         
