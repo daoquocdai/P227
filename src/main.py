@@ -19,6 +19,7 @@ from src.config import get_settings
 from src.database import initialize_database
 from src.runtime import LocalRuntime
 from src.services.event_service import vision_event_sink
+from src.services.vision_event_dispatcher import ThreadsafeVisionEventDispatcher
 
 
 @asynccontextmanager
@@ -26,18 +27,28 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     print(f"Starting {settings.app_name} in {settings.app_env} mode")
     initialize_database()
-    runtime = LocalRuntime()
-    app.state.local_runtime = runtime
-    runtime.start()
     vision_event_sink.start()
     consumer = asyncio.create_task(vision_event_sink.consume(), name="vision-event-consumer")
+    dispatcher = ThreadsafeVisionEventDispatcher(vision_event_sink)
+    dispatcher.start(asyncio.get_running_loop())
+    mock_event_frame_ids = {
+        int(value.strip())
+        for value in settings.mock_vision_event_frame_ids.split(",")
+        if value.strip()
+    }
+    runtime = LocalRuntime(event_dispatcher=dispatcher, mock_event_frame_ids=mock_event_frame_ids)
+    app.state.local_runtime = runtime
+    app.state.vision_event_dispatcher = dispatcher
+    runtime.start()
     try:
         yield
     finally:
         runtime.stop()
+        dispatcher.stop()
         consumer.cancel()
         with suppress(asyncio.CancelledError):
             await consumer
+        vision_event_sink.stop()
 
 
 app = FastAPI(

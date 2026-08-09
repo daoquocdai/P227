@@ -1,9 +1,16 @@
 import asyncio
 from dataclasses import dataclass
 
-from src.models.schemas import AlertReviewRequest, VisionEventAccepted, VisionEventRequest
+from src.models.schemas import (
+    AlertReviewRequest,
+    VisionEventAccepted,
+    VisionEventRequest,
+)
 from src.services.alert_broadcaster import alert_broadcaster
-from src.services.sqlite_event_repository import EventNotFoundError, SQLiteEventRepository
+from src.services.sqlite_event_repository import (
+    EventNotFoundError,
+    SQLiteEventRepository,
+)
 
 
 class EventService:
@@ -78,6 +85,19 @@ class VisionEventSink:
     def start(self) -> None:
         self._queue = asyncio.Queue(maxsize=self._maxsize)
 
+    @property
+    def maxsize(self) -> int:
+        return self._maxsize
+
+    def publish_nowait(self, event: VisionEventRequest) -> asyncio.Future[VisionEventAccepted]:
+        """Enqueue from the owning event-loop thread without waiting for space."""
+        if self._queue is None:
+            raise RuntimeError("VisionEventSink has not been started")
+        loop = asyncio.get_running_loop()
+        result: asyncio.Future[VisionEventAccepted] = loop.create_future()
+        self._queue.put_nowait(QueuedEvent(event, result))
+        return result
+
     async def publish(self, event: VisionEventRequest) -> VisionEventAccepted:
         if self._queue is None:
             raise RuntimeError("VisionEventSink has not been started")
@@ -95,11 +115,26 @@ class VisionEventSink:
                 accepted = await self._service.create(queued.event)
                 if not queued.result.done():
                     queued.result.set_result(accepted)
-            except Exception as exc:
+            except asyncio.CancelledError:
+                if not queued.result.done():
+                    queued.result.set_exception(RuntimeError("VisionEventSink consumer stopped"))
+                raise
+            except Exception as exc:  # noqa: BLE001 - delivery must isolate repository failures
                 if not queued.result.done():
                     queued.result.set_exception(exc)
             finally:
                 self._queue.task_done()
+
+    def stop(self) -> None:
+        queue = self._queue
+        self._queue = None
+        if queue is None:
+            return
+        while not queue.empty():
+            queued = queue.get_nowait()
+            if not queued.result.done():
+                queued.result.set_exception(RuntimeError("VisionEventSink stopped before delivery"))
+            queue.task_done()
 
 
 event_service = EventService()

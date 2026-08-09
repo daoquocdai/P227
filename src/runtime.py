@@ -10,6 +10,8 @@ class LocalRuntime:
     def __init__(
         self,
         vision_engine=None,
+        event_dispatcher=None,
+        mock_event_frame_ids: set[int] | None = None,
     ):
 
         self.frame_hub = FrameHub()
@@ -26,8 +28,9 @@ class LocalRuntime:
             frame_hub=self.frame_hub,
             engine=(
                 vision_engine
-                or MockVisionEngine()
+                or MockVisionEngine(emit_event_on_frame_ids=mock_event_frame_ids)
             ),
+            event_dispatcher=event_dispatcher,
         )
 
     def start(self):
