@@ -22,6 +22,9 @@ class Settings(BaseSettings):
 
     api_base_url: str = "http://localhost:8000"
 
+    # Explicit test/demo control. Empty means the production mock emits no events.
+    mock_vision_event_frame_ids: str = ""
+
     # LLM
     openai_api_key: str = ""
     model_name: str = "gpt-4o-mini"

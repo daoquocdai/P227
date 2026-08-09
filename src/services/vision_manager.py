@@ -14,12 +14,15 @@ logger = logging.getLogger(__name__)
 class VisionManager:
     """In-memory lifecycle and status facade for the local Vision worker."""
 
-    def __init__(self, frame_hub: FrameHub, engine: VisionEngine) -> None:
+    def __init__(self, frame_hub: FrameHub, engine: VisionEngine, event_dispatcher=None) -> None:
         self._lock = threading.RLock()
         self._frame_hub = frame_hub
         self._last_results: dict[str, VisionResult] = {}
         self._current_errors: dict[str, str] = {}
         self._last_errors: dict[str, dict] = {}
+        self._event_dispatcher = event_dispatcher
+        self._event_handler_errors: dict[str, int] = {}
+        self._last_event_handler_errors: dict[str, str] = {}
         self.worker = VisionWorker(
             frame_hub=frame_hub,
             engine=engine,
@@ -66,6 +69,23 @@ class VisionManager:
         else:
             status = "running"
 
+        dispatch_status = (
+            {
+                "emitted_events": 0,
+                "dropped_events": 0,
+                "dispatch_errors": 0,
+                "last_event_error": None,
+            }
+            if self._event_dispatcher is None
+            else self._event_dispatcher.get_status(camera_id)
+        )
+        with self._lock:
+            handler_errors = self._event_handler_errors.get(camera_id, 0)
+            handler_last_error = self._last_event_handler_errors.get(camera_id)
+        dispatch_status["dispatch_errors"] += handler_errors
+        if handler_last_error is not None:
+            dispatch_status["last_event_error"] = handler_last_error
+
         return {
             "camera_id": camera_id,
             "enabled": enabled,
@@ -76,6 +96,7 @@ class VisionManager:
             "last_result": None if result is None else asdict(result),
             "current_error": current_error,
             "last_error": last_error,
+            "event_dispatch": dispatch_status,
         }
 
     def _handle_result(self, result: VisionResult) -> None:
@@ -92,6 +113,16 @@ class VisionManager:
             result.processing_ms,
             0 if session is None else session.dropped_frames,
         )
+        if self._event_dispatcher is not None:
+            try:
+                self._event_dispatcher.dispatch(result)
+            except Exception as exc:
+                with self._lock:
+                    self._event_handler_errors[result.camera_id] = (
+                        self._event_handler_errors.get(result.camera_id, 0) + 1
+                    )
+                    self._last_event_handler_errors[result.camera_id] = str(exc)
+                logger.exception("Unexpected Vision event handler failure camera=%s", result.camera_id)
 
     def _handle_error(self, camera_id: str, frame_id: int, exc: Exception) -> None:
         if not self.worker.is_enabled(camera_id):
