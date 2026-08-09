@@ -11,7 +11,8 @@ function toCameraDetail(camera: CameraDto): CameraDetail {
     id: camera.id, name: camera.name, room: camera.location,
     status: camera.status === "online" ? "online" : "offline",
     quality: "HD", lastUpdatedAt: camera.last_seen_at ?? new Date().toISOString(),
-    videoUrl: camera.playback_url ?? "", monitoringStatus: camera.active ? "active" : "paused",
+    videoUrl: camera.playback_url ?? "", streamUrl: camera.stream_url, streamReady: camera.stream_ready,
+    monitoringStatus: camera.active ? "active" : "paused",
     safetyStatus: (camera.events ?? []).some((event) => event.status === "open") ? "attention" : "safe",
   };
 }

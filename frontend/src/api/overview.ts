@@ -27,10 +27,12 @@ interface OverviewPayload {
     id: string;
     name: string;
     location: string;
-    status: "online" | "offline" | "error";
+    status: "connecting" | "online" | "offline" | "ended" | "error";
     last_seen_at?: string | null;
     source_type: "webcam" | "video_file" | "rtsp";
     playback_url?: string | null;
+    stream_url: string;
+    stream_ready: boolean;
   }>;
   insights: string[];
 }
@@ -59,9 +61,11 @@ export interface OverviewData {
     id: string;
     name: string;
     location: string;
-    status: "online" | "offline" | "error";
+    status: "connecting" | "online" | "offline" | "ended" | "error";
     lastSeenAt?: string | null;
     playbackUrl?: string | null;
+    streamUrl: string;
+    streamReady: boolean;
   }>;
   insights: string[];
 }
@@ -101,6 +105,8 @@ export async function getOverview(): Promise<OverviewData> {
       status: camera.status,
       lastSeenAt: camera.last_seen_at,
       playbackUrl: camera.playback_url,
+      streamUrl: camera.stream_url,
+      streamReady: camera.stream_ready,
     })),
     insights: data.insights,
   };

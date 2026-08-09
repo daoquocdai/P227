@@ -16,11 +16,12 @@ export interface CameraDto {
   id: string;
   name: string;
   location: string;
-  status: "online" | "offline" | "error";
+  status: "connecting" | "online" | "offline" | "ended" | "error";
   last_seen_at?: string | null;
   active: boolean;
   source_kind: "video_file" | "webcam" | "rtsp";
   playback_url?: string | null;
+  stream_url: string;
   stream_ready: boolean;
   events?: CameraEventDto[];
 }
