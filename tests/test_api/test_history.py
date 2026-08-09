@@ -32,5 +32,5 @@ async def test_history_returns_persisted_event_details(client):
     assert event["camera_id"] == "camera-living"
     assert event["fall"]["immobility_ms"] == 8000
     assert event["person"]["name"] == "Bà Lan"
-    assert event["media"][0]["url"] == "/snapshots/history-fall.svg"
+    assert event["media"] == []
     assert event["alert"]["status"] == "open"

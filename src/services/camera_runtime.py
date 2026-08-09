@@ -113,11 +113,6 @@ class CameraRuntime:
         if event:
             event.set()
 
-        with self._lock:
-            capture = self._captures.get(camera_id)
-        if capture is not None:
-            capture.release()
-
         if thread and thread.is_alive():
             thread.join(timeout=3)
 
@@ -163,6 +158,16 @@ class CameraRuntime:
         with self._lock:
             thread = self._threads.get(camera_id)
             return bool(thread and thread.is_alive())
+
+    def set_unavailable(self, camera_id: str, error: str) -> dict:
+        """Expose a persisted source-resolution failure without starting capture."""
+        with self._lock:
+            self._states[camera_id] = CameraRuntimeState(
+                camera_id=camera_id,
+                status="error",
+                error=error,
+            )
+            return self._states[camera_id].to_dict()
 
     @staticmethod
     def _normalize_source(source):

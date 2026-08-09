@@ -32,3 +32,7 @@ async def test_overview_uses_sqlite_camera_and_alert_data(client):
     assert data["current_alert"]["id"] == accepted.id
     living_camera = next(camera for camera in data["cameras"] if camera["id"] == "camera-living")
     assert living_camera["playback_url"].startswith("/videos/")
+    assert living_camera["preview_url"] is None
+    assert "preview_version" in living_camera
+    assert "vision_enabled" in living_camera
+    assert "vision_status" in living_camera

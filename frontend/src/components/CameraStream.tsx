@@ -2,18 +2,14 @@ interface CameraStreamProps {
   cameraId: string;
   streamReady?: boolean;
   streamUrl?: string | null;
-  playbackUrl?: string | null;
+  playbackUrl?: string | null; // Compatibility only; production viewing uses MJPEG.
   className?: string;
   onError?: () => void;
 }
 
-export function CameraStream({ cameraId, streamReady, streamUrl, playbackUrl, className, onError }: CameraStreamProps) {
+export function CameraStream({ cameraId, streamReady, streamUrl, className, onError }: CameraStreamProps) {
   if (streamReady && streamUrl) {
     return <img className={className} src={streamUrl} alt={`Luồng trực tiếp ${cameraId}`} onError={onError} />;
   }
-  if (!playbackUrl) return null;
-  const rememberFrame = (video: HTMLVideoElement) => {
-    if (Number.isFinite(video.currentTime)) localStorage.setItem(`camera-preview-time:${cameraId}`, String(video.currentTime));
-  };
-  return <video className={className} src={playbackUrl} autoPlay loop muted playsInline preload="auto" onTimeUpdate={(event) => rememberFrame(event.currentTarget)} onError={onError} />;
+  return null;
 }

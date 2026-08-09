@@ -412,6 +412,33 @@ def test_identity_disabled_does_not_emit_or_add_identity_metadata(tmp_path):
     assert engine._face_app is None
 
 
+def test_unknown_identity_emits_one_event_per_cooldown(tmp_path, monkeypatch):
+    engine, _ = make_engine(tmp_path)
+    engine.identity_enabled = True
+    monkeypatch.setattr(
+        engine,
+        "_identity_metadata",
+        lambda _crop: {
+            "identity_status": "UNKNOWN",
+            "identity_name": None,
+            "identity_person_id": None,
+            "identity_similarity": 0.1,
+        },
+    )
+    session = VisionSession("cam01")
+
+    first = engine.process(packet("cam01", 1, source_timestamp=0.0), session)
+    engine.process(packet("cam01", 2, source_timestamp=0.5), session)
+    suppressed = engine.process(packet("cam01", 3, source_timestamp=1.0), session)
+    engine.process(packet("cam01", 4, source_timestamp=30.5), session)
+    repeated = engine.process(packet("cam01", 5, source_timestamp=31.0), session)
+
+    assert [event.type for event in first.events] == ["unknown_person"]
+    assert first.events[0].confidence == pytest.approx(0.9)
+    assert suppressed.events == []
+    assert [event.type for event in repeated.events] == ["unknown_person"]
+
+
 @pytest.mark.parametrize("missing_name", ["yolo.pt", "config.yaml", "checkpoint.pt"])
 def test_missing_required_resource_has_clear_lazy_initialization_error(tmp_path, missing_name):
     paths = {}

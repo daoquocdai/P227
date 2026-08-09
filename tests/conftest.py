@@ -16,6 +16,8 @@ def preserve_application_database():
     snapshot = sqlite3.connect(":memory:")
     with sqlite3.connect(database_path) as source:
         source.backup(snapshot)
+        source.execute("UPDATE cameras SET is_active = 0, vision_enabled = 0")
+        source.commit()
     try:
         yield
     finally:

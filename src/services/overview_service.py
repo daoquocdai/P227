@@ -9,7 +9,7 @@ class OverviewService:
     def __init__(self, event_repository: SQLiteEventRepository | None = None) -> None:
         self._events = event_repository or SQLiteEventRepository()
 
-    def get_overview(self, runtime=None) -> dict[str, Any]:
+    def get_overview(self, runtime=None, vision=None, frame_hub=None) -> dict[str, Any]:
         now = datetime.now().astimezone()
         alerts = self._events.list_alerts()
         today_alerts = [item for item in alerts if self._is_today(item["timestamp"], now)]
@@ -18,9 +18,10 @@ class OverviewService:
         with database_connection() as connection:
             camera_rows = connection.execute(
                 """SELECT c.id, c.name, c.source_type, c.source_reference, c.location_label,
-                          c.operational_status, c.last_seen_at, cs.source_kind, cs.playback_path
+                          c.operational_status, c.last_seen_at, c.vision_enabled,
+                          cs.source_kind, cs.playback_path
                    FROM cameras c LEFT JOIN camera_sources cs ON cs.camera_id = c.id
-                   WHERE c.is_active = 1 ORDER BY c.name"""
+                   ORDER BY c.name"""
             ).fetchall()
             recognized_today = connection.execute(
                 """SELECT count(DISTINCT ep.person_id)
@@ -29,7 +30,7 @@ class OverviewService:
                    WHERE ep.person_id IS NOT NULL AND date(e.occurred_at) = date('now', 'localtime')"""
             ).fetchone()[0]
 
-        cameras = [self._camera(row, runtime) for row in camera_rows]
+        cameras = [self._camera(row, runtime, vision, frame_hub) for row in camera_rows]
         online_count = sum(camera["status"] == "online" for camera in cameras)
         current_alert = pending[0] if pending else None
         safe = current_alert is None
@@ -56,14 +57,16 @@ class OverviewService:
         }
 
     @staticmethod
-    def _camera(row, runtime=None) -> dict[str, Any]:
+    def _camera(row, runtime=None, vision=None, frame_hub=None) -> dict[str, Any]:
         public_id = row["name"] if row["name"].startswith("camera-") else row["id"]
         runtime_state = runtime.get_status(public_id) if runtime is not None else None
+        vision_state = vision.get_status(public_id) if vision is not None else None
+        packet = frame_hub.get_latest(public_id) if frame_hub is not None else None
         runtime_last_frame = runtime_state["last_frame_at"] if runtime_state is not None else None
         return {
             "id": public_id,
-            "name": row["location_label"] or row["name"],
-            "location": row["location_label"],
+            "name": row["name"],
+            "location": row["location_label"] or row["name"],
             "status": runtime_state["status"] if runtime_state is not None else "offline",
             "last_seen_at": (
                 datetime.fromtimestamp(runtime_last_frame, UTC).isoformat()
@@ -74,6 +77,10 @@ class OverviewService:
             "playback_url": f"/{row['playback_path'].lstrip('/')}" if row["playback_path"] else None,
             "stream_url": f"/api/v1/cameras/{public_id}/stream",
             "stream_ready": runtime_state is not None and runtime_state["status"] == "online",
+            "preview_url": f"/api/v1/cameras/{public_id}/preview" if packet is not None else None,
+            "preview_version": None if packet is None else packet.frame_id,
+            "vision_enabled": bool(row["vision_enabled"]),
+            "vision_status": None if vision_state is None else vision_state["status"],
         }
 
     @staticmethod

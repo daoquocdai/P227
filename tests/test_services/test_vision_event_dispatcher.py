@@ -140,7 +140,7 @@ async def test_repository_failure_isolated_from_camera_vision_and_mjpeg(monkeypa
             raise RuntimeError("database unavailable")
 
     class Capture:
-        def isOpened(self):
+        def isOpened(self):  # noqa: N802 - mirrors OpenCV's API
             return True
 
         def read(self):
@@ -239,7 +239,7 @@ def test_unexpected_dispatch_callback_error_does_not_kill_vision_worker():
         runtime.vision.enable("cam01")
         runtime.frame_hub.publish(FramePacket("cam01", 1, time.time(), np.zeros((8, 8, 3), dtype=np.uint8)))
         deadline = time.monotonic() + 1
-        while time.monotonic() < deadline and runtime.vision.get_status("cam01")["processed_frames"] == 0:
+        while time.monotonic() < deadline and runtime.vision.get_status("cam01")["status"] != "running":
             time.sleep(0.01)
 
         status = runtime.vision.get_status("cam01")

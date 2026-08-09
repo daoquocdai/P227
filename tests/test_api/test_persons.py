@@ -1,10 +1,14 @@
+import base64
 from uuid import uuid4
 
+import numpy as np
 import pytest
+
+from src.services.person_service import person_service
 
 
 @pytest.mark.asyncio
-async def test_person_and_face_profile_crud(client):
+async def test_person_and_face_profile_crud(client, monkeypatch):
     name = f"Người thân {uuid4()}"
     created = await client.post(
         "/api/v1/persons",
@@ -19,7 +23,13 @@ async def test_person_and_face_profile_crud(client):
     assert updated.json()["active"] is False
     assert updated.json()["notes"] == "Đã cập nhật"
 
-    with_face = await client.post(f"/api/v1/persons/{person_id}/faces", json={"quality": 0.91, "angle": "Chính diện"})
+    embedding = np.linspace(-1.0, 1.0, 512, dtype=np.float32)
+    monkeypatch.setattr(person_service._identity, "extract", lambda _: (embedding, 0.91))
+    image_data_url = "data:image/jpeg;base64," + base64.b64encode(b"test-image").decode("ascii")
+    with_face = await client.post(
+        f"/api/v1/persons/{person_id}/faces",
+        json={"image_data_url": image_data_url, "angle": "Chính diện"},
+    )
     assert with_face.status_code == 201
     face_id = with_face.json()["faces"][0]["id"]
     assert with_face.json()["faces"][0]["quality"] == 0.91

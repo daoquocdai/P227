@@ -4,7 +4,7 @@ import time
 import numpy as np
 
 from src.models.frame import FramePacket
-from src.models.vision import VisionResult
+from src.models.vision import VisionEvent, VisionResult
 from src.runtime import LocalRuntime
 from src.services.frame_hub import FrameHub
 from src.services.vision_manager import VisionManager
@@ -24,6 +24,28 @@ def wait_until(predicate, timeout=2.0):
             return
         time.sleep(0.01)
     raise AssertionError("condition was not reached")
+
+
+def test_legacy_event_snapshot_uses_exact_processed_frame(tmp_path, monkeypatch):
+    monkeypatch.setattr("src.vision.worker.SNAPSHOT_ROOT", tmp_path)
+    source = packet("cam01", 42)
+    source.frame[:, :] = (12, 34, 56)
+    event = VisionEvent(type="fall_confirmed", confidence=0.9)
+    result = VisionResult(
+        "cam01",
+        42,
+        source.captured_at,
+        time.time(),
+        1.0,
+        events=[event],
+        metadata={"engine": "legacy"},
+    )
+
+    VisionWorker._attach_event_snapshot(source, result)
+
+    snapshot = tmp_path / event.metadata["snapshot_path"]
+    assert snapshot.is_file()
+    assert snapshot.read_bytes().startswith(b"\xff\xd8")
 
 
 class RecordingEngine(VisionEngine):

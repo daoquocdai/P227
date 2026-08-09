@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any
 
 from src.database import database_connection
+from src.services.media_paths import snapshot_url
 
 
 class HistoryService:
@@ -62,19 +63,21 @@ class HistoryService:
                 "subject_type": item["subject_type"],
                 "is_blurred": bool(item["is_blurred"]),
                 "label": Path(item["relative_path"]).stem,
-                "url": f"/snapshots/{Path(item['relative_path']).name}",
+                "url": snapshot_url(item["relative_path"]),
             }
             for item in media
+            if snapshot_url(item["relative_path"]) is not None
         ]
         fallback_snapshot = metadata.get("snapshot_path")
-        if not media_payload and fallback_snapshot:
+        fallback_url = snapshot_url(fallback_snapshot)
+        if not media_payload and fallback_url:
             media_payload.append(
                 {
                     "id": f"snapshot-{row['id']}",
                     "subject_type": "fall" if row["event_type"] == "fall_suspected" else "scene",
                     "is_blurred": False,
                     "label": Path(fallback_snapshot).stem,
-                    "url": f"/snapshots/{Path(fallback_snapshot).name}",
+                    "url": fallback_url,
                 }
             )
 

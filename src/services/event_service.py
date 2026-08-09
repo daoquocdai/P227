@@ -7,6 +7,7 @@ from src.models.schemas import (
     VisionEventRequest,
 )
 from src.services.alert_broadcaster import alert_broadcaster
+from src.services.event_presentation import event_description
 from src.services.sqlite_event_repository import (
     EventNotFoundError,
     SQLiteEventRepository,
@@ -56,16 +57,7 @@ class EventService:
 
     @staticmethod
     def _description(event: VisionEventRequest) -> str:
-        labels = {
-            "FALL_SUSPECTED": "Phát hiện tư thế có khả năng té ngã",
-            "FALL_CONFIRMED": "Phát hiện té ngã và bất động",
-            "UNKNOWN_PERSON": "Phát hiện người chưa được nhận diện",
-            "PERSON_RECOGNIZED": f"Đã nhận diện {event.identity_name or 'người thân'}",
-            "INACTIVITY_DETECTED": "Không phát hiện hoạt động trong thời gian dài",
-            "CAMERA_OFFLINE": "Camera mất kết nối",
-            "CAMERA_ONLINE": "Camera đã kết nối lại",
-        }
-        return f"{labels[event.event_type]} tại {event.camera_location}."
+        return event_description(event.event_type, event.camera_location, event.identity_name)
 
 
 @dataclass

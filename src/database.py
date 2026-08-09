@@ -59,6 +59,11 @@ def _apply_runtime_migrations(connection: sqlite3.Connection) -> None:
     face_columns = {row[1] for row in connection.execute("PRAGMA table_info(face_profiles)").fetchall()}
     if "angle_label" not in face_columns:
         connection.execute("ALTER TABLE face_profiles ADD COLUMN angle_label TEXT")
+    camera_columns = {row[1] for row in connection.execute("PRAGMA table_info(cameras)").fetchall()}
+    if "vision_enabled" not in camera_columns:
+        connection.execute(
+            "ALTER TABLE cameras ADD COLUMN vision_enabled INTEGER NOT NULL DEFAULT 1 CHECK (vision_enabled IN (0, 1))"
+        )
     connection.execute(
         """INSERT OR IGNORE INTO system_settings (setting_key, value_json) VALUES
            ('general', '{"retention_days":30,"stranger_threshold":78,"fall_threshold":72,"sensitive_enabled":true,"sensitive_from":"22:00","sensitive_to":"06:00"}'),

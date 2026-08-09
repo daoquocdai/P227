@@ -3,6 +3,7 @@ from uuid import uuid4
 
 import pytest
 
+from src.database import database_connection
 from src.models.schemas import VisionEventRequest
 from src.services.event_service import event_service
 
@@ -77,3 +78,44 @@ async def test_rtsp_credentials_are_not_exposed_to_frontend(client):
                 "playback_path": "videos/45353-448489443_medium.mp4",
             },
         )
+
+
+@pytest.mark.asyncio
+async def test_inactive_camera_can_be_edited_and_deleted(client):
+    camera_id = str(uuid4())
+    with database_connection() as connection:
+        connection.execute(
+            """INSERT INTO cameras
+               (id, name, source_type, source_reference, location_label, is_active, vision_enabled)
+               VALUES (?, ?, 'video_file', 'videos/old.mp4', 'Vị trí cũ', 0, 0)""",
+            (camera_id, f"Camera test {camera_id}"),
+        )
+        connection.execute(
+            """INSERT INTO camera_sources (camera_id, source_kind, source_uri, playback_path)
+               VALUES (?, 'video_file', 'videos/old.mp4', 'videos/old.mp4')""",
+            (camera_id,),
+        )
+        connection.execute(
+            "INSERT INTO frame_metrics (camera_id, frame_id, timestamp) VALUES (?, 1, ?)",
+            (camera_id, datetime.now().astimezone().isoformat()),
+        )
+        connection.commit()
+
+    updated = await client.patch(
+        f"/api/v1/cameras/{camera_id}",
+        json={
+            "name": f"Camera đã sửa {camera_id}",
+            "location": "Phòng mới",
+            "source_kind": "video_file",
+            "source_uri": "videos/76621-559757958.mp4",
+            "playback_path": "videos/76621-559757958.mp4",
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["name"] == f"Camera đã sửa {camera_id}"
+    assert updated.json()["location"] == "Phòng mới"
+    assert updated.json()["source"] == "videos/76621-559757958.mp4"
+
+    deleted = await client.delete(f"/api/v1/cameras/{camera_id}")
+    assert deleted.status_code == 204
+    assert (await client.get(f"/api/v1/cameras/{camera_id}")).status_code == 404

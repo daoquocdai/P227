@@ -18,6 +18,19 @@ class StreamService:
             min(100, jpeg_quality)
         )
 
+    def latest_jpeg(self, camera_id: str) -> tuple[bytes, int] | None:
+        packet = self.frame_hub.get_latest(camera_id)
+        if packet is None:
+            return None
+        ok, encoded = cv2.imencode(
+            ".jpg",
+            packet.frame,
+            [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality],
+        )
+        if not ok:
+            return None
+        return encoded.tobytes(), packet.frame_id
+
     def mjpeg(
         self,
         camera_id: str

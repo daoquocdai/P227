@@ -7,4 +7,5 @@ router = APIRouter(prefix="/overview", tags=["Overview"])
 
 @router.get("")
 async def get_overview(request: Request):
-    return overview_service.get_overview(request.app.state.local_runtime.camera)
+    runtime = request.app.state.local_runtime
+    return overview_service.get_overview(runtime.camera, runtime.vision, runtime.frame_hub)

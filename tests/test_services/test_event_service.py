@@ -29,7 +29,7 @@ async def test_create_and_list_event():
     alerts = await EventService().list_alerts()
     persisted = next(item for item in alerts if item["event_id"] == accepted.event_id)
     assert persisted["camera_id"] == "camera-living"
-    assert persisted["snapshot_url"] == "/snapshots/fall.svg"
+    assert persisted["snapshot_url"] is None
 
 
 @pytest.mark.asyncio

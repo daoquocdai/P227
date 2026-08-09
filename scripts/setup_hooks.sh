@@ -22,4 +22,7 @@ echo "[ai-log] Git pre-push hook installed."
 mkdir -p .ai-log
 touch .ai-log/.gitkeep
 
+echo "[ai-log] Codex hook config is available at .codex/hooks.json."
+echo "[ai-log] In Codex, run /hooks once and trust the project hooks."
+echo "[ai-log] Restart Codex after installing or changing hooks."
 echo "[ai-log] Setup complete. Configure AI_LOG_SERVER in your .env file."
