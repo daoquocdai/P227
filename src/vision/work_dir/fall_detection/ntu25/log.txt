@@ -1,0 +1,326 @@
+[ Wed Jul 29 23:00:01 2026 ] using warm up, epoch: 5
+[ Wed Jul 29 23:00:04 2026 ] Parameters:
+{'work_dir': './work_dir/fall_detection/ntu25/', 'model_saved_name': './work_dir/fall_detection/ntu25/runs', 'config': './config/vsl.yaml', 'phase': 'train', 'save_score': False, 'seed': 1, 'log_interval': 100, 'save_interval': 1, 'save_epoch': 30, 'eval_interval': 5, 'print_log': True, 'show_topk': [1, 5], 'feeder': 'feeders.feeder_ntu.Feeder', 'num_worker': 8, 'train_feeder_args': {'data_path': './data/fused_features/train_joint_only', 'label_path': './data/fused_features/train_joint_only/train_label.csv', 'debug': False, 'random_choose': True, 'random_shift': True, 'random_move': False, 'window_size': 64, 'normalization': True, 'random_rot': True, 'p_interval': [1], 'bone': False}, 'val_feeder_args': {'data_path': './data/fused_features/val_joint_only', 'label_path': './data/fused_features/val_joint_only/val_label.csv', 'split': 'val', 'debug': False, 'random_choose': False, 'random_shift': False, 'random_move': False, 'window_size': 64, 'normalization': True, 'random_rot': False, 'p_interval': [1], 'bone': False}, 'test_feeder_args': {'data_path': './data/fused_features/val_joint_only', 'label_path': './data/fused_features/val_joint_only/val_label.csv', 'split': 'test', 'window_size': 64, 'p_interval': [1], 'bone': False, 'debug': False}, 'model': 'model.SDAGCN.Model', 'model_args': {'num_class': 2, 'num_point': 25, 'num_person': 1, 'graph': 'graph.ntu_rgb_d_hierarchy.Graph', 'graph_args': {'labeling_mode': 'spatial', 'CoM': 0}, 'in_channels': 3, 'adaptive': True, 'drop_out': 0.5}, 'weights': None, 'ignore_weights': [], 'base_lr': 0.1, 'step': [55, 70], 'device': [0], 'optimizer': 'SGD', 'nesterov': True, 'batch_size': 64, 'test_batch_size': 64, 'start_epoch': 0, 'num_epoch': 90, 'weight_decay': 0.0004, 'lr_ratio': 0.001, 'lr_decay_rate': 0.1, 'warm_up_epoch': 5, 'loss_type': 'CE'}
+
+[ Wed Jul 29 23:00:04 2026 ] # Parameters: 1644924
+[ Wed Jul 29 23:00:04 2026 ] ----------------------------------------------------
+[ Wed Jul 29 23:00:04 2026 ] Training epoch: 1
+[ Wed Jul 29 23:04:22 2026 ] using warm up, epoch: 5
+[ Wed Jul 29 23:04:24 2026 ] Parameters:
+{'work_dir': './work_dir/fall_detection/ntu25/', 'model_saved_name': './work_dir/fall_detection/ntu25/runs', 'config': './config/vsl.yaml', 'phase': 'train', 'save_score': False, 'seed': 1, 'log_interval': 100, 'save_interval': 1, 'save_epoch': 30, 'eval_interval': 5, 'print_log': True, 'show_topk': [1, 5], 'feeder': 'feeders.feeder_ntu.Feeder', 'num_worker': 8, 'train_feeder_args': {'data_path': './data/fused_features/train_joint_only', 'label_path': './data/fused_features/train_joint_only/train_label.csv', 'debug': False, 'random_choose': True, 'random_shift': True, 'random_move': False, 'window_size': 64, 'normalization': True, 'random_rot': True, 'p_interval': [1], 'bone': False}, 'val_feeder_args': {'data_path': './data/fused_features/val_joint_only', 'label_path': './data/fused_features/val_joint_only/val_label.csv', 'split': 'val', 'debug': False, 'random_choose': False, 'random_shift': False, 'random_move': False, 'window_size': 64, 'normalization': True, 'random_rot': False, 'p_interval': [1], 'bone': False}, 'test_feeder_args': {'data_path': './data/fused_features/val_joint_only', 'label_path': './data/fused_features/val_joint_only/val_label.csv', 'split': 'test', 'window_size': 64, 'p_interval': [1], 'bone': False, 'debug': False}, 'model': 'model.SDAGCN.Model', 'model_args': {'num_class': 2, 'num_point': 25, 'num_person': 1, 'graph': 'graph.ntu_rgb_d_hierarchy.Graph', 'graph_args': {'labeling_mode': 'spatial', 'CoM': 0}, 'in_channels': 3, 'adaptive': True, 'drop_out': 0.5}, 'weights': None, 'ignore_weights': [], 'base_lr': 0.1, 'step': [55, 70], 'device': [0], 'optimizer': 'SGD', 'nesterov': True, 'batch_size': 64, 'test_batch_size': 64, 'start_epoch': 0, 'num_epoch': 90, 'weight_decay': 0.0004, 'lr_ratio': 0.001, 'lr_decay_rate': 0.1, 'warm_up_epoch': 5, 'loss_type': 'CE'}
+
+[ Wed Jul 29 23:04:24 2026 ] # Parameters: 1644924
+[ Wed Jul 29 23:04:24 2026 ] ----------------------------------------------------
+[ Wed Jul 29 23:04:24 2026 ] Training epoch: 1
+[ Wed Jul 29 23:05:48 2026 ] 	Mean training loss: 1.1689.
+[ Wed Jul 29 23:05:48 2026 ] 	Mean training acc (Top-1): 72.75%.
+[ Wed Jul 29 23:05:48 2026 ] 	Mean training acc (Top-5): 100.00%.
+[ Wed Jul 29 23:05:48 2026 ] 	Time consumption: [Data]30%, [Network]70%
+[ Wed Jul 29 23:05:48 2026 ] 	Epoch Total Time: 83.96 seconds.
+[ Wed Jul 29 23:05:48 2026 ] Eval epoch: 1
+[ Wed Jul 29 23:05:55 2026 ] 	Accuracy: 77.98%
+[ Wed Jul 29 23:05:55 2026 ] 	Mean val loss of 4 batches: 0.8425.
+[ Wed Jul 29 23:05:55 2026 ] 	Top1: 77.98%
+[ Wed Jul 29 23:05:55 2026 ] 	Top5: 100.00%
+[ Wed Jul 29 23:05:56 2026 ] 	=> New best model found at epoch 1 with Acc: 77.98%!
+[ Wed Jul 29 23:08:48 2026 ] using warm up, epoch: 5
+[ Wed Jul 29 23:08:50 2026 ] Parameters:
+{'work_dir': './work_dir/fall_detection/ntu25/', 'model_saved_name': './work_dir/fall_detection/ntu25/runs', 'config': './config/vsl.yaml', 'phase': 'train', 'save_score': False, 'seed': 1, 'log_interval': 100, 'save_interval': 1, 'save_epoch': 30, 'eval_interval': 5, 'print_log': True, 'show_topk': [1, 5], 'feeder': 'feeders.feeder_ntu.Feeder', 'num_worker': 8, 'train_feeder_args': {'data_path': './data/fused_features/train_joint_only', 'label_path': './data/fused_features/train_joint_only/train_label.csv', 'debug': False, 'random_choose': True, 'random_shift': True, 'random_move': False, 'window_size': 64, 'normalization': True, 'random_rot': True, 'p_interval': [1], 'bone': False}, 'val_feeder_args': {'data_path': './data/fused_features/val_joint_only', 'label_path': './data/fused_features/val_joint_only/val_label.csv', 'split': 'val', 'debug': False, 'random_choose': False, 'random_shift': False, 'random_move': False, 'window_size': 64, 'normalization': True, 'random_rot': False, 'p_interval': [1], 'bone': False}, 'test_feeder_args': {'data_path': './data/fused_features/val_joint_only', 'label_path': './data/fused_features/val_joint_only/val_label.csv', 'split': 'test', 'window_size': 64, 'p_interval': [1], 'bone': False, 'debug': False}, 'model': 'model.SDAGCN.Model', 'model_args': {'num_class': 2, 'num_point': 25, 'num_person': 1, 'graph': 'graph.ntu_rgb_d_hierarchy.Graph', 'graph_args': {'labeling_mode': 'spatial', 'CoM': 0}, 'in_channels': 3, 'adaptive': True, 'drop_out': 0.5}, 'weights': None, 'ignore_weights': [], 'base_lr': 0.1, 'step': [55, 70], 'device': [0], 'optimizer': 'SGD', 'nesterov': True, 'batch_size': 64, 'test_batch_size': 64, 'start_epoch': 0, 'num_epoch': 90, 'weight_decay': 0.0004, 'lr_ratio': 0.001, 'lr_decay_rate': 0.1, 'warm_up_epoch': 5, 'loss_type': 'CE'}
+
+[ Wed Jul 29 23:08:50 2026 ] # Parameters: 1644924
+[ Wed Jul 29 23:08:50 2026 ] ----------------------------------------------------
+[ Wed Jul 29 23:08:50 2026 ] Training epoch: 1
+[ Wed Jul 29 23:10:14 2026 ] 	Mean training loss: 1.1689.
+[ Wed Jul 29 23:10:14 2026 ] 	Mean training acc (Top-1): 72.75%.
+[ Wed Jul 29 23:10:14 2026 ] 	Mean training acc (Top-5): 100.00%.
+[ Wed Jul 29 23:10:14 2026 ] 	Time consumption: [Data]29%, [Network]71%
+[ Wed Jul 29 23:10:14 2026 ] 	Epoch Total Time: 83.94 seconds.
+[ Wed Jul 29 23:10:14 2026 ] Eval epoch: 1
+[ Wed Jul 29 23:10:21 2026 ] 	Accuracy: 77.98%
+[ Wed Jul 29 23:10:21 2026 ] 	Mean val loss of 4 batches: 0.8425.
+[ Wed Jul 29 23:10:21 2026 ] 	Top1: 77.98%
+[ Wed Jul 29 23:10:21 2026 ] 	Top5: 100.00%
+[ Wed Jul 29 23:10:21 2026 ] 	=> New best model found at epoch 1 with Acc: 77.98%!
+[ Wed Jul 29 23:10:22 2026 ] 	=> Epoch 1 lọt vào Top 5, đã lưu tệp .pt và .csv!
+[ Wed Jul 29 23:10:22 2026 ] ----------------------------------------------------
+[ Wed Jul 29 23:10:22 2026 ] Training epoch: 2
+[ Wed Jul 29 23:11:45 2026 ] 	Mean training loss: 0.3123.
+[ Wed Jul 29 23:11:45 2026 ] 	Mean training acc (Top-1): 89.18%.
+[ Wed Jul 29 23:11:45 2026 ] 	Mean training acc (Top-5): 100.00%.
+[ Wed Jul 29 23:11:45 2026 ] 	Time consumption: [Data]30%, [Network]69%
+[ Wed Jul 29 23:11:45 2026 ] 	Epoch Total Time: 83.48 seconds.
+[ Wed Jul 29 23:11:45 2026 ] Eval epoch: 2
+[ Wed Jul 29 23:11:52 2026 ] 	Accuracy: 91.74%
+[ Wed Jul 29 23:11:52 2026 ] 	Mean val loss of 4 batches: 0.1893.
+[ Wed Jul 29 23:11:52 2026 ] 	Top1: 91.74%
+[ Wed Jul 29 23:11:52 2026 ] 	Top5: 100.00%
+[ Wed Jul 29 23:11:52 2026 ] 	=> New best model found at epoch 2 with Acc: 91.74%!
+[ Wed Jul 29 23:11:52 2026 ] 	=> Epoch 2 lọt vào Top 5, đã lưu tệp .pt và .csv!
+[ Wed Jul 29 23:11:52 2026 ] ----------------------------------------------------
+[ Wed Jul 29 23:11:52 2026 ] Training epoch: 3
+[ Wed Jul 29 23:13:15 2026 ] 	Mean training loss: 0.1419.
+[ Wed Jul 29 23:13:15 2026 ] 	Mean training acc (Top-1): 95.25%.
+[ Wed Jul 29 23:13:15 2026 ] 	Mean training acc (Top-5): 100.00%.
+[ Wed Jul 29 23:13:15 2026 ] 	Time consumption: [Data]30%, [Network]70%
+[ Wed Jul 29 23:13:15 2026 ] 	Epoch Total Time: 83.00 seconds.
+[ Wed Jul 29 23:13:15 2026 ] Eval epoch: 3
+[ Wed Jul 29 23:13:21 2026 ] 	Accuracy: 94.95%
+[ Wed Jul 29 23:13:21 2026 ] 	Mean val loss of 4 batches: 0.1249.
+[ Wed Jul 29 23:13:21 2026 ] 	Top1: 94.95%
+[ Wed Jul 29 23:13:21 2026 ] 	Top5: 100.00%
+[ Wed Jul 29 23:13:21 2026 ] 	=> New best model found at epoch 3 with Acc: 94.95%!
+[ Wed Jul 29 23:13:22 2026 ] 	=> Epoch 3 lọt vào Top 5, đã lưu tệp .pt và .csv!
+[ Wed Jul 29 23:13:22 2026 ] ----------------------------------------------------
+[ Wed Jul 29 23:13:22 2026 ] Training epoch: 4
+[ Wed Jul 29 23:14:45 2026 ] 	Mean training loss: 0.0932.
+[ Wed Jul 29 23:14:45 2026 ] 	Mean training acc (Top-1): 96.73%.
+[ Wed Jul 29 23:14:45 2026 ] 	Mean training acc (Top-5): 100.00%.
+[ Wed Jul 29 23:14:45 2026 ] 	Time consumption: [Data]30%, [Network]70%
+[ Wed Jul 29 23:14:45 2026 ] 	Epoch Total Time: 82.97 seconds.
+[ Wed Jul 29 23:14:45 2026 ] Eval epoch: 4
+[ Wed Jul 29 23:14:51 2026 ] 	Accuracy: 97.25%
+[ Wed Jul 29 23:14:51 2026 ] 	Mean val loss of 4 batches: 0.0964.
+[ Wed Jul 29 23:14:51 2026 ] 	Top1: 97.25%
+[ Wed Jul 29 23:14:51 2026 ] 	Top5: 100.00%
+[ Wed Jul 29 23:14:51 2026 ] 	=> New best model found at epoch 4 with Acc: 97.25%!
+[ Wed Jul 29 23:14:51 2026 ] 	=> Epoch 4 lọt vào Top 5, đã lưu tệp .pt và .csv!
+[ Wed Jul 29 23:14:51 2026 ] ----------------------------------------------------
+[ Wed Jul 29 23:14:51 2026 ] Training epoch: 5
+[ Wed Jul 29 23:16:16 2026 ] 	Mean training loss: 0.0799.
+[ Wed Jul 29 23:16:16 2026 ] 	Mean training acc (Top-1): 97.43%.
+[ Wed Jul 29 23:16:16 2026 ] 	Mean training acc (Top-5): 100.00%.
+[ Wed Jul 29 23:16:16 2026 ] 	Time consumption: [Data]29%, [Network]70%
+[ Wed Jul 29 23:16:16 2026 ] 	Epoch Total Time: 84.69 seconds.
+[ Wed Jul 29 23:16:16 2026 ] Eval epoch: 5
+[ Wed Jul 29 23:16:23 2026 ] 	Accuracy: 95.87%
+[ Wed Jul 29 23:16:23 2026 ] 	Mean val loss of 4 batches: 0.0904.
+[ Wed Jul 29 23:16:23 2026 ] 	Top1: 95.87%
+[ Wed Jul 29 23:16:23 2026 ] 	Top5: 100.00%
+[ Wed Jul 29 23:16:23 2026 ] 	=> Epoch 5 lọt vào Top 5, đã lưu tệp .pt và .csv!
+[ Wed Jul 29 23:16:23 2026 ] ----------------------------------------------------
+[ Wed Jul 29 23:16:23 2026 ] Training epoch: 6
+[ Wed Jul 29 23:17:48 2026 ] 	Mean training loss: 0.0752.
+[ Wed Jul 29 23:17:48 2026 ] 	Mean training acc (Top-1): 97.49%.
+[ Wed Jul 29 23:17:48 2026 ] 	Mean training acc (Top-5): 100.00%.
+[ Wed Jul 29 23:17:48 2026 ] 	Time consumption: [Data]30%, [Network]70%
+[ Wed Jul 29 23:17:48 2026 ] 	Epoch Total Time: 84.78 seconds.
+[ Wed Jul 29 23:17:48 2026 ] Eval epoch: 6
+[ Wed Jul 29 23:17:55 2026 ] 	Accuracy: 96.33%
+[ Wed Jul 29 23:17:55 2026 ] 	Mean val loss of 4 batches: 0.5413.
+[ Wed Jul 29 23:17:55 2026 ] 	Top1: 96.33%
+[ Wed Jul 29 23:17:55 2026 ] 	Top5: 100.00%
+[ Wed Jul 29 23:17:56 2026 ] 	=> Epoch 6 lọt vào Top 5, đã lưu tệp .pt và .csv!
+[ Wed Jul 29 23:17:56 2026 ] ----------------------------------------------------
+[ Wed Jul 29 23:17:56 2026 ] Training epoch: 7
+[ Thu Jul 30 05:59:33 2026 ] using warm up, epoch: 3
+[ Thu Jul 30 05:59:35 2026 ] Parameters:
+{'work_dir': './work_dir/fall_detection/ntu25/', 'model_saved_name': './work_dir/fall_detection/ntu25/runs', 'config': './config/vsl.yaml', 'phase': 'train', 'save_score': False, 'seed': 1, 'log_interval': 100, 'save_interval': 1, 'save_epoch': 30, 'eval_interval': 5, 'print_log': True, 'show_topk': [1, 5], 'feeder': 'feeders.feeder_ntu.Feeder', 'num_worker': 8, 'train_feeder_args': {'data_path': './data/fused_features/train_joint_only', 'label_path': './data/fused_features/train_joint_only/train_label.csv', 'debug': False, 'random_choose': True, 'random_shift': True, 'random_move': False, 'window_size': 64, 'normalization': True, 'random_rot': True, 'p_interval': [1], 'bone': False}, 'val_feeder_args': {'data_path': './data/fused_features/val_joint_only', 'label_path': './data/fused_features/val_joint_only/val_label.csv', 'split': 'val', 'debug': False, 'random_choose': False, 'random_shift': False, 'random_move': False, 'window_size': 64, 'normalization': True, 'random_rot': False, 'p_interval': [1], 'bone': False}, 'test_feeder_args': {'data_path': './data/fused_features/val_joint_only', 'label_path': './data/fused_features/val_joint_only/val_label.csv', 'split': 'test', 'window_size': 64, 'p_interval': [1], 'bone': False, 'debug': False}, 'model': 'model.SDAGCN.Model', 'model_args': {'num_class': 2, 'num_point': 25, 'num_person': 1, 'graph': 'graph.ntu_rgb_d_hierarchy.Graph', 'graph_args': {'labeling_mode': 'spatial', 'CoM': 0}, 'in_channels': 3, 'adaptive': True, 'drop_out': 0.5}, 'weights': None, 'ignore_weights': [], 'base_lr': 0.1, 'step': [10, 13], 'device': [0], 'optimizer': 'SGD', 'nesterov': True, 'batch_size': 64, 'test_batch_size': 64, 'start_epoch': 0, 'num_epoch': 15, 'weight_decay': 0.0004, 'lr_ratio': 0.001, 'lr_decay_rate': 0.1, 'warm_up_epoch': 3, 'loss_type': 'CE'}
+
+[ Thu Jul 30 05:59:35 2026 ] # Parameters: 1644924
+[ Thu Jul 30 05:59:35 2026 ] ----------------------------------------------------
+[ Thu Jul 30 05:59:35 2026 ] Training epoch: 1
+[ Thu Jul 30 06:00:59 2026 ] 	Mean training loss: 1.1253.
+[ Thu Jul 30 06:00:59 2026 ] 	Mean training acc (Top-1): 75.46%.
+[ Thu Jul 30 06:00:59 2026 ] 	Mean training acc (Top-5): 100.00%.
+[ Thu Jul 30 06:00:59 2026 ] 	Time consumption: [Data]30%, [Network]70%
+[ Thu Jul 30 06:00:59 2026 ] 	Epoch Total Time: 84.35 seconds.
+[ Thu Jul 30 06:00:59 2026 ] Eval epoch: 1
+[ Thu Jul 30 06:01:05 2026 ] 	Accuracy: 78.90%
+[ Thu Jul 30 06:01:05 2026 ] 	Mean val loss of 4 batches: 0.7958.
+[ Thu Jul 30 06:01:05 2026 ] 	Top1: 78.90%
+[ Thu Jul 30 06:01:05 2026 ] 	Top5: 100.00%
+[ Thu Jul 30 06:01:05 2026 ] 	=> New best model found at epoch 1 with Acc: 78.90%!
+[ Thu Jul 30 06:01:06 2026 ] 	=> Epoch 1 lọt vào Top 5, đã lưu tệp .pt và .csv!
+[ Thu Jul 30 06:01:06 2026 ] ----------------------------------------------------
+[ Thu Jul 30 06:01:06 2026 ] Training epoch: 2
+[ Thu Jul 30 06:02:29 2026 ] 	Mean training loss: 0.2847.
+[ Thu Jul 30 06:02:29 2026 ] 	Mean training acc (Top-1): 91.64%.
+[ Thu Jul 30 06:02:29 2026 ] 	Mean training acc (Top-5): 100.00%.
+[ Thu Jul 30 06:02:29 2026 ] 	Time consumption: [Data]30%, [Network]70%
+[ Thu Jul 30 06:02:29 2026 ] 	Epoch Total Time: 83.08 seconds.
+[ Thu Jul 30 06:02:29 2026 ] Eval epoch: 2
+[ Thu Jul 30 06:02:35 2026 ] 	Accuracy: 88.07%
+[ Thu Jul 30 06:02:35 2026 ] 	Mean val loss of 4 batches: 0.2248.
+[ Thu Jul 30 06:02:35 2026 ] 	Top1: 88.07%
+[ Thu Jul 30 06:02:35 2026 ] 	Top5: 100.00%
+[ Thu Jul 30 06:02:35 2026 ] 	=> New best model found at epoch 2 with Acc: 88.07%!
+[ Thu Jul 30 06:02:36 2026 ] 	=> Epoch 2 lọt vào Top 5, đã lưu tệp .pt và .csv!
+[ Thu Jul 30 06:02:36 2026 ] ----------------------------------------------------
+[ Thu Jul 30 06:02:36 2026 ] Training epoch: 3
+[ Thu Jul 30 06:03:59 2026 ] 	Mean training loss: 0.1782.
+[ Thu Jul 30 06:03:59 2026 ] 	Mean training acc (Top-1): 94.60%.
+[ Thu Jul 30 06:03:59 2026 ] 	Mean training acc (Top-5): 100.00%.
+[ Thu Jul 30 06:03:59 2026 ] 	Time consumption: [Data]30%, [Network]69%
+[ Thu Jul 30 06:03:59 2026 ] 	Epoch Total Time: 83.15 seconds.
+[ Thu Jul 30 06:03:59 2026 ] Eval epoch: 3
+[ Thu Jul 30 06:04:05 2026 ] 	Accuracy: 88.07%
+[ Thu Jul 30 06:04:05 2026 ] 	Mean val loss of 4 batches: 1.7041.
+[ Thu Jul 30 06:04:05 2026 ] 	Top1: 88.07%
+[ Thu Jul 30 06:04:05 2026 ] 	Top5: 100.00%
+[ Thu Jul 30 06:04:05 2026 ] 	=> Epoch 3 lọt vào Top 5, đã lưu tệp .pt và .csv!
+[ Thu Jul 30 06:04:05 2026 ] ----------------------------------------------------
+[ Thu Jul 30 06:04:05 2026 ] Training epoch: 4
+[ Thu Jul 30 06:05:30 2026 ] 	Mean training loss: 0.1036.
+[ Thu Jul 30 06:05:30 2026 ] 	Mean training acc (Top-1): 96.52%.
+[ Thu Jul 30 06:05:30 2026 ] 	Mean training acc (Top-5): 100.00%.
+[ Thu Jul 30 06:05:30 2026 ] 	Time consumption: [Data]31%, [Network]69%
+[ Thu Jul 30 06:05:30 2026 ] 	Epoch Total Time: 84.21 seconds.
+[ Thu Jul 30 06:05:30 2026 ] Eval epoch: 4
+[ Thu Jul 30 06:05:36 2026 ] 	Accuracy: 97.71%
+[ Thu Jul 30 06:05:36 2026 ] 	Mean val loss of 4 batches: 0.0620.
+[ Thu Jul 30 06:05:36 2026 ] 	Top1: 97.71%
+[ Thu Jul 30 06:05:36 2026 ] 	Top5: 100.00%
+[ Thu Jul 30 06:05:36 2026 ] 	=> New best model found at epoch 4 with Acc: 97.71%!
+[ Thu Jul 30 06:05:37 2026 ] 	=> Epoch 4 lọt vào Top 5, đã lưu tệp .pt và .csv!
+[ Thu Jul 30 06:05:37 2026 ] ----------------------------------------------------
+[ Thu Jul 30 06:05:37 2026 ] Training epoch: 5
+[ Thu Jul 30 06:07:00 2026 ] 	Mean training loss: 0.0677.
+[ Thu Jul 30 06:07:00 2026 ] 	Mean training acc (Top-1): 97.68%.
+[ Thu Jul 30 06:07:00 2026 ] 	Mean training acc (Top-5): 100.00%.
+[ Thu Jul 30 06:07:00 2026 ] 	Time consumption: [Data]31%, [Network]69%
+[ Thu Jul 30 06:07:00 2026 ] 	Epoch Total Time: 83.30 seconds.
+[ Thu Jul 30 06:07:00 2026 ] Eval epoch: 5
+[ Thu Jul 30 06:07:06 2026 ] 	Accuracy: 95.87%
+[ Thu Jul 30 06:07:06 2026 ] 	Mean val loss of 4 batches: 0.1017.
+[ Thu Jul 30 06:07:06 2026 ] 	Top1: 95.87%
+[ Thu Jul 30 06:07:06 2026 ] 	Top5: 100.00%
+[ Thu Jul 30 06:07:07 2026 ] 	=> Epoch 5 lọt vào Top 5, đã lưu tệp .pt và .csv!
+[ Thu Jul 30 06:07:07 2026 ] ----------------------------------------------------
+[ Thu Jul 30 06:07:07 2026 ] Training epoch: 6
+[ Thu Jul 30 06:08:30 2026 ] 	Mean training loss: 0.0524.
+[ Thu Jul 30 06:08:30 2026 ] 	Mean training acc (Top-1): 98.19%.
+[ Thu Jul 30 06:08:30 2026 ] 	Mean training acc (Top-5): 100.00%.
+[ Thu Jul 30 06:08:30 2026 ] 	Time consumption: [Data]31%, [Network]69%
+[ Thu Jul 30 06:08:30 2026 ] 	Epoch Total Time: 83.60 seconds.
+[ Thu Jul 30 06:08:30 2026 ] Eval epoch: 6
+[ Thu Jul 30 06:08:37 2026 ] 	Accuracy: 96.33%
+[ Thu Jul 30 06:08:37 2026 ] 	Mean val loss of 4 batches: 0.0794.
+[ Thu Jul 30 06:08:37 2026 ] 	Top1: 96.33%
+[ Thu Jul 30 06:08:37 2026 ] 	Top5: 100.00%
+[ Thu Jul 30 06:08:37 2026 ] 	=> Epoch 6 lọt vào Top 5, đã lưu tệp .pt và .csv!
+[ Thu Jul 30 06:08:37 2026 ] ----------------------------------------------------
+[ Thu Jul 30 06:08:37 2026 ] Training epoch: 7
+[ Thu Jul 30 06:10:00 2026 ] 	Mean training loss: 0.0365.
+[ Thu Jul 30 06:10:00 2026 ] 	Mean training acc (Top-1): 98.67%.
+[ Thu Jul 30 06:10:00 2026 ] 	Mean training acc (Top-5): 100.00%.
+[ Thu Jul 30 06:10:00 2026 ] 	Time consumption: [Data]30%, [Network]69%
+[ Thu Jul 30 06:10:00 2026 ] 	Epoch Total Time: 82.98 seconds.
+[ Thu Jul 30 06:10:00 2026 ] Eval epoch: 7
+[ Thu Jul 30 06:10:07 2026 ] 	Accuracy: 98.17%
+[ Thu Jul 30 06:10:07 2026 ] 	Mean val loss of 4 batches: 0.0596.
+[ Thu Jul 30 06:10:07 2026 ] 	Top1: 98.17%
+[ Thu Jul 30 06:10:07 2026 ] 	Top5: 100.00%
+[ Thu Jul 30 06:10:07 2026 ] 	=> New best model found at epoch 7 with Acc: 98.17%!
+[ Thu Jul 30 06:10:07 2026 ] 	=> Epoch 7 lọt vào Top 5, đã lưu tệp .pt và .csv!
+[ Thu Jul 30 06:10:07 2026 ] ----------------------------------------------------
+[ Thu Jul 30 06:10:07 2026 ] Training epoch: 8
+[ Thu Jul 30 06:11:30 2026 ] 	Mean training loss: 0.0253.
+[ Thu Jul 30 06:11:30 2026 ] 	Mean training acc (Top-1): 99.14%.
+[ Thu Jul 30 06:11:30 2026 ] 	Mean training acc (Top-5): 100.00%.
+[ Thu Jul 30 06:11:30 2026 ] 	Time consumption: [Data]30%, [Network]69%
+[ Thu Jul 30 06:11:30 2026 ] 	Epoch Total Time: 82.79 seconds.
+[ Thu Jul 30 06:11:30 2026 ] Eval epoch: 8
+[ Thu Jul 30 06:11:37 2026 ] 	Accuracy: 98.17%
+[ Thu Jul 30 06:11:37 2026 ] 	Mean val loss of 4 batches: 0.0587.
+[ Thu Jul 30 06:11:37 2026 ] 	Top1: 98.17%
+[ Thu Jul 30 06:11:37 2026 ] 	Top5: 100.00%
+[ Thu Jul 30 06:11:37 2026 ] 	=> Epoch 8 lọt vào Top 5, đã lưu tệp .pt và .csv!
+[ Thu Jul 30 06:11:37 2026 ] ----------------------------------------------------
+[ Thu Jul 30 06:11:37 2026 ] Training epoch: 9
+[ Thu Jul 30 06:13:00 2026 ] 	Mean training loss: 0.0171.
+[ Thu Jul 30 06:13:00 2026 ] 	Mean training acc (Top-1): 99.39%.
+[ Thu Jul 30 06:13:00 2026 ] 	Mean training acc (Top-5): 100.00%.
+[ Thu Jul 30 06:13:00 2026 ] 	Time consumption: [Data]31%, [Network]69%
+[ Thu Jul 30 06:13:00 2026 ] 	Epoch Total Time: 83.43 seconds.
+[ Thu Jul 30 06:13:00 2026 ] Eval epoch: 9
+[ Thu Jul 30 06:13:07 2026 ] 	Accuracy: 98.62%
+[ Thu Jul 30 06:13:07 2026 ] 	Mean val loss of 4 batches: 0.0590.
+[ Thu Jul 30 06:13:07 2026 ] 	Top1: 98.62%
+[ Thu Jul 30 06:13:07 2026 ] 	Top5: 100.00%
+[ Thu Jul 30 06:13:07 2026 ] 	=> New best model found at epoch 9 with Acc: 98.62%!
+[ Thu Jul 30 06:13:07 2026 ] 	=> Epoch 9 lọt vào Top 5, đã lưu tệp .pt và .csv!
+[ Thu Jul 30 06:13:07 2026 ] ----------------------------------------------------
+[ Thu Jul 30 06:13:07 2026 ] Training epoch: 10
+[ Thu Jul 30 06:14:31 2026 ] 	Mean training loss: 0.0113.
+[ Thu Jul 30 06:14:31 2026 ] 	Mean training acc (Top-1): 99.60%.
+[ Thu Jul 30 06:14:31 2026 ] 	Mean training acc (Top-5): 100.00%.
+[ Thu Jul 30 06:14:31 2026 ] 	Time consumption: [Data]31%, [Network]69%
+[ Thu Jul 30 06:14:31 2026 ] 	Epoch Total Time: 83.29 seconds.
+[ Thu Jul 30 06:14:31 2026 ] Eval epoch: 10
+[ Thu Jul 30 06:14:37 2026 ] 	Accuracy: 98.17%
+[ Thu Jul 30 06:14:37 2026 ] 	Mean val loss of 4 batches: 0.0713.
+[ Thu Jul 30 06:14:37 2026 ] 	Top1: 98.17%
+[ Thu Jul 30 06:14:37 2026 ] 	Top5: 100.00%
+[ Thu Jul 30 06:14:37 2026 ] 	=> Epoch 10 lọt vào Top 5, đã lưu tệp .pt và .csv!
+[ Thu Jul 30 06:14:37 2026 ] ----------------------------------------------------
+[ Thu Jul 30 06:14:37 2026 ] Training epoch: 11
+[ Thu Jul 30 06:16:01 2026 ] 	Mean training loss: 0.0121.
+[ Thu Jul 30 06:16:01 2026 ] 	Mean training acc (Top-1): 99.62%.
+[ Thu Jul 30 06:16:01 2026 ] 	Mean training acc (Top-5): 100.00%.
+[ Thu Jul 30 06:16:01 2026 ] 	Time consumption: [Data]31%, [Network]69%
+[ Thu Jul 30 06:16:01 2026 ] 	Epoch Total Time: 83.43 seconds.
+[ Thu Jul 30 06:16:01 2026 ] Eval epoch: 11
+[ Thu Jul 30 06:16:07 2026 ] 	Accuracy: 98.62%
+[ Thu Jul 30 06:16:07 2026 ] 	Mean val loss of 4 batches: 0.0543.
+[ Thu Jul 30 06:16:07 2026 ] 	Top1: 98.62%
+[ Thu Jul 30 06:16:07 2026 ] 	Top5: 100.00%
+[ Thu Jul 30 06:16:07 2026 ] 	=> Epoch 11 lọt vào Top 5, đã lưu tệp .pt và .csv!
+[ Thu Jul 30 06:16:07 2026 ] ----------------------------------------------------
+[ Thu Jul 30 06:16:07 2026 ] Training epoch: 12
+[ Thu Jul 30 06:17:31 2026 ] 	Mean training loss: 0.0108.
+[ Thu Jul 30 06:17:31 2026 ] 	Mean training acc (Top-1): 99.56%.
+[ Thu Jul 30 06:17:31 2026 ] 	Mean training acc (Top-5): 100.00%.
+[ Thu Jul 30 06:17:31 2026 ] 	Time consumption: [Data]30%, [Network]69%
+[ Thu Jul 30 06:17:31 2026 ] 	Epoch Total Time: 83.39 seconds.
+[ Thu Jul 30 06:17:31 2026 ] Eval epoch: 12
+[ Thu Jul 30 06:17:38 2026 ] 	Accuracy: 98.62%
+[ Thu Jul 30 06:17:38 2026 ] 	Mean val loss of 4 batches: 0.0499.
+[ Thu Jul 30 06:17:38 2026 ] 	Top1: 98.62%
+[ Thu Jul 30 06:17:38 2026 ] 	Top5: 100.00%
+[ Thu Jul 30 06:17:38 2026 ] 	=> Epoch 12 lọt vào Top 5, đã lưu tệp .pt và .csv!
+[ Thu Jul 30 06:17:38 2026 ] ----------------------------------------------------
+[ Thu Jul 30 06:17:38 2026 ] Training epoch: 13
+[ Thu Jul 30 06:19:01 2026 ] 	Mean training loss: 0.0057.
+[ Thu Jul 30 06:19:01 2026 ] 	Mean training acc (Top-1): 99.84%.
+[ Thu Jul 30 06:19:01 2026 ] 	Mean training acc (Top-5): 100.00%.
+[ Thu Jul 30 06:19:01 2026 ] 	Time consumption: [Data]31%, [Network]69%
+[ Thu Jul 30 06:19:01 2026 ] 	Epoch Total Time: 82.99 seconds.
+[ Thu Jul 30 06:19:01 2026 ] Eval epoch: 13
+[ Thu Jul 30 06:19:07 2026 ] 	Accuracy: 98.62%
+[ Thu Jul 30 06:19:07 2026 ] 	Mean val loss of 4 batches: 0.0590.
+[ Thu Jul 30 06:19:07 2026 ] 	Top1: 98.62%
+[ Thu Jul 30 06:19:07 2026 ] 	Top5: 100.00%
+[ Thu Jul 30 06:19:08 2026 ] 	=> Epoch 13 lọt vào Top 5, đã lưu tệp .pt và .csv!
+[ Thu Jul 30 06:19:08 2026 ] ----------------------------------------------------
+[ Thu Jul 30 06:19:08 2026 ] Training epoch: 14
+[ Thu Jul 30 06:20:31 2026 ] 	Mean training loss: 0.0049.
+[ Thu Jul 30 06:20:31 2026 ] 	Mean training acc (Top-1): 99.88%.
+[ Thu Jul 30 06:20:31 2026 ] 	Mean training acc (Top-5): 100.00%.
+[ Thu Jul 30 06:20:31 2026 ] 	Time consumption: [Data]31%, [Network]69%
+[ Thu Jul 30 06:20:31 2026 ] 	Epoch Total Time: 83.31 seconds.
+[ Thu Jul 30 06:20:31 2026 ] Eval epoch: 14
+[ Thu Jul 30 06:20:37 2026 ] 	Accuracy: 98.62%
+[ Thu Jul 30 06:20:37 2026 ] 	Mean val loss of 4 batches: 0.0598.
+[ Thu Jul 30 06:20:37 2026 ] 	Top1: 98.62%
+[ Thu Jul 30 06:20:37 2026 ] 	Top5: 100.00%
+[ Thu Jul 30 06:20:38 2026 ] 	=> Epoch 14 lọt vào Top 5, đã lưu tệp .pt và .csv!
+[ Thu Jul 30 06:20:38 2026 ] ----------------------------------------------------
+[ Thu Jul 30 06:20:38 2026 ] Training epoch: 15
+[ Thu Jul 30 06:22:02 2026 ] 	Mean training loss: 0.0041.
+[ Thu Jul 30 06:22:02 2026 ] 	Mean training acc (Top-1): 99.91%.
+[ Thu Jul 30 06:22:02 2026 ] 	Mean training acc (Top-5): 100.00%.
+[ Thu Jul 30 06:22:02 2026 ] 	Time consumption: [Data]31%, [Network]69%
+[ Thu Jul 30 06:22:02 2026 ] 	Epoch Total Time: 83.90 seconds.
+[ Thu Jul 30 06:22:02 2026 ] Eval epoch: 15
+[ Thu Jul 30 06:22:08 2026 ] 	Accuracy: 98.17%
+[ Thu Jul 30 06:22:08 2026 ] 	Mean val loss of 4 batches: 0.0693.
+[ Thu Jul 30 06:22:08 2026 ] 	Top1: 98.17%
+[ Thu Jul 30 06:22:08 2026 ] 	Top5: 100.00%
+[ Thu Jul 30 06:22:08 2026 ] 
+=========================================
+[ Thu Jul 30 06:22:08 2026 ] Training Complete!
+[ Thu Jul 30 06:22:08 2026 ] =========================================
+[ Thu Jul 30 06:22:08 2026 ] Best Validation Accuracy: 98.62%
+[ Thu Jul 30 06:22:08 2026 ] Achieved at Epoch: 9
+[ Thu Jul 30 06:22:08 2026 ] Model name: ./work_dir/fall_detection/ntu25/
+[ Thu Jul 30 06:22:08 2026 ] Model total number of params: 1644924

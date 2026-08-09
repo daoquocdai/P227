@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from src.database import database_connection
@@ -9,7 +9,7 @@ class OverviewService:
     def __init__(self, event_repository: SQLiteEventRepository | None = None) -> None:
         self._events = event_repository or SQLiteEventRepository()
 
-    def get_overview(self) -> dict[str, Any]:
+    def get_overview(self, runtime=None) -> dict[str, Any]:
         now = datetime.now().astimezone()
         alerts = self._events.list_alerts()
         today_alerts = [item for item in alerts if self._is_today(item["timestamp"], now)]
@@ -29,7 +29,7 @@ class OverviewService:
                    WHERE ep.person_id IS NOT NULL AND date(e.occurred_at) = date('now', 'localtime')"""
             ).fetchone()[0]
 
-        cameras = [self._camera(row) for row in camera_rows]
+        cameras = [self._camera(row, runtime) for row in camera_rows]
         online_count = sum(camera["status"] == "online" for camera in cameras)
         current_alert = pending[0] if pending else None
         safe = current_alert is None
@@ -56,16 +56,24 @@ class OverviewService:
         }
 
     @staticmethod
-    def _camera(row) -> dict[str, Any]:
+    def _camera(row, runtime=None) -> dict[str, Any]:
         public_id = row["name"] if row["name"].startswith("camera-") else row["id"]
+        runtime_state = runtime.get_status(public_id) if runtime is not None else None
+        runtime_last_frame = runtime_state["last_frame_at"] if runtime_state is not None else None
         return {
             "id": public_id,
             "name": row["location_label"] or row["name"],
             "location": row["location_label"],
-            "status": row["operational_status"],
-            "last_seen_at": row["last_seen_at"],
+            "status": runtime_state["status"] if runtime_state is not None else "offline",
+            "last_seen_at": (
+                datetime.fromtimestamp(runtime_last_frame, UTC).isoformat()
+                if runtime_last_frame is not None
+                else row["last_seen_at"]
+            ),
             "source_type": row["source_kind"] or row["source_type"],
             "playback_url": f"/{row['playback_path'].lstrip('/')}" if row["playback_path"] else None,
+            "stream_url": f"/api/v1/cameras/{public_id}/stream",
+            "stream_ready": runtime_state is not None and runtime_state["status"] == "online",
         }
 
     @staticmethod

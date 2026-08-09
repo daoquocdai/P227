@@ -1,6 +1,7 @@
 import { Activity, AlertTriangle, ArrowRight, Camera, Check, HeartHandshake, RefreshCw, ShieldCheck, Sparkles } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { getOverview, type OverviewData } from "../api/overview";
+import { CameraStream } from "../components";
 import "./overview.css";
 import "./overviewApi.css";
 
@@ -49,7 +50,7 @@ export default function OverviewPage() {
 
     <section className="home-section"><SectionHeading title="Camera" description="Dữ liệu camera được quản lý bởi Local Hub." action="Mở camera" onAction={() => navigate("/camera")} />
       <div className="dashboard-camera-filters" role="group" aria-label="Lọc camera theo khu vực">{areas.map((area) => <button key={area.id} className={cameraArea === area.id ? "active" : ""} onClick={() => setCameraArea(area.id)}>{area.label}</button>)}</div>
-      <div className="home-camera-grid">{visibleCameras.map((camera) => <button className="home-camera-card" key={camera.id} onClick={() => navigate(`/camera?camera=${encodeURIComponent(camera.id)}`)}><span className="home-camera-preview">{camera.playbackUrl ? <LastViewedFrame cameraId={camera.id} src={camera.playbackUrl} /> : <span className="overview-camera-placeholder"><Camera /></span>}<span className={`camera-live ${camera.status}`}><i /> {camera.status === "online" ? "Ảnh gần nhất" : "Ngoại tuyến"}</span><span className="dashboard-camera-name">{camera.name}</span></span><span className="camera-card-copy"><strong>{camera.name}</strong><small>{camera.lastSeenAt ? `Cập nhật ${formatTime(camera.lastSeenAt)}` : "Chưa có dữ liệu gần đây"}</small></span><ArrowRight /></button>)}</div>
+      <div className="home-camera-grid">{visibleCameras.map((camera) => <button className="home-camera-card" key={camera.id} onClick={() => navigate(`/camera?camera=${encodeURIComponent(camera.id)}`)}><span className="home-camera-preview">{camera.streamReady || camera.playbackUrl ? <CameraStream cameraId={camera.id} streamReady={camera.streamReady} streamUrl={camera.streamUrl} playbackUrl={camera.playbackUrl} /> : <span className="overview-camera-placeholder"><Camera /></span>}<span className={`camera-live ${camera.status}`}><i /> {camera.status === "online" ? "Ảnh gần nhất" : "Ngoại tuyến"}</span><span className="dashboard-camera-name">{camera.name}</span></span><span className="camera-card-copy"><strong>{camera.name}</strong><small>{camera.lastSeenAt ? `Cập nhật ${formatTime(camera.lastSeenAt)}` : "Chưa có dữ liệu gần đây"}</small></span><ArrowRight /></button>)}</div>
     </section>
 
     <section className="home-section insight-section"><article className="ai-insight-card"><span className="insight-icon"><Sparkles /></span><div><p>TÓM TẮT HỆ THỐNG · HÔM NAY</p><h2>{statusAttention ? "Có dữ liệu cần được kiểm tra" : "Mọi thứ đang diễn ra bình thường"}</h2><ul>{data.insights.map((insight) => <li key={insight}><Check /> {insight}</li>)}</ul></div></article></section>
@@ -59,17 +60,6 @@ export default function OverviewPage() {
 function formatTime(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "—" : new Intl.DateTimeFormat("vi-VN", { hour: "2-digit", minute: "2-digit" }).format(date);
-}
-
-function LastViewedFrame({ cameraId, src }: { cameraId: string; src: string }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const showSavedFrame = () => {
-    const video = videoRef.current;
-    if (!video || !Number.isFinite(video.duration)) return;
-    const saved = Number(localStorage.getItem(`camera-preview-time:${cameraId}`));
-    video.currentTime = Math.min(Number.isFinite(saved) ? saved : 0.1, Math.max(video.duration - 0.1, 0));
-  };
-  return <video ref={videoRef} src={src} muted playsInline preload="metadata" onLoadedMetadata={showSavedFrame} />;
 }
 
 function HeroMetric({ icon: Icon, value, label }: { icon: typeof Camera; value: string; label: string }) {

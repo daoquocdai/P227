@@ -1,5 +1,6 @@
 import json
-from pathlib import PurePosixPath
+from datetime import UTC, datetime
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from src.database import database_connection
@@ -10,21 +11,55 @@ class CameraNotFoundError(Exception):
 
 
 class CameraService:
-    def list_cameras(self) -> list[dict[str, Any]]:
+    def list_cameras(self, runtime=None) -> list[dict[str, Any]]:
         with database_connection() as connection:
             rows = connection.execute(self._camera_query() + " ORDER BY c.name").fetchall()
-            return [self._camera(row) for row in rows]
+            return [self._camera(row, runtime) for row in rows]
 
-    def get_camera(self, camera_id: str) -> dict[str, Any]:
+    def get_camera(self, camera_id: str, runtime=None) -> dict[str, Any]:
         with database_connection() as connection:
             row = connection.execute(
                 self._camera_query() + " WHERE c.id = ? OR c.name = ?", (camera_id, camera_id)
             ).fetchone()
             if not row:
                 raise CameraNotFoundError(camera_id)
-            camera = self._camera(row)
+            camera = self._camera(row, runtime)
             camera["events"] = self._events(connection, row["id"])
             return camera
+
+    def resolve_source(self, camera_id: str) -> tuple[str, str | int]:
+        """Return the public runtime id and OpenCV source for a persisted camera."""
+        with database_connection() as connection:
+            row = connection.execute(
+                self._camera_query() + " WHERE c.id = ? OR c.name = ?", (camera_id, camera_id)
+            ).fetchone()
+            if not row:
+                raise CameraNotFoundError(camera_id)
+
+        public_id = self._public_id(row)
+        kind = row["source_kind"] or "webcam"
+        source_uri = row["source_uri"]
+        if kind == "webcam":
+            source = "0" if source_uri in {None, ""} else source_uri
+            return public_id, int(source) if str(source).strip().isdigit() else str(source).strip()
+        if not source_uri:
+            raise ValueError(f"Camera {public_id} has no configured source URI")
+        if kind == "rtsp":
+            return public_id, source_uri
+
+        relative = Path(source_uri.replace("/", str(Path('/'))))
+        candidates = [Path.cwd() / relative, Path.cwd() / "frontend" / "public" / relative]
+        for candidate in candidates:
+            if candidate.is_file():
+                return public_id, str(candidate.resolve())
+        raise ValueError(f"Video source does not exist: {source_uri}")
+
+    def public_id(self, camera_id: str) -> str:
+        with database_connection() as connection:
+            row = connection.execute("SELECT id, name FROM cameras WHERE id = ? OR name = ?", (camera_id, camera_id)).fetchone()
+            if not row:
+                raise CameraNotFoundError(camera_id)
+            return self._public_id(row)
 
     def update_source(
         self,
@@ -61,20 +96,32 @@ class CameraService:
         """
 
     @classmethod
-    def _camera(cls, row) -> dict[str, Any]:
-        public_id = row["name"] if row["name"].startswith("camera-") else row["id"]
+    def _camera(cls, row, runtime=None) -> dict[str, Any]:
+        public_id = cls._public_id(row)
+        runtime_state = runtime.get_status(public_id) if runtime is not None else None
+        status = runtime_state["status"] if runtime_state is not None else "offline"
+        runtime_last_frame = runtime_state["last_frame_at"] if runtime_state is not None else None
+        last_seen_at = (
+            datetime.fromtimestamp(runtime_last_frame, UTC).isoformat()
+            if runtime_last_frame is not None
+            else row["last_seen_at"]
+        )
         return {
             "id": public_id,
             "name": row["location_label"] or row["name"],
             "location": row["location_label"],
-            "status": row["operational_status"],
-            "last_seen_at": row["last_seen_at"],
+            "status": status,
+            "last_seen_at": last_seen_at,
             "active": bool(row["is_active"]),
             "source_kind": row["source_kind"] or "webcam",
             "playback_url": cls._playback_url(row["source_kind"], row["playback_path"]),
-            "stream_ready": row["operational_status"] == "online"
-            and (row["source_kind"] == "webcam" or bool(row["playback_path"])),
+            "stream_url": f"/api/v1/cameras/{public_id}/stream",
+            "stream_ready": status == "online" and runtime_state is not None,
         }
+
+    @staticmethod
+    def _public_id(row) -> str:
+        return row["name"] if row["name"].startswith("camera-") else row["id"]
 
     @staticmethod
     def _playback_url(source_kind: str | None, playback_path: str | None) -> str | None:

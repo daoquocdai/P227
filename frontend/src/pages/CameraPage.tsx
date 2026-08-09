@@ -1,6 +1,7 @@
 import { AlertTriangle, Camera, CameraOff, ChevronLeft, ChevronRight, Info, RefreshCw, ShieldCheck, Video, Wifi } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { getCamera, getCameras, type CameraDto, type CameraEventDto } from "../api/cameras";
+import { CameraStream } from "../components";
 import "./cameraViewer.css";
 import "./cameraApi.css";
 
@@ -37,8 +38,7 @@ export default function CameraPage() {
     <header className="smart-camera-heading"><div><p>Không gian của bạn</p><h1>Camera</h1></div><span><ShieldCheck /> {feeds.filter((item) => item.status === "online").length}/{feeds.length} camera trực tuyến</span></header>
     <div className="smart-viewer-shell">
       <div className="smart-camera-viewer" key={selected.id}>
-        {selected.playback_url && <LiveVideo cameraId={selected.id} src={selected.playback_url} />}
-        {selected.source_kind === "webcam" && !offline && <button className="smart-webcam-placeholder" onClick={() => navigate(`/camera/${encodeURIComponent(selected.id)}`)}><Camera /><strong>Xem camera trong nhà</strong><span>Camera chỉ bật ở trang xem trực tiếp</span></button>}
+        <CameraStream cameraId={selected.id} streamReady={selected.stream_ready} streamUrl={selected.stream_url} playbackUrl={selected.playback_url} />
         {selected.source_kind === "rtsp" && !selected.playback_url && !offline && <div className="smart-camera-offline"><Wifi /><strong>Camera RTSP đã được cấu hình</strong><span>Đang chờ Local Hub cung cấp luồng phát cho trình duyệt</span></div>}
         {offline && <div className="smart-camera-offline"><CameraOff /><strong>Camera đang ngoại tuyến</strong><span>{selected.last_seen_at ? `Lần cuối ${formatTime(selected.last_seen_at)}` : "Chưa có heartbeat"}</span></div>}
         <div className="smart-viewer-top"><span className={`smart-live ${offline ? "offline" : ""}`}><i /><span>{offline ? "Ngoại tuyến" : "Trực tiếp"}</span></span></div>
@@ -64,16 +64,9 @@ function EventRow({ event, onOpen }: { event: CameraEventDto; onOpen: () => void
 
 function VideoThumbnail({ feed }: { feed: CameraDto }) {
   return <span className={`video-thumbnail ${feed.status !== "online" ? "offline" : ""}`}>
-    {feed.playback_url ? <LiveVideo cameraId={feed.id} src={feed.playback_url} /> : <span className="camera-source-placeholder"><Camera /></span>}
+    {feed.stream_ready || feed.playback_url ? <CameraStream cameraId={feed.id} streamReady={feed.stream_ready} streamUrl={feed.stream_url} playbackUrl={feed.playback_url} /> : <span className="camera-source-placeholder"><Camera /></span>}
     <span className={`thumbnail-status ${feed.status !== "online" ? "offline" : ""}`}><i />{feed.status === "online" ? "Trực tiếp" : "Ngoại tuyến"}</span><span className="thumbnail-name">{feed.name}</span>
   </span>;
-}
-
-function LiveVideo({ cameraId, src }: { cameraId: string; src: string }) {
-  const rememberFrame = (video: HTMLVideoElement) => {
-    if (Number.isFinite(video.currentTime)) localStorage.setItem(`camera-preview-time:${cameraId}`, String(video.currentTime));
-  };
-  return <video src={src} autoPlay loop muted playsInline preload="auto" onTimeUpdate={(event) => rememberFrame(event.currentTarget)} />;
 }
 
 function isToday(value: string): boolean { const date = new Date(value); const now = new Date(); return date.toDateString() === now.toDateString(); }
