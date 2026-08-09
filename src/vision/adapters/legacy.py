@@ -25,6 +25,7 @@ STRIDE = 32
 MOVEMENT_THRESHOLD = 0.2
 FRAME_SIZE = 1024
 FALL_LABEL = "FALL DETECTED!"
+UNKNOWN_PERSON_COOLDOWN_SECONDS = 30.0
 
 
 class LegacyVisionInitializationError(RuntimeError):
@@ -58,9 +59,11 @@ class LegacyVisionEngine(VisionEngine):
         checkpoint_path: str | Path = VISION_ROOT / "work_dir" / "fall_detection" / "ntu25-bone" / "runs-best_val.pt",
         known_faces_dir: str | Path = VISION_ROOT / "register face",
         identity_enabled: bool = False,
+        identity_provider: str = "auto",
         insightface_root: str | Path = DEFAULT_INSIGHTFACE_ROOT,
         *,
         device: str = "auto",
+        face_gallery: Any = None,
         clock: Callable[[], float] = time.time,
         incident_factory: Callable[[], Any] = uuid4,
     ) -> None:
@@ -70,7 +73,9 @@ class LegacyVisionEngine(VisionEngine):
         self.known_faces_dir = self._resolve_path(known_faces_dir)
         self.insightface_root = self._resolve_path(insightface_root)
         self.identity_enabled = identity_enabled
+        self.identity_provider = identity_provider.strip().lower()
         self.requested_device = self._normalize_device(device)
+        self._face_gallery = face_gallery
         self._clock = clock
         self._incident_factory = incident_factory
         self._lock = threading.RLock()
@@ -198,6 +203,27 @@ class LegacyVisionEngine(VisionEngine):
                 confidence = self._box_value(boxes_obj, "conf", best_idx, 0.0)
                 track_id = self._box_int_value(boxes_obj, "id", best_idx)
                 detection_metadata = self._identity_metadata(crop)
+                if detection_metadata.get("identity_status") == "UNKNOWN":
+                    last_unknown_at = state.get("legacy_last_unknown_event_source_time")
+                    if last_unknown_at is None or source_timestamp - float(last_unknown_at) >= UNKNOWN_PERSON_COOLDOWN_SECONDS:
+                        unknown_event_id = str(self._incident_factory())
+                        events.append(
+                            VisionEvent(
+                                type="unknown_person",
+                                confidence=max(
+                                    0.0,
+                                    min(1.0, 1.0 - float(detection_metadata.get("identity_similarity", 0.0))),
+                                ),
+                                metadata={
+                                    "event_id": f"{unknown_event_id}:unknown_person",
+                                    "track_id": track_id,
+                                    "identity_status": "UNKNOWN",
+                                    "identity_name": None,
+                                    "snapshot_path": None,
+                                },
+                            )
+                        )
+                        state["legacy_last_unknown_event_source_time"] = source_timestamp
                 detections.append(
                     VisionDetection(
                         label="person",
@@ -400,19 +426,41 @@ class LegacyVisionEngine(VisionEngine):
                 raise LegacyVisionInitializationError(
                     f"Missing local InsightFace buffalo_l resources in {model_dir}: {', '.join(missing)}"
                 )
+            providers, face_ctx_id = self._identity_execution(device)
             face_app = deps.FaceAnalysis(
                 name="buffalo_l",
-                providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+                providers=providers,
                 root=str(self.insightface_root),
             )
-            face_app.prepare(ctx_id=0, det_size=(640, 640))
-            known_faces = self._load_known_faces(face_app, deps.cv2)
+            face_app.prepare(ctx_id=face_ctx_id, det_size=(640, 640))
+            self._device_diagnostics["stages"]["identity"] = providers[0]
+            if self._face_gallery is None:
+                known_faces = self._load_known_faces(face_app, deps.cv2)
 
         self._dependencies = deps
         self._device = device
         self._action_model = action_model
         self._face_app = face_app
         self._known_faces = known_faces
+
+    def _identity_execution(self, torch_device: Any) -> tuple[list[str], int]:
+        if self.identity_provider not in {"auto", "cpu", "directml"}:
+            raise LegacyVisionInitializationError(
+                "Identity provider must be auto, cpu, or directml"
+            )
+        try:
+            import onnxruntime as ort
+        except ImportError as exc:
+            raise LegacyVisionInitializationError(f"Missing ONNX Runtime: {exc}") from exc
+        available = set(ort.get_available_providers())
+        if self.identity_provider in {"auto", "directml"} and "DmlExecutionProvider" in available:
+            return ["DmlExecutionProvider", "CPUExecutionProvider"], 0
+        if self.identity_provider == "directml":
+            raise LegacyVisionInitializationError("DirectML was requested but is unavailable")
+        use_cuda = getattr(torch_device, "type", str(torch_device).split(":", 1)[0]) == "cuda"
+        if use_cuda and "CUDAExecutionProvider" in available:
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"], 0
+        return ["CPUExecutionProvider"], -1
 
     def _select_torch_device(self, torch: Any) -> Any:
         cuda_available = bool(torch.cuda.is_available())
@@ -483,10 +531,12 @@ class LegacyVisionEngine(VisionEngine):
             from src.vision.model.SDAGCN import Model
         except ImportError as exc:
             raise LegacyVisionInitializationError(f"Missing Legacy Vision dependency: {exc}") from exc
-        FaceAnalysis = None
+        face_analysis = None
         if self.identity_enabled:
             try:
-                from insightface.app import FaceAnalysis
+                from insightface import app as insightface_app
+
+                face_analysis = insightface_app.FaceAnalysis
             except ImportError as exc:
                 raise LegacyVisionInitializationError(f"Missing Legacy Vision identity dependency: {exc}") from exc
 
@@ -495,7 +545,7 @@ class LegacyVisionEngine(VisionEngine):
             mp=mp,
             torch=torch,
             yaml=yaml,
-            FaceAnalysis=FaceAnalysis,
+            FaceAnalysis=face_analysis,
             YOLO=YOLO,
             Model=Model,
             clean_out_of_bounds_data=clean_out_of_bounds_data,
@@ -534,17 +584,36 @@ class LegacyVisionEngine(VisionEngine):
         faces = self._face_app.get(crop)
         best_name: str | None = None
         best_score = 0.0
-        if faces:
-            main_face = max(faces, key=lambda face: (face.bbox[2] - face.bbox[0]) * (face.bbox[3] - face.bbox[1]))
-            for name, known_embedding in self._known_faces.items():
-                score = self._cosine_similarity(known_embedding, main_face.embedding)
-                if score > best_score:
-                    best_score = score
-                    best_name = name
+        if not faces:
+            return {
+                "identity_status": "UNKNOWN",
+                "identity_name": None,
+                "identity_person_id": None,
+                "identity_similarity": 0.0,
+            }
+        main_face = max(faces, key=lambda face: (face.bbox[2] - face.bbox[0]) * (face.bbox[3] - face.bbox[1]))
+        known_faces = (
+            self._face_gallery.snapshot()
+            if self._face_gallery is not None
+            else tuple(
+                SimpleNamespace(person_id=None, name=name, embedding=embedding)
+                for name, embedding in self._known_faces.items()
+            )
+        )
+        best_person_id: str | None = None
+        for known_face in known_faces:
+            name = known_face.name
+            known_embedding = known_face.embedding
+            score = self._cosine_similarity(known_embedding, main_face.embedding)
+            if score > best_score:
+                best_score = score
+                best_name = name
+                best_person_id = known_face.person_id
         known = best_score > 0.45
         return {
             "identity_status": "KNOWN" if known else "UNKNOWN",
             "identity_name": best_name if known else None,
+            "identity_person_id": best_person_id if known else None,
             "identity_similarity": best_score,
         }
 

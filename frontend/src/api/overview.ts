@@ -33,6 +33,10 @@ interface OverviewPayload {
     playback_url?: string | null;
     stream_url: string;
     stream_ready: boolean;
+    preview_url?: string | null;
+    preview_version?: number | null;
+    vision_enabled: boolean;
+    vision_status?: "disabled" | "waiting_for_source" | "running" | "error" | null;
   }>;
   insights: string[];
 }
@@ -66,6 +70,10 @@ export interface OverviewData {
     playbackUrl?: string | null;
     streamUrl: string;
     streamReady: boolean;
+    previewUrl?: string | null;
+    previewVersion?: number | null;
+    visionEnabled: boolean;
+    visionStatus?: "disabled" | "waiting_for_source" | "running" | "error" | null;
   }>;
   insights: string[];
 }
@@ -107,6 +115,10 @@ export async function getOverview(): Promise<OverviewData> {
       playbackUrl: camera.playback_url,
       streamUrl: camera.stream_url,
       streamReady: camera.stream_ready,
+      previewUrl: camera.preview_url,
+      previewVersion: camera.preview_version,
+      visionEnabled: camera.vision_enabled,
+      visionStatus: camera.vision_status,
     })),
     insights: data.insights,
   };

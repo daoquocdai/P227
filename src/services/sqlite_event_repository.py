@@ -6,6 +6,8 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from src.database import database_connection
 from src.models.schemas import AlertReviewRequest, VisionEventAccepted, VisionEventRequest
+from src.services.event_presentation import event_description
+from src.services.media_paths import snapshot_url, valid_snapshot_name
 
 
 class EventNotFoundError(Exception):
@@ -32,6 +34,7 @@ class SQLiteEventRepository:
             if event.event_type == "UNKNOWN_PERSON"
             else None
         )
+        valid_snapshot = valid_snapshot_name(event.snapshot_path)
         metadata = dict(event.metadata)
         metadata.update(
             {
@@ -39,7 +42,7 @@ class SQLiteEventRepository:
                 "source_event_type": event.event_type,
                 "description": description,
                 "identity_name": event.identity_name,
-                "snapshot_path": event.snapshot_path,
+                "snapshot_path": valid_snapshot,
             }
         )
 
@@ -60,6 +63,15 @@ class SQLiteEventRepository:
                    VALUES (?, ?, 'webcam', ?, ?, 'online', ?)""",
                 (camera_id, event.camera_id, event.camera_id, event.camera_location, event.occurred_at.isoformat()),
             )
+            camera = connection.execute(
+                "SELECT name, location_label FROM cameras WHERE id = ?", (camera_id,)
+            ).fetchone()
+            if camera:
+                metadata["camera_name"] = camera["name"]
+                metadata["camera_location"] = camera["location_label"]
+                metadata["description"] = event_description(
+                    event.event_type, camera["location_label"], event.identity_name
+                )
             connection.execute(
                 """INSERT INTO events
                    (id, camera_id, event_type, occurred_at, ai_model_name, ai_model_version,
@@ -123,7 +135,7 @@ class SQLiteEventRepository:
                     ),
                 )
 
-            self._insert_media(connection, event_id, event)
+            self._insert_media(connection, event_id, event, valid_snapshot)
             if alert_type is None:
                 return VisionEventAccepted(id=event_id, event_id=event.event_id, status="resolved")
 
@@ -210,10 +222,15 @@ class SQLiteEventRepository:
         return person_id
 
     @staticmethod
-    def _insert_media(connection, event_id: str, event: VisionEventRequest) -> None:
-        if not event.snapshot_path:
+    def _insert_media(
+        connection,
+        event_id: str,
+        event: VisionEventRequest,
+        snapshot_name: str | None,
+    ) -> None:
+        if not snapshot_name:
             return
-        suffix = Path(event.snapshot_path).suffix.lower()
+        suffix = Path(snapshot_name).suffix.lower()
         mime_type = mimetypes.types_map.get(suffix)
         if mime_type not in {"image/jpeg", "image/png", "image/webp"}:
             return
@@ -228,7 +245,7 @@ class SQLiteEventRepository:
                 str(uuid4()),
                 event_id,
                 subject,
-                Path(event.snapshot_path).name,
+                snapshot_name,
                 mime_type,
                 captured.isoformat(),
                 (captured + timedelta(days=30)).isoformat(),
@@ -239,12 +256,15 @@ class SQLiteEventRepository:
     def _to_api_alert(cls, row) -> dict:
         metadata = json.loads(row["metadata_json"] or "{}")
         snapshot_path = row["snapshot_path"] or metadata.get("snapshot_path")
+        source_event_type = metadata.get("source_event_type", row["alert_type"])
         return {
             "id": row["id"],
             "event_id": metadata.get("external_event_id", row["event_id"]),
             "timestamp": row["occurred_at"],
-            "event_type": metadata.get("source_event_type", row["alert_type"]),
-            "description": metadata.get("description", row["alert_type"]),
+            "event_type": source_event_type,
+            "description": event_description(
+                source_event_type, row["location_label"], metadata.get("identity_name")
+            ),
             "camera_id": row["camera_name"],
             "camera_location": row["location_label"],
             "confidence": row["ai_confidence"],
@@ -252,7 +272,7 @@ class SQLiteEventRepository:
             "immobile_seconds": (
                 row["immobility_duration_ms"] / 1000 if row["immobility_duration_ms"] is not None else None
             ),
-            "snapshot_url": f"/snapshots/{Path(snapshot_path).name}" if snapshot_path else None,
+            "snapshot_url": snapshot_url(snapshot_path),
             "severity": row["severity"],
             "status": cls._ui_status(row["db_status"], row["verdict"], row["latest_action"]),
             "feedback": row["verdict"],

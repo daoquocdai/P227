@@ -20,4 +20,7 @@ Write-Host "[ai-log] Git pre-push hook installed."
 if (-not (Test-Path .ai-log)) { New-Item -ItemType Directory -Path .ai-log | Out-Null }
 if (-not (Test-Path .ai-log/.gitkeep)) { New-Item -ItemType File -Path .ai-log/.gitkeep | Out-Null }
 
+Write-Host "[ai-log] Codex hook config is available at .codex/hooks.json."
+Write-Host "[ai-log] In Codex, run /hooks once and trust the project hooks."
+Write-Host "[ai-log] Restart Codex after installing or changing hooks."
 Write-Host "[ai-log] Setup complete. Configure AI_LOG_SERVER in your .env file."

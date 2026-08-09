@@ -1,191 +1,247 @@
-# An Tâm Home — GuardianCam Local Hub
+# GuardianCam Local Hub
 
-> Hệ thống AI chạy tại nhà để phát hiện té ngã, nhận diện người lạ và hỗ trợ gia đình xử lý cảnh báo theo thời gian thực mà không phụ thuộc vào cloud.
+GuardianCam là hệ thống giám sát an toàn chạy tại nhà: tiếp nhận webcam, video hoặc RTSP; phát hiện té ngã và người chưa được nhận diện; sau đó lưu và gửi cảnh báo theo thời gian thực tới giao diện web. Video thô và ảnh sự kiện được xử lý cục bộ trên Local Hub.
 
-## Vấn đề (Problem)
+> Đây là công cụ hỗ trợ cảnh báo, không thay thế thiết bị y tế hoặc dịch vụ khẩn cấp.
 
-Người cao tuổi hoặc người sống một mình có thể gặp sự cố nhưng không thể chủ động gọi trợ giúp. Camera thông thường chỉ ghi hình; người thân phải theo dõi thủ công, dễ bỏ lỡ thời điểm quan trọng. Việc gửi video liên tục lên cloud cũng làm tăng chi phí, độ trễ và rủi ro riêng tư.
+## Chức năng hiện có
 
-## Giải pháp (Solution)
+- Quản lý nhiều camera từ một SQLite database: tên, vị trí, nguồn phát và trạng thái bật/tắt.
+- Phát MJPEG liên tục ở trang Camera; tổng quan dùng ảnh preview gần nhất.
+- Pipeline Vision thực: YOLO → MediaPipe Pose → skeleton 25 khớp → SDA-GCN.
+- InsightFace nhận diện người thân và phát hiện người chưa có trong danh sách.
+- Tự động chọn CPU/CUDA cho PyTorch; trên Windows có thể dùng DirectML cho InsightFace.
+- Lấy mẫu theo source timeline, bounded buffer và bỏ frame khi quá tải để không chặn camera.
+- Chuyển event từ Vision thread sang asyncio bằng bounded, non-blocking dispatcher.
+- Chống ghi trùng, lưu SQLite, tạo snapshot từ đúng frame phát hiện và phát cảnh báo qua SSE.
+- Dashboard cho phép xem cảnh báo, xác nhận an toàn, báo sai và quản lý người thân.
 
-An Tâm Home biến camera USB, video hoặc luồng RTSP thành hệ thống giám sát an toàn chạy trên Local Hub:
+## Công nghệ
 
-- Phát hiện người và ước lượng keypoint bằng YOLO/MediaPipe.
-- Phân loại hành vi té ngã bằng mô hình SDAGCN trên skeleton 25 khớp.
-- Nhận diện người thân và phát hiện người lạ bằng InsightFace.
-- Chuẩn hóa sự kiện vision, chống ghi trùng và lưu vào SQLite.
-- Phát cảnh báo realtime đến dashboard, hỗ trợ xác nhận an toàn, báo nhầm hoặc yêu cầu trợ giúp.
-- Dùng LangGraph cho diễn giải và quy trình human-in-the-loop; quyết định an toàn cốt lõi không phụ thuộc LLM.
-
-## Người dùng mục tiêu
-
-- Chính: gia đình có người cao tuổi, người sống một mình hoặc người cần được theo dõi an toàn.
-- Phụ: người chăm sóc, cơ sở chăm sóc quy mô nhỏ và nhóm vận hành hệ thống camera nội bộ.
-
-## Tech Stack
-
-| Lớp | Công nghệ |
+| Thành phần | Công nghệ |
 |---|---|
-| Vision AI | YOLO, MediaPipe, SDAGCN, InsightFace, PyTorch |
-| AI workflow | LangGraph, LangChain, OpenAI tùy chọn |
-| Backend | FastAPI, Python 3.11, SSE |
+| Vision | Ultralytics YOLO, MediaPipe, SDA-GCN, InsightFace |
+| Inference | PyTorch, ONNX Runtime, DirectML trên Windows |
+| Backend | Python 3.11, FastAPI, Uvicorn, SSE |
 | Frontend | React, TypeScript, Vite |
-| Database | SQLite trên Local Hub |
-| DevOps | Docker Compose, GitHub Actions |
-| Testing | pytest, Ruff |
+| Dữ liệu | SQLite và snapshot lưu cục bộ |
+| Agent tùy chọn | LangGraph, LangChain, OpenAI |
+| Kiểm thử | pytest, Ruff, TypeScript/Vite build |
 
-## Quick Start
+## Yêu cầu
 
-Yêu cầu: Windows/Linux 64-bit, Python 3.11, Node.js 20+ và webcam hoặc video mẫu.
+- Python 3.11 64-bit.
+- Node.js 20 trở lên.
+- Windows 10/11 hoặc Linux 64-bit.
+- Webcam, video local hoặc URL RTSP nếu chạy camera thật.
+- Model local và tài nguyên InsightFace nếu bật `VISION_ENGINE=legacy`.
 
-```powershell
-# 1. Clone
-git clone https://github.com/AI20K-Build-Phase-Cohort-3/P-227.git
-cd P-227
+Máy không có CUDA vẫn chạy được. Trong cấu hình Windows đã kiểm chứng, Torch chạy CPU và InsightFace dùng Intel/AMD GPU qua DirectML nếu provider có sẵn.
 
-# 2. Python environment
+## Cài đặt trên Windows
+
+Chạy trong CMD tại thư mục repository:
+
+```cmd
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-Copy-Item .env.example .env
+.venv\Scripts\activate
+python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
-python -m pip install -e vision\torchlight
-
-# 3. Frontend
 cd frontend
-npm ci
-Copy-Item .env.example .env
+npm.cmd ci
 cd ..
 ```
 
-Chạy backend và frontend trong hai terminal:
+Hai file dependency Python duy nhất đều nằm tại root:
 
-```powershell
-# Terminal 1
-.\.venv\Scripts\python.exe -m uvicorn src.main:app --reload --port 8000
+- `requirements.txt`: dependency trực tiếp của ứng dụng.
+- `requirements-lock-cpu.txt`: bản khóa chính xác của môi trường Windows, Torch CPU và DirectML đã kiểm chứng.
 
-# Terminal 2
-cd frontend
-npm run dev
+Muốn tái tạo đúng môi trường đã kiểm chứng:
+
+```cmd
+python -m pip install -r requirements-lock-cpu.txt
+```
+
+## Cấu hình `.env`
+
+Tạo `.env` tại root. Cấu hình tối thiểu để chạy Vision thực:
+
+```dotenv
+APP_ENV=development
+APP_HOST=127.0.0.1
+APP_PORT=8000
+LOG_LEVEL=INFO
+CORS_ORIGINS=http://localhost:5173
+DATABASE_URL=sqlite:///./data/app.db
+
+VISION_ENGINE=legacy
+VISION_DEVICE=auto
+VISION_LEGACY_YOLO_PATH=yolov8n.pt
+VISION_LEGACY_CONFIG_PATH=work_dir/fall_detection/ntu25-bone/config.yaml
+VISION_LEGACY_CHECKPOINT_PATH=work_dir/fall_detection/ntu25-bone/runs-best_val.pt
+VISION_LEGACY_IDENTITY_ENABLED=true
+VISION_LEGACY_IDENTITY_PROVIDER=auto
+VISION_LEGACY_INSIGHTFACE_ROOT=C:/Users/<user>/.insightface
+VISION_LEGACY_KNOWN_FACES_DIR=register face
+VISION_TEMPORAL_TARGET_SAMPLE_RATE=15
+VISION_TEMPORAL_BUFFER_CAPACITY=8
+
+OPENAI_API_KEY=
+MODEL_NAME=gpt-4o-mini
+```
+
+Ghi chú:
+
+- `VISION_ENGINE=mock` chạy ứng dụng không cần model thật và mặc định không tạo cảnh báo giả.
+- `VISION_DEVICE=auto` chọn CUDA khi Torch hỗ trợ, nếu không sẽ dùng CPU.
+- `VISION_LEGACY_IDENTITY_PROVIDER=auto` ưu tiên DirectML trên Windows, sau đó mới dùng provider phù hợp còn lại.
+- Các đường dẫn Vision tương đối được tính từ `src/vision`; cũng có thể dùng đường dẫn tuyệt đối.
+- Không đưa API key, RTSP credentials, database, snapshot hoặc dữ liệu khuôn mặt vào Git.
+
+## Tài nguyên model
+
+Pipeline thực yêu cầu:
+
+```text
+src/vision/yolov8n.pt
+src/vision/work_dir/fall_detection/ntu25-bone/config.yaml
+src/vision/work_dir/fall_detection/ntu25-bone/runs-best_val.pt
+<VISION_LEGACY_INSIGHTFACE_ROOT>/models/buffalo_l/
+```
+
+Checkpoint SDA-GCN được load strict. Không tự đổi graph, tensor shape, window, stride, preprocessing hoặc class mapping để né lỗi checkpoint.
+
+## Chạy ứng dụng
+
+Mở hai cửa sổ CMD.
+
+Backend:
+
+```cmd
+cd /d D:\VinAI\Project\P-227
+.venv\Scripts\activate
+python -m uvicorn src.main:app --host 127.0.0.1 --port 8000
+```
+
+Frontend:
+
+```cmd
+cd /d D:\VinAI\Project\P-227\frontend
+npm.cmd run dev
 ```
 
 Truy cập:
 
-- Dashboard: `http://localhost:5173`
-- Swagger API: `http://localhost:8000/docs`
-- Health check: `http://localhost:8000/health`
+- Dashboard: <http://localhost:5173>
+- Swagger API: <http://127.0.0.1:8000/docs>
+- Health check: <http://127.0.0.1:8000/health>
 
-Để chạy vision, cần đặt model local đúng vị trí được mô tả tại [docs/vision.md](docs/vision.md), sau đó:
+Vite tự proxy `/api` và `/snapshots` sang backend port 8000. Nếu thấy `ECONNREFUSED`, backend chưa chạy hoặc đang chạy sai port. Nếu Uvicorn báo `Errno 10048`, port 8000 đã có tiến trình khác sử dụng.
 
-```powershell
-cd vision
-..\.venv\Scripts\python.exe realtime.py
-```
-
-## Luồng hoạt động
+## Luồng xử lý
 
 ```mermaid
 flowchart LR
-    CAM[Camera thường / Video / RTSP]
-    subgraph HUB[Một Local Smart Hub]
-        VISION[Ingest + YOLO + Pose + Face]
-        EVENT[Temporal Event Engine]
-        API[FastAPI + LangGraph/HITL]
-        DB[(SQLite + Local Media)]
-        VISION --> EVENT --> API --> DB
-    end
-    UI[React Dashboard]
-    CAM -->|video thô trong LAN| VISION
-    API <-->|REST + SSE| UI
+    CAMERA[Webcam / Video / RTSP] --> CAPTURE[CameraRuntime]
+    CAPTURE --> HUB[FrameHub]
+    HUB --> STREAM[MJPEG / Preview]
+    HUB --> SAMPLE[Temporal Sample Buffer]
+    SAMPLE --> WORKER[VisionWorker thread]
+    WORKER --> REAL[YOLO + Pose + SDA-GCN + InsightFace]
+    REAL --> SNAP[Snapshot đúng frame sự kiện]
+    SNAP --> BRIDGE[Thread-safe bounded dispatcher]
+    BRIDGE --> SINK[Async event sink]
+    SINK --> DB[(SQLite)]
+    SINK --> SSE[SSE alert_created]
+    STREAM --> UI[React Dashboard]
+    DB --> UI
+    SSE --> UI
 ```
 
-Không có Edge AI riêng cho từng camera; mọi model và dữ liệu được quản lý tập trung trên một Local Hub.
-
-![Sơ đồ một Local Hub xử lý toàn bộ AI](docs/architecture_diagram.png)
-
-## Cấu trúc dự án
-
-```text
-├── src/                 # FastAPI, agent, service và model API
-├── vision/              # Pipeline phát hiện ngã và người lạ
-├── frontend/            # Dashboard React/Vite
-├── database/            # Schema, query và dữ liệu mẫu SQLite
-├── tests/               # Test backend/agent/API
-├── docs/                # Tài liệu kỹ thuật dự án
-├── scripts/             # Setup và AI logging hooks
-├── eval/                # Bằng chứng đánh giá
-├── presentation/        # Tài liệu demo/pitch
-├── Dockerfile
-└── docker-compose.yml
-```
+Khi Vision chậm hơn camera, hệ thống giữ frame mới nhất và ghi nhận `dropped_frames` thay vì để camera hoặc frontend bị block. Có thể xem trạng thái bằng endpoint Vision status của từng camera.
 
 ## API chính
 
-| Method | Endpoint | Mục đích |
+| Method | Endpoint | Chức năng |
 |---|---|---|
-| GET | `/health` | Kiểm tra backend |
-| POST | `/api/v1/vision/events` | Nhận sự kiện từ vision |
-| GET | `/api/v1/alerts` | Danh sách cảnh báo |
-| GET | `/api/v1/alerts/stream` | Cảnh báo realtime qua SSE |
-| PATCH | `/api/v1/alerts/{id}` | Human-in-the-loop review |
-| GET | `/api/v1/cameras` | Danh sách camera |
-| PATCH | `/api/v1/cameras/{id}/source` | Cập nhật nguồn camera |
-| GET/POST | `/api/v1/persons` | Quản lý người thân |
-| GET | `/api/v1/history` | Lịch sử sự kiện |
-| GET | `/api/v1/overview` | Dữ liệu tổng quan dashboard |
+| `GET` | `/health` | Kiểm tra backend |
+| `GET` | `/api/v1/cameras` | Danh sách và trạng thái camera |
+| `GET/PATCH/DELETE` | `/api/v1/cameras/{id}` | Xem, sửa hoặc xoá camera đã tắt |
+| `POST` | `/api/v1/cameras/{id}/start` | Bật camera |
+| `POST` | `/api/v1/cameras/{id}/stop` | Tắt camera |
+| `GET` | `/api/v1/cameras/{id}/stream` | Luồng MJPEG |
+| `GET` | `/api/v1/cameras/{id}/preview` | Ảnh gần nhất |
+| `POST` | `/api/v1/cameras/{id}/vision/enable` | Bật Vision |
+| `POST` | `/api/v1/cameras/{id}/vision/disable` | Tắt Vision |
+| `GET` | `/api/v1/cameras/{id}/vision/status` | Metrics, device và temporal status |
+| `GET` | `/api/v1/alerts` | Danh sách cảnh báo |
+| `GET` | `/api/v1/alerts/stream` | Cảnh báo realtime qua SSE |
+| `PATCH` | `/api/v1/alerts/{id}` | Human-in-the-loop review |
+| `GET/POST` | `/api/v1/persons` | Danh sách hoặc thêm người thân |
+| `GET` | `/api/v1/history` | Lịch sử sự kiện |
+| `GET` | `/api/v1/overview` | Dữ liệu tổng quan |
 
-Chi tiết tại [docs/api.md](docs/api.md).
+## Kiểm thử
 
-## Kiểm tra
+Backend regression nên chạy bằng Mock engine để độc lập với model và phần cứng:
 
-```powershell
-.\.venv\Scripts\python.exe -m pytest -q
-.\.venv\Scripts\python.exe -m ruff check src tests
-cd frontend
-npm run build
+```cmd
+set VISION_ENGINE=mock
+set VISION_LEGACY_IDENTITY_ENABLED=false
+python -m pytest -q
+python -m pip check
 ```
 
-## Tài liệu
+Frontend:
 
-| Tài liệu | Nội dung |
-|---|---|
-| [docs/README.md](docs/README.md) | Mục lục tài liệu |
-| [docs/setup.md](docs/setup.md) | Cài đặt và cấu hình |
-| [docs/architecture.md](docs/architecture.md) | Kiến trúc và luồng dữ liệu |
-| [docs/vision.md](docs/vision.md) | Vision pipeline và model |
-| [docs/api.md](docs/api.md) | API và event contract |
-| [docs/database.md](docs/database.md) | SQLite schema và seed |
-| [docs/frontend.md](docs/frontend.md) | Dashboard React |
-| [docs/deployment.md](docs/deployment.md) | Docker và vận hành |
-| [docs/testing.md](docs/testing.md) | Test và quality gate |
-| [docs/security.md](docs/security.md) | Quyền riêng tư và bảo mật |
-| [docs/troubleshooting.md](docs/troubleshooting.md) | Xử lý lỗi thường gặp |
-| [docs/roadmap.md](docs/roadmap.md) | Trạng thái và ưu tiên tiếp theo |
-| [README_GUIDE.md](README_GUIDE.md) | Hướng dẫn template AI20K ban đầu |
+```cmd
+cd frontend
+npm.cmd run build
+```
 
-## Trạng thái deliverables
+Smoke dependency và provider:
 
-- [x] Source code backend, frontend và vision
-- [x] README và tài liệu kỹ thuật
-- [x] Architecture diagram
-- [x] SQLite schema và API contract
-- [x] Test suite và CI workflow
-- [x] AI usage logging
-- [ ] Public deployment URL
-- [ ] Video demo hoàn chỉnh
-- [ ] Báo cáo benchmark model trên tập kiểm thử cuối
+```cmd
+python -c "import torch, onnxruntime as ort; print(torch.__version__, torch.cuda.is_available()); print(ort.get_available_providers())"
+```
 
-## Giới hạn hiện tại
+## Cấu trúc repository
 
-- Model weights và dữ liệu khuôn mặt không được lưu trong Git; phải cung cấp riêng trên Local Hub.
-- Vision realtime hiện ưu tiên webcam Windows và cần tiếp tục chuẩn hóa adapter RTSP/multi-camera.
-- SQLite phù hợp MVP một hub; triển khai nhiều node cần database và message transport khác.
-- Đây là hệ thống hỗ trợ cảnh báo, không thay thế thiết bị y tế hoặc dịch vụ khẩn cấp chuyên nghiệp.
+```text
+P-227/
+├── src/
+│   ├── api/                 # FastAPI routes
+│   ├── services/            # Camera, event, database và runtime services
+│   └── vision/              # Adapter, worker, graph, model và checkpoint Vision
+├── frontend/                # React/Vite dashboard
+├── database/schema.sql      # SQLite schema và triggers
+├── data/app.db              # Database local, sinh khi chạy
+├── snapshots/               # Ảnh bằng chứng local
+├── tests/                   # Backend, API, Vision và regression tests
+├── docs/                    # Tài liệu kỹ thuật
+├── requirements.txt
+└── requirements-lock-cpu.txt
+```
 
-## Nhóm phát triển
+## Dữ liệu và quyền riêng tư
 
-Dự án thuộc AI20K Build Phase Cohort 3. Danh sách thành viên và đóng góp được lưu trong [GitHub contributors](https://github.com/AI20K-Build-Phase-Cohort-3/P-227/graphs/contributors), `JOURNAL.md` và `WORKLOG.md`.
+- Video thô không được gửi lên cloud bởi pipeline Vision.
+- Snapshot chỉ được tạo khi có event và được phục vụ qua `/snapshots`.
+- SQLite, snapshot, model riêng và embedding khuôn mặt phải được bảo vệ như dữ liệu nhạy cảm.
+- Chỉ camera đã tắt và không còn lịch sử ràng buộc mới được xoá.
+- `alert_actions` là lịch sử append-only theo thiết kế database.
+
+## Tài liệu liên quan
+
+- [Cài đặt](docs/setup.md)
+- [Kiến trúc](docs/architecture.md)
+- [Vision pipeline](docs/vision.md)
+- [API](docs/api.md)
+- [Database](docs/database.md)
+- [Kiểm thử](docs/testing.md)
+- [Troubleshooting](docs/troubleshooting.md)
 
 ## License
 
-MIT. Xem [LICENSE](vision/LICENSE) cho phần mã vision được tích hợp. Sử dụng tự do cho mục đích giáo dục.
-
+Phần Vision tích hợp sử dụng giấy phép tại [src/vision/LICENSE](src/vision/LICENSE). Xem lịch sử repository để biết thông tin đóng góp của nhóm AI20K Build Phase Cohort 3.

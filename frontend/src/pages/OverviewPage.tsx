@@ -1,7 +1,6 @@
 import { Activity, AlertTriangle, ArrowRight, Camera, Check, HeartHandshake, RefreshCw, ShieldCheck, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { getOverview, type OverviewData } from "../api/overview";
-import { CameraStream } from "../components";
 import "./overview.css";
 import "./overviewApi.css";
 
@@ -36,7 +35,7 @@ export default function OverviewPage() {
   const alert = data.currentAlert;
   const statusAttention = data.systemStatus === "attention";
   return <div className="home-dashboard">
-    <header className="home-welcome"><div><p>{todayLabel}</p><h1>Chào Minh, gia đình hôm nay</h1></div><span><ShieldCheck /> Local Hub đang bảo vệ</span></header>
+    <header className="home-welcome"><div><p>{todayLabel}</p><h1>Tổng quan chăm sóc gia đình</h1></div><span><ShieldCheck /> Local Hub đang bảo vệ</span></header>
 
     <section className={`home-hero ${statusAttention ? "attention" : ""}`}>
       <div className="hero-copy"><span className="hero-status-icon">{statusAttention ? <AlertTriangle /> : <HeartHandshake />}</span><p className="hero-eyebrow"><i /> Trạng thái hiện tại</p><h2>{data.headline}</h2><p>{data.summary}</p></div>
@@ -50,11 +49,18 @@ export default function OverviewPage() {
 
     <section className="home-section"><SectionHeading title="Camera" description="Dữ liệu camera được quản lý bởi Local Hub." action="Mở camera" onAction={() => navigate("/camera")} />
       <div className="dashboard-camera-filters" role="group" aria-label="Lọc camera theo khu vực">{areas.map((area) => <button key={area.id} className={cameraArea === area.id ? "active" : ""} onClick={() => setCameraArea(area.id)}>{area.label}</button>)}</div>
-      <div className="home-camera-grid">{visibleCameras.map((camera) => <button className="home-camera-card" key={camera.id} onClick={() => navigate(`/camera?camera=${encodeURIComponent(camera.id)}`)}><span className="home-camera-preview">{camera.streamReady || camera.playbackUrl ? <CameraStream cameraId={camera.id} streamReady={camera.streamReady} streamUrl={camera.streamUrl} playbackUrl={camera.playbackUrl} /> : <span className="overview-camera-placeholder"><Camera /></span>}<span className={`camera-live ${camera.status}`}><i /> {camera.status === "online" ? "Ảnh gần nhất" : "Ngoại tuyến"}</span><span className="dashboard-camera-name">{camera.name}</span></span><span className="camera-card-copy"><strong>{camera.name}</strong><small>{camera.lastSeenAt ? `Cập nhật ${formatTime(camera.lastSeenAt)}` : "Chưa có dữ liệu gần đây"}</small></span><ArrowRight /></button>)}</div>
+      <div className="home-camera-grid">{visibleCameras.map((camera) => <button className="home-camera-card" key={camera.id} onClick={() => navigate(`/camera?camera=${encodeURIComponent(camera.id)}`)}><span className="home-camera-preview"><CameraPreview camera={camera} /><span className={`camera-live ${camera.status}`}><i /> {camera.status === "online" ? "Ảnh gần nhất" : "Ngoại tuyến"}</span><span className="dashboard-camera-name">{camera.name}</span></span><span className="camera-card-copy"><strong>{camera.location || "Chưa đặt vị trí"}</strong><small>{camera.lastSeenAt ? `Cập nhật ${formatTime(camera.lastSeenAt)}` : "Chưa có dữ liệu gần đây"}</small>{camera.visionEnabled && <small>Vision: {camera.visionStatus ?? "đang chờ"}</small>}</span><ArrowRight /></button>)}</div>
     </section>
 
     <section className="home-section insight-section"><article className="ai-insight-card"><span className="insight-icon"><Sparkles /></span><div><p>TÓM TẮT HỆ THỐNG · HÔM NAY</p><h2>{statusAttention ? "Có dữ liệu cần được kiểm tra" : "Mọi thứ đang diễn ra bình thường"}</h2><ul>{data.insights.map((insight) => <li key={insight}><Check /> {insight}</li>)}</ul></div></article></section>
   </div>;
+}
+
+function CameraPreview({ camera }: { camera: OverviewData["cameras"][number] }) {
+  const [failed, setFailed] = useState(false);
+  if (!camera.previewUrl || failed) return <span className="overview-camera-placeholder"><Camera /></span>;
+  const separator = camera.previewUrl.includes("?") ? "&" : "?";
+  return <img src={`${camera.previewUrl}${separator}v=${camera.previewVersion ?? 0}`} alt={`Ảnh gần nhất ${camera.name}`} onError={() => setFailed(true)} />;
 }
 
 function formatTime(value: string): string {

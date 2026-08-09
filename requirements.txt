@@ -1,47 +1,52 @@
-# Core
-fastapi>=0.115.0
-uvicorn[standard]>=0.34.0
-pydantic>=2.10.0
-pydantic-settings>=2.7.0
-python-dotenv>=1.0.0
+# GuardianCam Local Hub - Python 3.11
+# Install from the repository root:
+#   python -m pip install -r requirements.txt
+# For the exact tested Windows/Torch-CPU environment, use:
+#   python -m pip install -r requirements-lock-cpu.txt
 
-# AI / LangChain (Agent chưa nằm trong baseline event flow)
-langchain>=0.3.0
-langchain-openai>=0.3.0
-langgraph>=0.2.0
+# API and configuration
+fastapi==0.141.1
+uvicorn[standard]==0.52.1
+pydantic==2.13.4
+pydantic-settings==2.14.2
+python-dotenv==1.2.2
 
-# Vision
+# Agent and LLM integration
+langchain==1.3.14
+langchain-openai==1.4.1
+langgraph==1.2.10
+
+# Production Vision pipeline
 einops==0.8.2
-Flask==3.1.3
-h5py==3.16.0
 insightface==1.0.1
-matplotlib==3.10.9
 mediapipe==0.10.14
 numpy==2.2.6
-onnxruntime>=1.23.2
+onnx==1.22.0
+onnxruntime==1.26.0
+onnxruntime-directml==1.24.4; platform_system == "Windows"
 opencv-contrib-python==5.0.0.93
-pandas==2.3.3
+pillow==12.2.0
+protobuf==4.25.3
 PyYAML==6.0.3
+scikit-image==0.25.2
 scikit-learn==1.7.2
+scipy==1.15.3
+torch==2.5.1
+torchvision==0.20.1
+ultralytics==8.4.110
+
+# Legacy Vision training, evaluation and utilities retained in src/vision
+Flask==3.1.3
+h5py==3.16.0
+matplotlib==3.10.9
+pandas==2.3.3
 seaborn==0.13.2
 tensorboard==2.17.1
 tensorboardX==2.6.5
-torch==2.5.1
-torchaudio==2.5.1
-torchvision==0.20.1
 tqdm==4.70.0
-ultralytics==8.4.110
 
-# Database (uncomment as needed)
-# sqlalchemy>=2.0.0
-# alembic>=1.14.0
-# psycopg2-binary>=2.9.0
-
-# Vector Store (uncomment as needed)
-# chromadb>=0.5.0
-
-# Dev tools
-ruff>=0.8.0
-pytest>=8.0.0
-pytest-asyncio>=0.24.0
-httpx>=0.28.0
+# Tests and quality gates
+httpx==0.28.1
+pytest==9.1.1
+pytest-asyncio==1.4.0
+ruff==0.16.1

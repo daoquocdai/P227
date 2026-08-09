@@ -1,8 +1,11 @@
+import base64
+import binascii
 from datetime import date
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from src.services.face_identity_service import FaceEnrollmentError
 from src.services.person_service import FaceProfileNotFoundError, PersonNotFoundError, person_service
 
 router = APIRouter(prefix="/persons", tags=["Persons"])
@@ -25,7 +28,7 @@ class PersonUpdate(BaseModel):
 
 
 class FaceCreate(BaseModel):
-    quality: float = Field(ge=0, le=1)
+    image_data_url: str = Field(min_length=10, max_length=14_000_000)
     angle: str = Field(default="Ảnh mới", max_length=100)
 
 
@@ -50,7 +53,13 @@ async def update_person(person_id: str, person: PersonUpdate):
 @router.post("/{person_id}/faces", status_code=201)
 async def add_face(person_id: str, face: FaceCreate):
     try:
-        return person_service.add_face(person_id, face)
+        header, separator, payload = face.image_data_url.partition(",")
+        if separator != "," or not header.startswith("data:image/") or ";base64" not in header:
+            raise FaceEnrollmentError("Face image must be a base64 image data URL")
+        image_bytes = base64.b64decode(payload, validate=True)
+        return person_service.add_face(person_id, image_bytes, face.angle)
+    except (binascii.Error, FaceEnrollmentError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except PersonNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Không tìm thấy người thân") from exc
 

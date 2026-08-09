@@ -2,79 +2,121 @@
 
 ifeq ($(OS),Windows_NT)
 SHELL := cmd.exe
-.SHELLFLAGS := /C
-PYTHON ?= .venv/Scripts/python.exe
+.SHELLFLAGS := /D /C
+SYSTEM_PYTHON ?= python
+PYTHON ?= .venv\Scripts\python.exe
 NPM ?= npm.cmd
 else
+SYSTEM_PYTHON ?= python3
 PYTHON ?= .venv/bin/python
 NPM ?= npm
 endif
 
-BACKEND_HOST ?= 0.0.0.0
+BACKEND_HOST ?= 127.0.0.1
 BACKEND_PORT ?= 8000
 FRONTEND_DIR := frontend
-PY_PATHS := src/main.py src/config.py src/database.py src/api src/models src/services tests/conftest.py tests/test_api tests/test_services mock_yolo.py
+PYTHON_PATHS := src tests
+COMPOSE := docker compose
 
-.PHONY: help install install-backend install-frontend \
-	dev dev-backend dev-frontend mock \
-	db-init \
-	test lint format format-check build check \
-	docker-up docker-down docker-logs clean
+.PHONY: help setup venv install install-backend install-frontend \
+	dev dev-backend dev-frontend db-init \
+	test lint format format-check frontend-build check \
+	docker-config docker-build docker-up docker-start docker-stop docker-down \
+	docker-restart docker-rebuild docker-ps docker-logs docker-logs-backend \
+	docker-logs-frontend docker-health clean
 
-help: ## Hiển thị danh sách lệnh
-	@$(PYTHON) -c "import re; from pathlib import Path; text=Path('Makefile').read_text(encoding='utf-8'); [print(f'{m.group(1):18} {m.group(2)}') for m in re.finditer(r'^([a-zA-Z0-9_-]+):.*?## (.*)$$', text, re.M)]"
+help: ## Show available commands
+	@$(SYSTEM_PYTHON) -c "import re; from pathlib import Path; text=Path('Makefile').read_text(encoding='utf-8'); [print(f'{m.group(1):22} {m.group(2)}') for m in re.finditer(r'^([a-zA-Z0-9_-]+):.*?## (.*)$$', text, re.M)]"
 
-install: install-backend install-frontend ## Cài dependencies backend và frontend
+setup: venv install ## Create the virtual environment and install all dependencies
 
-install-backend: ## Cài dependencies Python vào virtual environment
+venv: ## Create .venv when it does not exist
+ifeq ($(OS),Windows_NT)
+	@if not exist ".venv\Scripts\python.exe" $(SYSTEM_PYTHON) -m venv .venv
+else
+	@test -x "$(PYTHON)" || $(SYSTEM_PYTHON) -m venv .venv
+endif
+
+install: install-backend install-frontend ## Install backend and frontend dependencies
+
+install-backend: ## Install Python dependencies into .venv
+	$(PYTHON) -m pip install --upgrade pip
 	$(PYTHON) -m pip install -r requirements.txt
 
-install-frontend: ## Cài dependencies frontend theo package-lock.json
+install-frontend: ## Install exact frontend dependencies from package-lock.json
 	cd $(FRONTEND_DIR) && $(NPM) ci
 
-dev: ## Hướng dẫn chạy cả backend và frontend
-	@echo Chay make dev-backend va make dev-frontend trong hai cua so CMD rieng.
+dev: ## Explain how to start local development
+	@echo Run "make dev-backend" and "make dev-frontend" in two terminals.
 
-dev-backend: ## Chạy FastAPI development server
+dev-backend: ## Start FastAPI with automatic reload
 	$(PYTHON) -m uvicorn src.main:app --reload --host $(BACKEND_HOST) --port $(BACKEND_PORT)
 
-dev-frontend: ## Chạy Vite development server
+dev-frontend: ## Start the Vite development server
 	cd $(FRONTEND_DIR) && $(NPM) run dev
 
-mock: ## Gửi một sự kiện YOLO giả lập tới backend đang chạy
-	$(PYTHON) mock_yolo.py
+db-init: ## Initialize or migrate data/app.db
+	$(PYTHON) -c "from src.database import initialize_database; initialize_database(); print('Database ready.')"
 
-db-init: ## Khởi tạo data/app.db từ database/schema.sql
-	$(PYTHON) -c "from src.database import initialize_database; print(initialize_database())"
-
-test: ## Chạy toàn bộ backend tests
+test: ## Run the complete Python test suite
 	$(PYTHON) -m pytest -q
 
-lint: ## Kiểm tra Python bằng Ruff
-	$(PYTHON) -m ruff check $(PY_PATHS)
+lint: ## Run Ruff lint checks
+	$(PYTHON) -m ruff check $(PYTHON_PATHS)
 
-format: ## Tự động format Python bằng Ruff
-	$(PYTHON) -m ruff format $(PY_PATHS)
-	$(PYTHON) -m ruff check --fix $(PY_PATHS)
+format: ## Format Python and apply safe Ruff fixes
+	$(PYTHON) -m ruff format $(PYTHON_PATHS)
+	$(PYTHON) -m ruff check --fix $(PYTHON_PATHS)
 
-format-check: ## Kiểm tra format mà không sửa file
-	$(PYTHON) -m ruff format --check $(PY_PATHS)
+format-check: ## Verify Python formatting without changing files
+	$(PYTHON) -m ruff format --check $(PYTHON_PATHS)
 
-build: ## Type-check và build frontend production
+frontend-build: ## Type-check and build the production frontend
 	cd $(FRONTEND_DIR) && $(NPM) run build
 
-check: lint format-check test build ## Chạy toàn bộ kiểm tra trước khi commit/push
+check: lint format-check test frontend-build ## Run all checks before publishing changes
 
-docker-up: ## Build và chạy Local Hub backend bằng Docker
-	docker compose up --build -d
+docker-config: ## Validate and render the Compose configuration
+	$(COMPOSE) config --quiet
 
-docker-down: ## Dừng Docker services
-	docker compose down
+docker-build: docker-config ## Build the CPU-only backend and frontend images
+	$(COMPOSE) build
 
-docker-logs: ## Theo dõi log backend container
-	docker compose logs -f backend
+docker-up: docker-config ## Build and start the complete stack in the background
+	$(COMPOSE) up --build --detach
 
-clean: ## Xóa cache/build artifacts sinh tự động trong workspace
+docker-start: docker-config ## Start the stack without rebuilding images
+	$(COMPOSE) up --detach
+
+docker-stop: ## Stop containers without removing them
+	$(COMPOSE) stop
+
+docker-down: ## Stop and remove containers and the Compose network
+	$(COMPOSE) down
+
+docker-restart: ## Restart existing containers
+	$(COMPOSE) restart
+
+docker-rebuild: docker-config ## Rebuild images from scratch and restart the stack
+	$(COMPOSE) build --no-cache
+	$(COMPOSE) up --detach
+
+docker-ps: ## Show service and health status
+	$(COMPOSE) ps
+
+docker-logs: ## Follow logs from all services
+	$(COMPOSE) logs --follow --tail=200
+
+docker-logs-backend: ## Follow backend logs
+	$(COMPOSE) logs --follow --tail=200 backend
+
+docker-logs-frontend: ## Follow frontend logs
+	$(COMPOSE) logs --follow --tail=200 frontend
+
+docker-health: ## Call the backend health endpoint from its container
+	$(COMPOSE) exec backend python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).read().decode())"
+
+clean: ## Remove generated caches and frontend build output
 ifeq ($(OS),Windows_NT)
 	@for /d /r src %%d in (__pycache__) do @if exist "%%d" rmdir /s /q "%%d"
 	@for /d /r tests %%d in (__pycache__) do @if exist "%%d" rmdir /s /q "%%d"

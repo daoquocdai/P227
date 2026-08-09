@@ -17,12 +17,18 @@ export interface CameraDto {
   name: string;
   location: string;
   status: "connecting" | "online" | "offline" | "ended" | "error";
+  error?: string | null;
   last_seen_at?: string | null;
   active: boolean;
+  vision_enabled: boolean;
+  vision_status?: "disabled" | "waiting_for_source" | "running" | "error" | null;
   source_kind: "video_file" | "webcam" | "rtsp";
+  source: string;
   playback_url?: string | null;
   stream_url: string;
   stream_ready: boolean;
+  preview_url?: string | null;
+  preview_version?: number | null;
   events?: CameraEventDto[];
 }
 
@@ -43,4 +49,23 @@ export function updateCameraSource(
     method: "PATCH",
     body: JSON.stringify(source),
   });
+}
+
+export function updateCamera(
+  id: string,
+  data: { name:string; location:string; source_kind:CameraDto["source_kind"]; source_uri?:string; playback_path?:string },
+): Promise<CameraDto> {
+  return apiClient(`/cameras/${encodeURIComponent(id)}`, { method:"PATCH", body:JSON.stringify(data) });
+}
+
+export function deleteCamera(id:string): Promise<void> {
+  return apiClient(`/cameras/${encodeURIComponent(id)}`, { method:"DELETE" });
+}
+
+export function setCameraEnabled(id: string, enabled: boolean): Promise<unknown> {
+  return apiClient(`/cameras/${encodeURIComponent(id)}/${enabled ? "start" : "stop"}`, { method: "POST" });
+}
+
+export function setCameraVision(id: string, enabled: boolean): Promise<unknown> {
+  return apiClient(`/cameras/${encodeURIComponent(id)}/vision/${enabled ? "enable" : "disable"}`, { method: "POST" });
 }

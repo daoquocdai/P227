@@ -1,9 +1,11 @@
+import hashlib
 import logging
 import threading
 from collections.abc import Callable
 
 from src.models.vision import VisionResult
 from src.services.frame_hub import FrameHub
+from src.services.media_paths import SNAPSHOT_ROOT, valid_snapshot_name
 from src.vision.engine import VisionEngine
 from src.vision.session import VisionSession
 
@@ -124,7 +126,41 @@ class VisionWorker:
                 session.mark_processed(packet.frame_id)
                 if self.sample_buffer is not None:
                     self.sample_buffer.note_result(packet, result.metadata)
+                self._attach_event_snapshot(packet, result)
                 if self.on_result and self.is_enabled(camera_id):
                     self.on_result(result)
 
             source.wait_for_update(after_version=current_version, timeout=0.5)
+
+    @staticmethod
+    def _attach_event_snapshot(packet, result: VisionResult) -> None:
+        """Persist the exact processed frame before the event crosses into asyncio."""
+        if not result.events or result.metadata.get("engine") != "legacy":
+            return
+        if all(valid_snapshot_name(event.metadata.get("snapshot_path")) for event in result.events):
+            return
+        try:
+            import cv2
+
+            ok, encoded = cv2.imencode(".jpg", packet.frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            if not ok:
+                raise RuntimeError("OpenCV could not encode the event snapshot")
+            identity = f"{packet.camera_id}:{packet.frame_id}:{packet.captured_at}".encode()
+            digest = hashlib.sha256(identity).hexdigest()[:16]
+            safe_camera = "".join(
+                char if char.isalnum() or char in "-_" else "-" for char in packet.camera_id
+            )
+            filename = f"vision-{safe_camera}-{packet.frame_id}-{digest}.jpg"
+            SNAPSHOT_ROOT.mkdir(parents=True, exist_ok=True)
+            destination = SNAPSHOT_ROOT / filename
+            temporary = destination.with_suffix(".jpg.tmp")
+            temporary.write_bytes(encoded.tobytes())
+            temporary.replace(destination)
+            for event in result.events:
+                event.metadata["snapshot_path"] = filename
+        except Exception:  # noqa: BLE001 - snapshot failure must not stop Vision or event delivery
+            logger.exception(
+                "Could not persist Vision event snapshot camera=%s frame=%s",
+                packet.camera_id,
+                packet.frame_id,
+            )

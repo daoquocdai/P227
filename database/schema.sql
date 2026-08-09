@@ -91,6 +91,7 @@ CREATE TABLE cameras (
         CHECK (operational_status IN ('online', 'offline', 'error')),
     last_seen_at TEXT,
     is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+    vision_enabled INTEGER NOT NULL DEFAULT 1 CHECK (vision_enabled IN (0, 1)),
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     CHECK (

@@ -23,7 +23,7 @@ class SettingsConflictError(Exception):
 
 
 class SettingsService:
-    def get(self) -> dict[str, Any]:
+    def get(self, camera_runtime=None, vision=None) -> dict[str, Any]:
         with database_connection() as connection:
             settings = {
                 row["setting_key"]: json.loads(row["value_json"])
@@ -32,14 +32,31 @@ class SettingsService:
             users = connection.execute("SELECT * FROM users ORDER BY role, display_name").fetchall()
             cameras = connection.execute(
                 """SELECT c.id, c.name, c.location_label, c.operational_status, c.last_seen_at,
-                          c.is_active, COALESCE(cs.source_kind, c.source_type) AS source_kind
+                          c.is_active, c.vision_enabled,
+                          COALESCE(cs.source_kind, c.source_type) AS source_kind
                    FROM cameras c LEFT JOIN camera_sources cs ON cs.camera_id = c.id ORDER BY c.name"""
             ).fetchall()
+            camera_items = []
+            for camera in cameras:
+                runtime_id = camera["name"] if camera["name"].startswith("camera-") else camera["id"]
+                runtime_state = camera_runtime.get_status(runtime_id) if camera_runtime is not None else None
+                vision_state = vision.get_status(runtime_id) if vision is not None else None
+                camera_items.append(
+                    dict(camera)
+                    | {
+                        "operational_status": (
+                            runtime_state["status"] if camera["is_active"] and runtime_state else "offline"
+                        ),
+                        "vision_status": vision_state["status"] if vision_state else "disabled",
+                        "is_active": bool(camera["is_active"]),
+                        "vision_enabled": bool(camera["vision_enabled"]),
+                    }
+                )
             return {
                 "general": settings["general"],
                 "notifications": settings["notifications"],
                 "users": [self._user(connection, user) for user in users],
-                "cameras": [dict(camera) | {"is_active": bool(camera["is_active"])} for camera in cameras],
+                "cameras": camera_items,
             }
 
     def update_group(self, group: str, values: dict[str, Any]) -> dict[str, Any]:
@@ -106,16 +123,6 @@ class SettingsService:
                 (str(uuid4()), user_id, permission, int(granted)),
             )
         return next(user for user in self.get()["users"] if user["id"] == user_id)
-
-    def update_camera(self, camera_id: str, active: bool) -> dict[str, Any]:
-        with database_connection() as connection:
-            updated = connection.execute(
-                "UPDATE cameras SET is_active = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? OR name = ?",
-                (int(active), camera_id, camera_id),
-            )
-            if updated.rowcount == 0:
-                raise SettingsNotFoundError(camera_id)
-        return self.get()
 
     @staticmethod
     def _user(connection, user) -> dict[str, Any]:

@@ -19,6 +19,7 @@ from src.config import get_settings
 from src.database import initialize_database
 from src.runtime import LocalRuntime
 from src.services.event_service import vision_event_sink
+from src.services.face_identity_service import face_gallery
 from src.services.vision_event_dispatcher import ThreadsafeVisionEventDispatcher
 
 
@@ -27,6 +28,7 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     print(f"Starting {settings.app_name} in {settings.app_env} mode")
     initialize_database()
+    face_gallery.reload()
     vision_event_sink.start()
     consumer = asyncio.create_task(vision_event_sink.consume(), name="vision-event-consumer")
     dispatcher = ThreadsafeVisionEventDispatcher(vision_event_sink)
@@ -40,6 +42,7 @@ async def lifespan(app: FastAPI):
     app.state.local_runtime = runtime
     app.state.vision_event_dispatcher = dispatcher
     runtime.start()
+    runtime.restore_persisted_state()
     try:
         yield
     finally:
