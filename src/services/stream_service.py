@@ -1,3 +1,6 @@
+import asyncio
+from collections.abc import Awaitable, Callable
+
 import cv2
 
 from src.services.frame_hub import FrameHub
@@ -75,3 +78,43 @@ class StreamService:
                 + jpg
                 + b"\r\n"
             )
+
+    async def mjpeg_async(
+        self,
+        camera_id: str,
+        is_disconnected: Callable[[], Awaitable[bool]],
+    ):
+        """Stream MJPEG without keeping shutdown alive after client disconnect."""
+        last_frame_id = -1
+
+        while not await is_disconnected():
+            packet = await asyncio.to_thread(
+                self.frame_hub.wait_for_next,
+                camera_id,
+                last_frame_id,
+                0.5,
+            )
+            if packet is None:
+                continue
+
+            last_frame_id = packet.frame_id
+            encoded = await asyncio.to_thread(self._encode_jpeg, packet.frame)
+            if encoded is None:
+                continue
+
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n"
+                b"Cache-Control: no-cache\r\n"
+                b"\r\n"
+                + encoded
+                + b"\r\n"
+            )
+
+    def _encode_jpeg(self, frame) -> bytes | None:
+        ok, encoded = cv2.imencode(
+            ".jpg",
+            frame,
+            [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality],
+        )
+        return encoded.tobytes() if ok else None

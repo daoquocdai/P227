@@ -5,6 +5,13 @@ line-length = 120
 select = ["E", "F", "I", "N", "W", "UP"]
 ignore = ["E501"]
 
+# Preserve established mathematical notation and checkpoint-facing class names in
+# the retained V1 implementation. These exceptions are naming/style-only.
+[lint.per-file-ignores]
+"src/vision/fusion/*.py" = ["N803", "N806"]
+"src/vision/graph/*.py" = ["E741", "N803", "N806", "UP032"]
+"src/vision/model/SDAGCN.py" = ["E721", "F401", "N801", "N803", "N806", "UP008"]
+
 [format]
 quote-style = "double"
 indent-style = "space"
