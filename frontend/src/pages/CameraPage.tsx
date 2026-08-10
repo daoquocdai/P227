@@ -24,7 +24,9 @@ export default function CameraPage() {
   };
   useEffect(load, []);
   useEffect(() => {
-    const timer = window.setInterval(() => void getCameras().then(setFeeds).catch(() => undefined), 5_000);
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void getCameras().then(setFeeds).catch(() => undefined);
+    }, 5_000);
     return () => window.clearInterval(timer);
   }, []);
   useEffect(()=>{const sync=()=>setFullscreen(document.fullscreenElement===viewerRef.current);document.addEventListener("fullscreenchange",sync);return()=>document.removeEventListener("fullscreenchange",sync)},[]);

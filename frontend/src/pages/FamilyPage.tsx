@@ -5,6 +5,9 @@ import "./family.css";
 
 type Person = PersonDto & { color: string };
 const colors = ["blue", "teal", "violet", "orange", "pink"];
+const supportedFaceTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
+const maxFaceFileSize = 10 * 1024 * 1024;
+const faceDataUrlPattern = /^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/;
 const toPerson = (person: PersonDto): Person => ({ ...person, color: colors[person.id.charCodeAt(0) % colors.length] });
 const normalize = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/g, "d").toLowerCase();
 const averageQuality = (person: Person) => person.faces.length ? person.faces.reduce((sum, face) => sum + face.quality, 0) / person.faces.length : 0;
@@ -76,8 +79,20 @@ export default function FamilyPage() {
   const chooseFace = (file?: File) => {
     setFaceError("");
     if (!file) { setFaceImage(null); return; }
+    if (!supportedFaceTypes.has(file.type)) {
+      setFaceImage(null); setFaceError("Chỉ hỗ trợ ảnh JPEG, PNG hoặc WebP."); return;
+    }
+    if (file.size > maxFaceFileSize) {
+      setFaceImage(null); setFaceError("Ảnh không được vượt quá 10 MB."); return;
+    }
+    setFaceImage(null);
     const reader = new FileReader();
-    reader.onload = () => setFaceImage(typeof reader.result === "string" ? reader.result : null);
+    reader.onload = () => {
+      if (typeof reader.result === "string" && faceDataUrlPattern.test(reader.result)) {
+        setFaceImage(reader.result); return;
+      }
+      setFaceImage(null); setFaceError("Dữ liệu ảnh đã chọn không hợp lệ.");
+    };
     reader.onerror = () => setFaceError("Không thể đọc ảnh đã chọn.");
     reader.readAsDataURL(file);
   };

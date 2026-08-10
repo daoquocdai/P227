@@ -1,4 +1,4 @@
-import { apiClient } from "./client";
+import { apiClient, apiCommand } from "./client";
 
 export interface CameraEventDto {
   id: string;
@@ -59,7 +59,7 @@ export function updateCamera(
 }
 
 export function deleteCamera(id:string): Promise<void> {
-  return apiClient(`/cameras/${encodeURIComponent(id)}`, { method:"DELETE" });
+  return apiCommand(`/cameras/${encodeURIComponent(id)}`, { method:"DELETE" });
 }
 
 export function setCameraEnabled(id: string, enabled: boolean): Promise<unknown> {
