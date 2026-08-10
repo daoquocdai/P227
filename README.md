@@ -198,4 +198,4 @@ bất kỳ markdown viewer/editor nào (VS Code, Obsidian, GitHub UI, …).
 
 ## 📄 License
 
-MIT — Sử dụng tự do cho mục đích giáo dục.
+MIT — Sử dụng tự do cho mục đích giáo dục..
