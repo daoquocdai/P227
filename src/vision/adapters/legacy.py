@@ -52,6 +52,11 @@ class LegacyVisionEngine(VisionEngine):
     isolated per camera because both retain stream state.
     """
 
+    EXPECTED_MODEL = {"num_class": 2, "num_person": 1, "num_point": 25, "in_channels": 3}
+    EXPECTED_BONE_MODALITY = True
+    OUTPUT_CLASSES = 2
+    FALL_CLASS_ID = 1
+
     def __init__(
         self,
         yolo_path: str | Path = VISION_ROOT / "yolov8n.pt",
@@ -285,17 +290,15 @@ class LegacyVisionEngine(VisionEngine):
             transformed = deps.apply_kalman_filter(transformed)
             data_numpy = transformed.transpose(2, 0, 1)
             data_numpy = data_numpy[:, :, :, np.newaxis]
-            bone_data = np.zeros_like(data_numpy)
-            for v1, v2 in deps.ntu_pairs:
-                bone_data[:, :, v1] = data_numpy[:, :, v1] - data_numpy[:, :, v2]
-
-            data_tensor = deps.torch.FloatTensor(bone_data).unsqueeze(0).to(self._device)
+            model_data = self._model_input(data_numpy, deps)
+            data_tensor = deps.torch.FloatTensor(model_data).unsqueeze(0).to(self._device)
             if tuple(data_tensor.shape) != (1, 3, WINDOW_SIZE, 25, 1):
                 raise RuntimeError(f"Invalid SDA-GCN input shape: {tuple(data_tensor.shape)}")
             with deps.torch.inference_mode():
                 output = self._action_model(data_tensor)
-                if tuple(output.shape) != (1, 2):
-                    raise RuntimeError(f"Binary SDA-GCN must return shape (1, 2), got {tuple(output.shape)}")
+                expected_output = (1, self.OUTPUT_CLASSES)
+                if tuple(output.shape) != expected_output:
+                    raise RuntimeError(f"SDA-GCN must return shape {expected_output}, got {tuple(output.shape)}")
                 if not bool(deps.torch.isfinite(output).all().item()):
                     raise RuntimeError("Binary SDA-GCN returned non-finite logits")
                 probability_tensor = deps.torch.softmax(output, dim=1).squeeze(0)
@@ -311,7 +314,7 @@ class LegacyVisionEngine(VisionEngine):
             state["legacy_last_raw_class"] = raw_class
             state["legacy_last_probabilities"] = probabilities
 
-            if raw_class == 1:
+            if raw_class == self.FALL_CLASS_ID:
                 if not state.get("legacy_pending_fall", False) and state.get("legacy_current_action") != FALL_LABEL:
                     state["legacy_pending_fall"] = True
                     state["legacy_fall_start_time"] = window_source_timestamps[-1]
@@ -392,12 +395,14 @@ class LegacyVisionEngine(VisionEngine):
         with self.config_path.open("r", encoding="utf-8") as handle:
             config = deps.yaml.safe_load(handle)
         model_args = dict(config.get("model_args") or {})
-        expected = {"num_class": 2, "num_person": 1, "num_point": 25, "in_channels": 3}
+        expected = self.EXPECTED_MODEL
         actual = {name: model_args.get(name) for name in expected}
         if actual != expected:
-            raise LegacyVisionInitializationError(f"Expected binary SDA-GCN config {expected}, got {actual}")
-        if config.get("test_feeder_args", {}).get("bone") is not True:
-            raise LegacyVisionInitializationError("Legacy SDA-GCN config must use bone modality")
+            raise LegacyVisionInitializationError(f"Expected SDA-GCN config {expected}, got {actual}")
+        if config.get("test_feeder_args", {}).get("bone") is not self.EXPECTED_BONE_MODALITY:
+            raise LegacyVisionInitializationError(
+                f"SDA-GCN config bone modality must be {self.EXPECTED_BONE_MODALITY}"
+            )
         model_args["graph"] = "src.vision.graph.ntu_rgb_d_hierarchy.Graph"
 
         device = self._select_torch_device(deps.torch)
@@ -412,7 +417,7 @@ class LegacyVisionEngine(VisionEngine):
         try:
             action_model.load_state_dict(weights, strict=True)
         except Exception as exc:
-            raise LegacyVisionInitializationError(f"Invalid binary SDA-GCN checkpoint: {exc}") from exc
+            raise LegacyVisionInitializationError(f"Invalid SDA-GCN checkpoint: {exc}") from exc
         action_model.eval()
 
         face_app = None
@@ -556,6 +561,13 @@ class LegacyVisionEngine(VisionEngine):
             apply_kalman_filter=apply_kalman_filter,
             ntu_pairs=ntu_pairs,
         )
+
+    @staticmethod
+    def _model_input(data_numpy: np.ndarray, deps: SimpleNamespace) -> np.ndarray:
+        bone_data = np.zeros_like(data_numpy)
+        for v1, v2 in deps.ntu_pairs:
+            bone_data[:, :, v1] = data_numpy[:, :, v1] - data_numpy[:, :, v2]
+        return bone_data
 
     def _camera_context(self, camera_id: str, session: VisionSession) -> LegacyCameraContext:
         with self._lock:

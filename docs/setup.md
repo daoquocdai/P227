@@ -1,6 +1,7 @@
 # Cài đặt, vận hành và troubleshooting
 
-README root là quick start. Tài liệu này gom toàn bộ phần setup + lỗi vận hành để tránh phải duy trì hai file trùng nội dung.
+[`QUICKSTART.md`](../QUICKSTART.md) là luồng CMD ngắn nhất từ lúc clone. Tài
+liệu này giải thích cấu hình, vận hành và lỗi thường gặp.
 
 ## 1. Yêu cầu môi trường
 
@@ -12,11 +13,13 @@ README root là quick start. Tài liệu này gom toàn bộ phần setup + lỗ
 
 Nên chạy command từ root repository để path database/snapshot/model nhất quán.
 
-## 2. Cài Python
+## 2. Clone và cài backend
 
 Windows CMD:
 
 ```cmd
+git clone https://github.com/AI20K-Build-Phase-Cohort-3/P-227.git
+cd P-227
 python -m venv .venv
 .venv\Scripts\activate
 python -m pip install --upgrade pip
@@ -42,6 +45,7 @@ python -m pip check
 cd frontend
 npm.cmd ci
 cd ..
+copy /Y .env.example .env
 ```
 
 ## 4. Cấu hình `.env`
@@ -63,7 +67,7 @@ VISION_LEGACY_YOLO_PATH=yolov8n.pt
 VISION_LEGACY_CONFIG_PATH=work_dir/fall_detection/ntu25-bone/config.yaml
 VISION_LEGACY_CHECKPOINT_PATH=work_dir/fall_detection/ntu25-bone/runs-best_val.pt
 
-VISION_LEGACY_IDENTITY_ENABLED=true
+VISION_LEGACY_IDENTITY_ENABLED=false
 VISION_LEGACY_IDENTITY_PROVIDER=auto
 VISION_LEGACY_INSIGHTFACE_ROOT=C:/Users/<user>/.insightface
 
@@ -73,16 +77,18 @@ VISION_TEMPORAL_BUFFER_CAPACITY=8
 
 Lưu ý:
 
-- `VISION_ENGINE=mock` dùng cho test/backend smoke độc lập model.
+- `VISION_ENGINE=mock` dùng cho test/backend smoke độc lập model và không tự phát cảnh báo giả.
+- `VISION_ENGINE=legacy`/`legacy_v1` chọn V1 binary/bone.
+- `VISION_ENGINE=legacy_v2` chọn V2 năm lớp/joint; raw class `1` là fall candidate.
 - `VISION_DEVICE=auto` chọn device theo runtime thật.
-- Identity production lấy gallery từ SQLite.
+- Identity production lấy gallery từ SQLite và chỉ nên bật sau khi có đủ `buffalo_l`.
 - `register face/` không phải production source of truth.
 - Không commit `.env`, credential, database, snapshot, face data.
 - Path Vision tương đối được resolve từ `src/vision`.
 
 ## 5. Model local
 
-Legacy Vision cần các artifact tương ứng:
+V1 cần các artifact tương ứng:
 
 ```text
 src/vision/yolov8n.pt
@@ -91,6 +97,17 @@ src/vision/work_dir/fall_detection/ntu25-bone/runs-best_val.pt
 <VISION_LEGACY_INSIGHTFACE_ROOT>/models/buffalo_l/
 ```
 
+V2 dùng chung YOLO nhưng thay model action bằng:
+
+```text
+src/vision/work_dir/fall_detection/joint/config.yaml
+src/vision/work_dir/fall_detection/joint/runs-best_val.pt
+```
+
+InsightFace `buffalo_l` chỉ bắt buộc khi identity được bật. Thiếu model identity
+không nên được xử lý bằng cách sửa thuật toán; hãy tắt identity hoặc cung cấp
+đúng artifact.
+
 Checkpoint SDA-GCN load strict. Thiếu/sai artifact phải sửa artifact/config, không thay model math để né lỗi.
 
 ## 6. Khởi động hệ thống
@@ -98,6 +115,7 @@ Checkpoint SDA-GCN load strict. Thiếu/sai artifact phải sửa artifact/confi
 Backend:
 
 ```cmd
+cd /d <duong-dan-den-P-227>
 .venv\Scripts\activate
 python -m uvicorn src.main:app --host 127.0.0.1 --port 8000
 ```
@@ -105,7 +123,7 @@ python -m uvicorn src.main:app --host 127.0.0.1 --port 8000
 Frontend ở terminal khác:
 
 ```cmd
-cd frontend
+cd /d <duong-dan-den-P-227>\frontend
 npm.cmd run dev
 ```
 
@@ -146,6 +164,10 @@ Các metric nên xem:
 - `buffer_depth`
 - `overload`
 - `temporal_fidelity`
+
+Docker Compose cố định Vision và identity provider ở CPU. Đây là profile dễ
+tái tạo, không phải tuyên bố strict realtime. Webcam USB theo index thường
+không đi qua Docker Desktop trên Windows; chạy native cho trường hợp đó.
 
 ## 9. Runtime data
 

@@ -25,6 +25,7 @@ Base URL nghiệp vụ: `/api/v1`.
 | `POST` | `/api/v1/cameras/{id}/stop` | Persist desired OFF + stop runtime |
 | `GET` | `/api/v1/cameras/{id}/stream` | Live MJPEG |
 | `GET` | `/api/v1/cameras/{id}/preview` | Latest JPEG preview |
+| `GET` | `/api/v1/cameras/{id}/runtime/status` | Observed capture status |
 | `POST` | `/api/v1/cameras/{id}/vision/enable` | Persist Vision desired ON |
 | `POST` | `/api/v1/cameras/{id}/vision/disable` | Persist Vision desired OFF + reset session |
 | `GET` | `/api/v1/cameras/{id}/vision/status` | Device, result, dispatcher, temporal status |
@@ -54,6 +55,7 @@ Nếu chưa có frame:
 | `GET` | `/api/v1/alerts/stream` | SSE ready/alert/heartbeat |
 | `PATCH` | `/api/v1/alerts/{id}` | Human review status/note |
 | `POST` | `/api/v1/alerts/{id}/read` | Đánh dấu đã đọc |
+| `POST` | `/api/v1/alerts/confirm` | Compatibility endpoint cho client cũ |
 
 UI status hiện hành có thể gồm:
 
@@ -123,6 +125,9 @@ Mutation face profile phải làm refresh/invalidate FaceGallery.
 | `GET` | `/api/v1/settings` | General/notification/camera settings |
 | `PATCH` | `/api/v1/settings/general` | Cập nhật cấu hình chung |
 | `PATCH` | `/api/v1/settings/notifications` | Cập nhật notification settings |
+| `POST` | `/api/v1/settings/users` | Tạo người dùng |
+| `PATCH` | `/api/v1/settings/users/{id}` | Bật/tắt người dùng |
+| `PATCH` | `/api/v1/settings/users/{id}/permissions/{permission}` | Cập nhật quyền |
 | `PATCH` | `/api/v1/settings/cameras/{id}` | Đồng bộ camera/Vision desired state |
 
 Nếu Settings thay camera/Vision ON/OFF, backend phải đồng bộ cả persistence và runtime; không chỉ sửa UI.

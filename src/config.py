@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     mock_vision_event_frame_ids: str = ""
 
     # Vision. Mock remains the safe default; Legacy imports and models are lazy.
-    vision_engine: Literal["mock", "legacy"] = "mock"
+    vision_engine: Literal["mock", "legacy", "legacy_v1", "legacy_v2"] = "mock"
     vision_device: str = "auto"
     vision_legacy_yolo_path: Path = VISION_ROOT / "yolov8n.pt"
     vision_legacy_config_path: Path = (
@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     )
     vision_legacy_checkpoint_path: Path = (
         VISION_ROOT / "work_dir" / "fall_detection" / "ntu25-bone" / "runs-best_val.pt"
+    )
+    vision_v2_config_path: Path = VISION_ROOT / "work_dir" / "fall_detection" / "joint" / "config.yaml"
+    vision_v2_checkpoint_path: Path = (
+        VISION_ROOT / "work_dir" / "fall_detection" / "joint" / "runs-best_val.pt"
     )
     vision_legacy_known_faces_dir: Path = VISION_ROOT / "register face"
     vision_legacy_identity_enabled: bool = False

@@ -31,7 +31,7 @@ flowchart LR
     MJPEG[MJPEG Stream]
     BUFFER[VisionSampleBuffer\nbounded]
     WORKER[VisionWorker]
-    ENGINE[LegacyVisionEngine]
+    ENGINE[Selected VisionEngine\nV1 / V2 / Mock]
     SNAP[Event Snapshot]
     DISPATCH[Thread-safe Dispatcher]
     SINK[Async Event Sink]
@@ -102,7 +102,7 @@ flowchart LR
     PROFILE[(face_profiles)]
     SERVICE[Face Identity Service]
     GALLERY[FaceGallery\nin-memory cache]
-    ENGINE[LegacyVisionEngine]
+    ENGINE[Real VisionEngine\nV1 or V2]
     FACE[Camera Face Embedding]
     MATCH[Known / Unknown]
 
@@ -186,12 +186,12 @@ flowchart TB
     RESTORE --> RUNTIME
 
     RUNTIME --> C1[Camera: online / connecting / offline / error]
-    RUNTIME --> V1[Vision: disabled / waiting_for_source / running / error]
+    RUNTIME --> VS[Vision: disabled / waiting_for_source / running / error]
 ```
 
 Một camera desired ON có thể tạm `offline/error`; điều đó không được tự đổi persisted desired state thành OFF.
 
-## 8. Deployment boundary V1
+## 8. Deployment boundary
 
 ```mermaid
 flowchart TB
@@ -215,4 +215,4 @@ flowchart TB
     FASTAPI <--> SQLITE
 ```
 
-V1 không yêu cầu Redis, Kafka, Celery hoặc một AI service riêng cho từng camera.
+Runtime không yêu cầu Redis, Kafka, Celery hoặc một AI service riêng cho từng camera.

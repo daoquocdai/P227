@@ -26,26 +26,27 @@ def wait_until(predicate, timeout=2.0):
     raise AssertionError("condition was not reached")
 
 
-def test_legacy_event_snapshot_uses_exact_processed_frame(tmp_path, monkeypatch):
+def test_real_vision_event_snapshot_uses_exact_processed_frame(tmp_path, monkeypatch):
     monkeypatch.setattr("src.vision.worker.SNAPSHOT_ROOT", tmp_path)
-    source = packet("cam01", 42)
-    source.frame[:, :] = (12, 34, 56)
-    event = VisionEvent(type="fall_confirmed", confidence=0.9)
-    result = VisionResult(
-        "cam01",
-        42,
-        source.captured_at,
-        time.time(),
-        1.0,
-        events=[event],
-        metadata={"engine": "legacy"},
-    )
+    for frame_id, engine_name in enumerate(("legacy", "legacy_v2"), start=42):
+        source = packet("cam01", frame_id)
+        source.frame[:, :] = (12, 34, 56)
+        event = VisionEvent(type="fall_confirmed", confidence=0.9)
+        result = VisionResult(
+            "cam01",
+            frame_id,
+            source.captured_at,
+            time.time(),
+            1.0,
+            events=[event],
+            metadata={"engine": engine_name},
+        )
 
-    VisionWorker._attach_event_snapshot(source, result)
+        VisionWorker._attach_event_snapshot(source, result)
 
-    snapshot = tmp_path / event.metadata["snapshot_path"]
-    assert snapshot.is_file()
-    assert snapshot.read_bytes().startswith(b"\xff\xd8")
+        snapshot = tmp_path / event.metadata["snapshot_path"]
+        assert snapshot.is_file()
+        assert snapshot.read_bytes().startswith(b"\xff\xd8")
 
 
 class RecordingEngine(VisionEngine):
