@@ -1,5 +1,5 @@
 import { AlertTriangle, Camera, Check, Image, Plus, RefreshCw, Search, ShieldCheck, Trash2, UsersRound, X } from "lucide-react";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { addFace, createPerson, deleteFace, getPeople, updatePerson, type PersonDto } from "../api/persons";
 import "./family.css";
 
@@ -31,12 +31,17 @@ export default function FamilyPage() {
   const [faceFlow, setFaceFlow] = useState(false);
   const [faceImage, setFaceImage] = useState<string | null>(null);
   const [faceError, setFaceError] = useState("");
+  const faceReaderRef = useRef<FileReader | null>(null);
 
   const load = () => {
     setLoading(true); setError(false);
     getPeople().then((items) => setPeople(items.map(toPerson))).catch(() => setError(true)).finally(() => setLoading(false));
   };
   useEffect(load, []);
+  useEffect(() => () => {
+    faceReaderRef.current?.abort();
+    faceReaderRef.current = null;
+  }, []);
 
   const selected = people.find((person) => person.id === selectedId) ?? null;
   const visible = useMemo(() => people.filter((person) => {
@@ -76,7 +81,12 @@ export default function FamilyPage() {
     try { replacePerson(await addFace(selected.id, faceImage)); setFaceFlow(false); setFaceImage(null); setFaceError(""); }
     catch { setFaceError("Không thể trích xuất khuôn mặt. Hãy chọn ảnh rõ mặt và thử lại."); }
   };
+  const closeFaceFlow = () => {
+    faceReaderRef.current?.abort(); faceReaderRef.current = null;
+    setFaceFlow(false); setFaceImage(null); setFaceError("");
+  };
   const chooseFace = (file?: File) => {
+    faceReaderRef.current?.abort(); faceReaderRef.current = null;
     setFaceError("");
     if (!file) { setFaceImage(null); return; }
     if (!supportedFaceTypes.has(file.type)) {
@@ -87,13 +97,22 @@ export default function FamilyPage() {
     }
     setFaceImage(null);
     const reader = new FileReader();
+    faceReaderRef.current = reader;
     reader.onload = () => {
+      if (faceReaderRef.current !== reader) return;
+      faceReaderRef.current = null;
       if (typeof reader.result === "string" && faceDataUrlPattern.test(reader.result)) {
         setFaceImage(reader.result); return;
       }
       setFaceImage(null); setFaceError("Dữ liệu ảnh đã chọn không hợp lệ.");
     };
-    reader.onerror = () => setFaceError("Không thể đọc ảnh đã chọn.");
+    reader.onerror = () => {
+      if (faceReaderRef.current !== reader) return;
+      faceReaderRef.current = null; setFaceError("Không thể đọc ảnh đã chọn.");
+    };
+    reader.onabort = () => {
+      if (faceReaderRef.current === reader) faceReaderRef.current = null;
+    };
     reader.readAsDataURL(file);
   };
 
@@ -137,6 +156,6 @@ export default function FamilyPage() {
 
     {adding && <div className="family-modal-backdrop"><form className="add-person-modal" onSubmit={submitPerson}><header><div><h2>Thêm người thân</h2><p>Tạo hồ sơ người quen mới.</p></div><button type="button" onClick={() => setAdding(false)}><X /></button></header><label><span>Tên hiển thị</span><input name="name" required /></label><label><span>Mối quan hệ</span><input name="relationship" required /></label><label><span>Ngày sinh</span><input name="birth" type="date" /></label><label><span>Ghi chú</span><textarea name="notes" /></label><footer><button type="button" onClick={() => setAdding(false)}>Huỷ</button><button type="submit">Thêm người thân</button></footer></form></div>}
 
-    {faceFlow && selected && <div className="face-flow-backdrop"><article className="face-flow"><header><div><h2>Thêm ảnh khuôn mặt</h2><p>{selected.name}</p></div><button onClick={() => { setFaceFlow(false); setFaceImage(null); setFaceError(""); }}><X /></button></header><div className="capture-guidance"><Camera /><div><strong>Chọn ảnh rõ mặt và đủ sáng</strong><p>InsightFace xử lý cục bộ, embedding được lưu trong SQLite và gallery cập nhật ngay.</p></div></div><label className="capture-zone"><Image /><strong>{faceImage ? "Chọn ảnh khác" : "Chọn ảnh khuôn mặt"}</strong><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => chooseFace(event.target.files?.[0])} hidden /></label>{faceImage && <div className="face-preview"><img src={faceImage} alt={`Ảnh khuôn mặt ${selected.name}`} /></div>}{faceError && <p className="family-form-error">{faceError}</p>}<footer><button onClick={() => setFaceImage(null)} disabled={!faceImage}><RefreshCw /> Chọn lại</button><button className="upload-button" disabled={!faceImage} onClick={() => void saveFace()}>Tạo embedding và lưu</button></footer></article></div>}
+    {faceFlow && selected && <div className="face-flow-backdrop"><article className="face-flow"><header><div><h2>Thêm ảnh khuôn mặt</h2><p>{selected.name}</p></div><button onClick={closeFaceFlow}><X /></button></header><div className="capture-guidance"><Camera /><div><strong>Chọn ảnh rõ mặt và đủ sáng</strong><p>InsightFace xử lý cục bộ, embedding được lưu trong SQLite và gallery cập nhật ngay.</p></div></div><label className="capture-zone"><Image /><strong>{faceImage ? "Chọn ảnh khác" : "Chọn ảnh khuôn mặt"}</strong><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => chooseFace(event.target.files?.[0])} hidden /></label>{faceImage && <div className="face-preview"><img src={faceImage} alt={`Ảnh khuôn mặt ${selected.name}`} /></div>}{faceError && <p className="family-form-error">{faceError}</p>}<footer><button onClick={() => setFaceImage(null)} disabled={!faceImage}><RefreshCw /> Chọn lại</button><button className="upload-button" disabled={!faceImage} onClick={() => void saveFace()}>Tạo embedding và lưu</button></footer></article></div>}
   </section>;
 }

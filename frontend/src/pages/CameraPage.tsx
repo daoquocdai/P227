@@ -16,16 +16,21 @@ export default function CameraPage() {
   const [fullscreen, setFullscreen] = useState(false);
   const selectorRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<HTMLDivElement>(null);
+  const camerasRequestInFlight = useRef(false);
 
   const load = () => {
+    if (camerasRequestInFlight.current) return;
+    camerasRequestInFlight.current = true;
     setLoading(true); setError(false);
     getCameras().then((items) => { setFeeds(items); setSelectedId((current) => items.some((item) => item.id === current) ? current : items[0]?.id || ""); })
-      .catch(() => setError(true)).finally(() => setLoading(false));
+      .catch(() => setError(true)).finally(() => { camerasRequestInFlight.current = false; setLoading(false); });
   };
   useEffect(load, []);
   useEffect(() => {
     const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") void getCameras().then(setFeeds).catch(() => undefined);
+      if (document.visibilityState !== "visible" || camerasRequestInFlight.current) return;
+      camerasRequestInFlight.current = true;
+      void getCameras().then(setFeeds).catch(() => undefined).finally(() => { camerasRequestInFlight.current = false; });
     }, 5_000);
     return () => window.clearInterval(timer);
   }, []);
