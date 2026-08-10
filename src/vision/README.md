@@ -1,4 +1,15 @@
-B1: Từ thư mục gốc repository, chạy `python -m pip install -r requirements.txt`.
-B2: pip install -e torchlight
-B3; chạy file recognize/capture_data.py để đăng kí khuôn mặt,bấm c để bắt đầu lấy ảnh, c để dừng. Muốn thoát thì bấm q
-Muốn chạy thì chạy file realtime.py, đừng chạy realtimentu.py
+# GuardianCam Vision V1 runtime
+
+Production enters this package through `src.runtime.LocalRuntime` and
+`LegacyVisionEngine`; files here are not standalone applications.
+
+Required inference artifacts:
+
+- `yolov8n.pt`
+- `work_dir/fall_detection/ntu25-bone/config.yaml`
+- `work_dir/fall_detection/ntu25-bone/runs-best_val.pt`
+
+The unchanged standalone V1 oracle lives in `legacy/vision_v1/realtime.py` and
+is exercised only by `tests/test_vision/golden_regression.py`. Face identity in
+production is supplied by the database-backed `FaceGallery`; old standalone
+register and recognize applications are not runtime dependencies.

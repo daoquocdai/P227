@@ -1,4 +1,4 @@
-"""Phase G golden runner for realtime.py versus LegacyVisionEngine.
+"""Phase G golden runner for the V1 oracle versus LegacyVisionEngine.
 
 This module is intentionally not named ``test_*.py``: it is a controlled,
 resource-backed measurement harness, not part of the fast unit suite.
@@ -36,7 +36,7 @@ from src.vision.session import VisionSession
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 VISION_ROOT = PROJECT_ROOT / "src" / "vision"
-NORMAL_VIDEO = VISION_ROOT / "demo" / "videodemo" / "demo.mp4"
+NORMAL_VIDEO = PROJECT_ROOT / "tests" / "fixtures" / "vision_v1" / "demo.mp4"
 FALL_CANDIDATE_VIDEO = PROJECT_ROOT / "frontend" / "public" / "videos" / "kich_ban3.mp4"
 
 
@@ -292,7 +292,14 @@ def run_reference(
     render_overlays: bool = True,
     record_heavy_arrays: bool = True,
 ) -> GoldenTrace:
-    from src.vision import realtime
+    # The standalone V1 oracle historically lived in src/vision and relied on
+    # that directory for YAML-driven imports such as model.* and graph.*.
+    # Preserve that import environment after moving the oracle out of the
+    # production namespace; do not alter the reference implementation itself.
+    vision_import_root = str(VISION_ROOT)
+    if vision_import_root not in sys.path:
+        sys.path.insert(0, vision_import_root)
+    from legacy.vision_v1 import realtime
 
     trace = GoldenTrace("legacy-overlay" if render_overlays else "legacy-clean-v1")
     cursor = SourceCursor()
