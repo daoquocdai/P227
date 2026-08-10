@@ -187,4 +187,5 @@ Dự án thuộc AI20K Build Phase Cohort 3. Danh sách thành viên và đóng 
 
 ## License
 
-MIT. Xem [LICENSE](vision/LICENSE) cho phần mã vision được tích hợp.
+MIT. Xem [LICENSE](vision/LICENSE) cho phần mã vision được tích hợp. Sử dụng tự do cho mục đích giáo dục.
+
