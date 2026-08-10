@@ -24,7 +24,7 @@ set VISION_LEGACY_IDENTITY_ENABLED=false
 python -m pytest -q
 ```
 
-Mock engine không phải bằng chứng Real Legacy Vision.
+Mock engine không phải bằng chứng cho Vision V1/V2 thật.
 
 ## 2. Integration
 
@@ -42,7 +42,7 @@ Phải bao phủ:
 
 ## 3. Golden Vision
 
-Golden test so standalone clean oracle với `LegacyVisionEngine`/Local Hub trên cùng:
+Golden test so standalone oracle bất biến với engine Local Hub tương ứng trên cùng:
 
 - video;
 - model/config/checkpoint;
@@ -62,6 +62,22 @@ Evidence cần ghi:
 - numeric tolerance.
 
 Unit test count không thay thế golden evidence.
+
+V1:
+
+```cmd
+.venv\Scripts\python.exe tests\test_vision\golden_regression.py --frames 127
+```
+
+V2:
+
+```cmd
+.venv\Scripts\python.exe tests\test_vision\v2_golden_regression.py --frames 127
+```
+
+Kết quả exact mong đợi cho từng stage: `first_divergence=null`, `max_abs=0.0`
+và `exact_equal=true`. Các runner cần model/video fixture thật và có thể tốn
+nhiều thời gian hơn unit tests.
 
 ## 4. System E2E
 
@@ -85,7 +101,7 @@ Acceptance tối thiểu:
 
 Real Vision acceptance bổ sung:
 
-14. Legacy model load thành công.
+14. Engine V1 hoặc V2 được chọn load strict thành công.
 15. Vision `running` hoặc `degraded`, không integration `error`.
 16. Fixed-video/person test đi qua model thật.
 17. Event thật đi tới DB/SSE/frontend.
@@ -139,14 +155,14 @@ Strict Vision capacity yêu cầu profile hardware chứng minh được contrac
 python -m pip check
 ```
 
-### Targeted Ruff
+### Ruff toàn repository
 
-Lint code production/integration đã thay đổi; không chạy auto-fix hàng loạt legacy training/model code chỉ để làm sạch số lượng lỗi.
-
-Ví dụ:
+Hai oracle standalone có per-file ignore hẹp trong `ruff.toml` để giữ byte-identical;
+không auto-fix chúng. Toàn repository phải lint sạch:
 
 ```cmd
-python -m ruff check src\config.py src\runtime.py src\services src\vision\adapters src\vision\worker.py
+python -m ruff check .
+python -m ruff check src tests
 ```
 
 ### Frontend build
@@ -162,7 +178,7 @@ npm.cmd run build
 git diff --check
 ```
 
-## 8. Release/V1 candidate gate
+## 8. Release candidate gate
 
 Trước demo/release candidate:
 
@@ -176,7 +192,8 @@ Trước demo/release candidate:
 - [ ] Preview/MJPEG PASS.
 - [ ] Persons/Settings/History database-backed behavior PASS.
 - [ ] FaceGallery persistence/invalidation PASS.
-- [ ] Real Legacy strict model load PASS.
+- [ ] Real engine được chọn strict model load PASS.
+- [ ] Golden regression của engine được chọn PASS.
 - [ ] Fixed-video Real Vision smoke PASS.
 - [ ] Event → DB → SSE → frontend E2E PASS.
 - [ ] Snapshot evidence/missing behavior PASS.
@@ -230,7 +247,7 @@ Final verdict:
 
 ## 10. Không được dùng làm bằng chứng duy nhất
 
-- “104 tests passed”.
+- Chỉ một con số tổng tests passed mà không ghi commit, profile và test command.
 - Mock engine.
 - Một screenshot frontend.
 - Một model prediction.

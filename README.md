@@ -8,7 +8,7 @@ GuardianCam là hệ thống giám sát an toàn chạy tại nhà: tiếp nhậ
 
 - Quản lý nhiều camera từ một SQLite database: tên, vị trí, nguồn phát và trạng thái bật/tắt.
 - Phát MJPEG liên tục ở trang Camera; tổng quan dùng ảnh preview gần nhất.
-- Pipeline Vision thực: YOLO → MediaPipe Pose → skeleton 25 khớp → SDA-GCN.
+- Hai pipeline Vision thực dùng chung Local Hub: V1 binary/bone và V2 năm lớp/joint.
 - InsightFace nhận diện người thân và phát hiện người chưa có trong danh sách.
 - Tự động chọn CPU/CUDA cho PyTorch; trên Windows có thể dùng DirectML cho InsightFace.
 - Lấy mẫu theo source timeline, bounded buffer và bỏ frame khi quá tải để không chặn camera.
@@ -34,15 +34,18 @@ GuardianCam là hệ thống giám sát an toàn chạy tại nhà: tiếp nhậ
 - Node.js 20 trở lên.
 - Windows 10/11 hoặc Linux 64-bit.
 - Webcam, video local hoặc URL RTSP nếu chạy camera thật.
-- Model local và tài nguyên InsightFace nếu bật `VISION_ENGINE=legacy`.
+- Model local tương ứng với `VISION_ENGINE`; tài nguyên InsightFace nếu bật identity.
 
 Máy không có CUDA vẫn chạy được. Trong cấu hình Windows đã kiểm chứng, Torch chạy CPU và InsightFace dùng Intel/AMD GPU qua DirectML nếu provider có sẵn.
 
-## Cài đặt trên Windows
+## Chạy nhanh trên Windows
 
-Chạy trong CMD tại thư mục repository:
+Hướng dẫn đầy đủ từ lúc clone nằm tại [QUICKSTART.md](QUICKSTART.md). Tóm tắt
+trong CMD:
 
 ```cmd
+git clone https://github.com/AI20K-Build-Phase-Cohort-3/P-227.git
+cd P-227
 python -m venv .venv
 .venv\Scripts\activate
 python -m pip install --upgrade pip
@@ -50,6 +53,7 @@ python -m pip install -r requirements.txt
 cd frontend
 npm.cmd ci
 cd ..
+copy /Y .env.example .env
 ```
 
 Hai file dependency Python duy nhất đều nằm tại root:
@@ -80,7 +84,7 @@ VISION_DEVICE=auto
 VISION_LEGACY_YOLO_PATH=yolov8n.pt
 VISION_LEGACY_CONFIG_PATH=work_dir/fall_detection/ntu25-bone/config.yaml
 VISION_LEGACY_CHECKPOINT_PATH=work_dir/fall_detection/ntu25-bone/runs-best_val.pt
-VISION_LEGACY_IDENTITY_ENABLED=true
+VISION_LEGACY_IDENTITY_ENABLED=false
 VISION_LEGACY_IDENTITY_PROVIDER=auto
 VISION_LEGACY_INSIGHTFACE_ROOT=C:/Users/<user>/.insightface
 VISION_LEGACY_KNOWN_FACES_DIR=register face
@@ -94,14 +98,16 @@ MODEL_NAME=gpt-4o-mini
 Ghi chú:
 
 - `VISION_ENGINE=mock` chạy ứng dụng không cần model thật và mặc định không tạo cảnh báo giả.
+- `VISION_ENGINE=legacy`/`legacy_v1` dùng V1 binary/bone; `legacy_v2` dùng V2 năm lớp/joint.
 - `VISION_DEVICE=auto` chọn CUDA khi Torch hỗ trợ, nếu không sẽ dùng CPU.
 - `VISION_LEGACY_IDENTITY_PROVIDER=auto` ưu tiên DirectML trên Windows, sau đó mới dùng provider phù hợp còn lại.
+- Chỉ bật identity sau khi đã cài đủ InsightFace `buffalo_l`; fall detection không phụ thuộc identity.
 - Các đường dẫn Vision tương đối được tính từ `src/vision`; cũng có thể dùng đường dẫn tuyệt đối.
 - Không đưa API key, RTSP credentials, database, snapshot hoặc dữ liệu khuôn mặt vào Git.
 
 ## Tài nguyên model
 
-Pipeline thực yêu cầu:
+V1 yêu cầu:
 
 ```text
 src/vision/yolov8n.pt
@@ -109,6 +115,15 @@ src/vision/work_dir/fall_detection/ntu25-bone/config.yaml
 src/vision/work_dir/fall_detection/ntu25-bone/runs-best_val.pt
 <VISION_LEGACY_INSIGHTFACE_ROOT>/models/buffalo_l/
 ```
+
+V2 thay hai artifact SDA-GCN bằng:
+
+```text
+src/vision/work_dir/fall_detection/joint/config.yaml
+src/vision/work_dir/fall_detection/joint/runs-best_val.pt
+```
+
+`buffalo_l` chỉ bắt buộc khi `VISION_LEGACY_IDENTITY_ENABLED=true`.
 
 Checkpoint SDA-GCN được load strict. Không tự đổi graph, tensor shape, window, stride, preprocessing hoặc class mapping để né lỗi checkpoint.
 
@@ -234,13 +249,13 @@ P-227/
 
 ## Tài liệu liên quan
 
-- [Cài đặt](docs/setup.md)
+- [Quickstart Windows CMD](QUICKSTART.md)
+- [Cài đặt và troubleshooting](docs/setup.md)
 - [Kiến trúc](docs/architecture.md)
-- [Vision pipeline](docs/vision.md)
+- [Sơ đồ kiến trúc](docs/architecture_diagram.md)
 - [API](docs/api.md)
-- [Database](docs/database.md)
 - [Kiểm thử](docs/testing.md)
-- [Troubleshooting](docs/troubleshooting.md)
+- [Gate 1](docs/Gate1.md)
 
 ## License
 

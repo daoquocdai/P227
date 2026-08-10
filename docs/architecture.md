@@ -4,7 +4,7 @@
 
 Tài liệu này mô tả các quyết định kỹ thuật và invariant của production Local Hub. Sơ đồ được tách riêng tại [architecture_diagram.md](architecture_diagram.md).
 
-Phạm vi V1 là **một tiến trình FastAPI** sở hữu:
+Runtime hiện tại là **một tiến trình FastAPI** sở hữu:
 
 - camera runtime;
 - FrameHub;
@@ -13,7 +13,7 @@ Phạm vi V1 là **một tiến trình FastAPI** sở hữu:
 - SQLite access;
 - API cho frontend.
 
-Không có AI node riêng cho từng camera và không cần Redis/Kafka/Celery trong V1.
+Không có AI node riêng cho từng camera và không cần Redis/Kafka/Celery.
 
 ## 2. Nguyên tắc thiết kế
 
@@ -114,7 +114,14 @@ Worker:
 
 ### VisionEngine
 
-V1 production dùng `LegacyVisionEngine`.
+Production chọn đúng một engine khi startup:
+
+- `LegacyVisionEngine` cho `legacy`/`legacy_v1` (binary, bone input);
+- `V2VisionEngine` cho `legacy_v2` (năm lớp, joint input);
+- `MockVisionEngine` chỉ cho smoke/test không phụ thuộc model.
+
+V2 kế thừa capture, pose, identity, temporal clock và event boundary của V1;
+khác biệt có chủ đích nằm ở SDA-GCN input/checkpoint/output mapping.
 
 Pipeline:
 
@@ -214,13 +221,14 @@ Vision observed state có thể gồm:
 
 `degraded` là fidelity/capacity status, không đồng nghĩa Vision `error`.
 
-## 6. Vision V1 contract
+## 6. Vision engine contracts
 
 ### Model
 
-- Input SDA-GCN: `(1, 3, 64, 25, 1)`.
+- Input SDA-GCN của cả hai engine: `(1, 3, 64, 25, 1)`.
 - NTU 25-joint graph theo config/checkpoint hiện tại.
-- Binary output theo class mapping đã train.
+- V1: bone modality, binary output theo class mapping đã train.
+- V2: joint modality, năm logits; chỉ raw class `1` là fall candidate.
 - Checkpoint strict load.
 
 ### Temporal semantics
@@ -265,7 +273,7 @@ persons + face_profiles
         ↓
 FaceGallery cache
         ↓
-LegacyVisionEngine
+LegacyVisionEngine / V2VisionEngine
 ```
 
 Quy tắc:
@@ -372,7 +380,7 @@ API không được trả raw `source_uri` chứa credential về frontend.
 
 Vision/business event không gửi raw frame/video qua JSON.
 
-## 13. Những gì V1 cố ý không có
+## 13. Những gì runtime cố ý không có
 
 - distributed broker;
 - nhiều database writer service;
@@ -385,7 +393,7 @@ Vision/business event không gửi raw frame/video qua JSON.
 ## 14. Tài liệu liên quan
 
 - [Architecture diagrams](architecture_diagram.md)
-- [Gate 1](gate1.md)
+- [Gate 1](Gate1.md)
 - [API](api.md)
 - [Setup](setup.md)
 - [Testing](testing.md)

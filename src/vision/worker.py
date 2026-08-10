@@ -135,7 +135,7 @@ class VisionWorker:
     @staticmethod
     def _attach_event_snapshot(packet, result: VisionResult) -> None:
         """Persist the exact processed frame before the event crosses into asyncio."""
-        if not result.events or result.metadata.get("engine") != "legacy":
+        if not result.events or result.metadata.get("engine") not in {"legacy", "legacy_v2"}:
             return
         if all(valid_snapshot_name(event.metadata.get("snapshot_path")) for event in result.events):
             return
