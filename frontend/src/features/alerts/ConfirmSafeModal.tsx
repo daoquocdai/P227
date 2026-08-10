@@ -1,0 +1,3 @@
+import { CircleCheck, X } from "lucide-react";
+export function ConfirmSafeModal({ subject, onCancel, onConfirm }: { subject: string; onCancel: () => void; onConfirm: () => void }) { return <div className="alert-modal-backdrop" role="presentation"><div className="alert-modal" role="dialog" aria-modal="true"><button className="modal-close" onClick={onCancel}><X /></button><span className="modal-icon safe"><CircleCheck /></span><h3>Bạn xác nhận {subject} hiện an toàn?</h3><p>Thao tác này sẽ đánh dấu sự kiện đã được kiểm tra bởi Minh Nguyễn.</p><div className="modal-actions"><button onClick={onCancel}>Quay lại</button><button className="confirm-safe" onClick={onConfirm}>Xác nhận an toàn</button></div></div></div>; }
+

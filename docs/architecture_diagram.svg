@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#334155"/></marker>
+    <style>
+      .title{font:700 32px Arial,sans-serif;fill:#0f172a}.subtitle{font:18px Arial,sans-serif;fill:#475569}
+      .section{font:700 22px Arial,sans-serif;fill:#0f172a}.label{font:700 17px Arial,sans-serif;fill:#0f172a}
+      .text{font:15px Arial,sans-serif;fill:#334155}.small{font:14px Arial,sans-serif;fill:#475569}
+      .box{fill:#fff;stroke:#64748b;stroke-width:2;rx:12}.hub{fill:#f8fafc;stroke:#2563eb;stroke-width:4;rx:24}
+      .vision{fill:#eff6ff;stroke:#3b82f6;stroke-width:2;rx:12}.backend{fill:#f0fdf4;stroke:#22c55e;stroke-width:2;rx:12}
+      .data{fill:#fff7ed;stroke:#f97316;stroke-width:2;rx:12}.client{fill:#faf5ff;stroke:#a855f7;stroke-width:2;rx:12}
+      .line{stroke:#334155;stroke-width:2.5;fill:none;marker-end:url(#arrow)}.dash{stroke-dasharray:8 6}
+    </style>
+  </defs>
+
+  <rect width="1600" height="1000" fill="#ffffff"/>
+  <text x="800" y="48" text-anchor="middle" class="title">Kiến trúc An Tâm Home — Một Local Hub xử lý toàn bộ AI</text>
+  <text x="800" y="78" text-anchor="middle" class="subtitle">Camera thường chỉ truyền video; không có Edge AI riêng trên từng camera</text>
+
+  <text x="70" y="125" class="section">Nguồn camera trong LAN</text>
+  <rect x="70" y="145" width="230" height="100" class="box"/>
+  <text x="185" y="183" text-anchor="middle" class="label">Camera USB</text><text x="185" y="211" text-anchor="middle" class="text">Raw video stream</text>
+  <rect x="335" y="145" width="230" height="100" class="box"/>
+  <text x="450" y="183" text-anchor="middle" class="label">Camera RTSP/ONVIF</text><text x="450" y="211" text-anchor="middle" class="text">Raw video stream</text>
+  <rect x="600" y="145" width="230" height="100" class="box"/>
+  <text x="715" y="183" text-anchor="middle" class="label">Video file</text><text x="715" y="211" text-anchor="middle" class="text">Nguồn demo/kiểm thử</text>
+
+  <rect x="55" y="310" width="1200" height="620" class="hub"/>
+  <text x="655" y="348" text-anchor="middle" class="section">LOCAL SMART HUB — một máy trung tâm trong nhà</text>
+
+  <rect x="95" y="380" width="1120" height="90" class="vision"/>
+  <text x="655" y="410" text-anchor="middle" class="label">Video Ingest &amp; Camera Manager</text>
+  <text x="655" y="438" text-anchor="middle" class="text">Decode • reconnect • sampling • multi-camera scheduling • health monitoring</text>
+
+  <rect x="95" y="505" width="260" height="115" class="vision"/>
+  <text x="225" y="538" text-anchor="middle" class="label">Person Detection</text>
+  <text x="225" y="566" text-anchor="middle" class="text">YOLO + tracking</text><text x="225" y="592" text-anchor="middle" class="small">Bounding box / track_id</text>
+  <rect x="390" y="505" width="260" height="115" class="vision"/>
+  <text x="520" y="538" text-anchor="middle" class="label">Fall Analysis</text>
+  <text x="520" y="566" text-anchor="middle" class="text">MediaPipe + SDAGCN</text><text x="520" y="592" text-anchor="middle" class="small">Pose / temporal confidence</text>
+  <rect x="685" y="505" width="260" height="115" class="vision"/>
+  <text x="815" y="538" text-anchor="middle" class="label">Face Recognition</text>
+  <text x="815" y="566" text-anchor="middle" class="text">InsightFace</text><text x="815" y="592" text-anchor="middle" class="small">Known / unknown / uncertain</text>
+  <rect x="980" y="505" width="235" height="115" class="vision"/>
+  <text x="1097" y="538" text-anchor="middle" class="label">Privacy &amp; Media</text>
+  <text x="1097" y="566" text-anchor="middle" class="text">Crop • blur • ring buffer</text><text x="1097" y="592" text-anchor="middle" class="small">Local snapshot/clip only</text>
+
+  <rect x="95" y="660" width="300" height="105" class="backend"/>
+  <text x="245" y="694" text-anchor="middle" class="label">Temporal Event Engine</text>
+  <text x="245" y="722" text-anchor="middle" class="text">Confirm • deduplicate • severity</text><text x="245" y="748" text-anchor="middle" class="small">VisionEvent contract</text>
+  <rect x="430" y="660" width="245" height="105" class="backend"/>
+  <text x="552" y="694" text-anchor="middle" class="label">Bounded Queue</text>
+  <text x="552" y="722" text-anchor="middle" class="text">In-process async</text><text x="552" y="748" text-anchor="middle" class="small">Không cần MQTT broker</text>
+  <rect x="710" y="660" width="250" height="105" class="backend"/>
+  <text x="835" y="694" text-anchor="middle" class="label">FastAPI Backend</text>
+  <text x="835" y="722" text-anchor="middle" class="text">REST • SSE • persistence</text><text x="835" y="748" text-anchor="middle" class="small">Human-in-the-loop API</text>
+  <rect x="995" y="660" width="220" height="105" class="backend"/>
+  <text x="1105" y="694" text-anchor="middle" class="label">LangGraph Agent</text>
+  <text x="1105" y="722" text-anchor="middle" class="text">Explain • coordinate</text><text x="1105" y="748" text-anchor="middle" class="small">Optional local/cloud LLM</text>
+
+  <rect x="250" y="815" width="300" height="80" class="data"/>
+  <text x="400" y="848" text-anchor="middle" class="label">SQLite Database</text><text x="400" y="875" text-anchor="middle" class="text">Events • alerts • users • audit</text>
+  <rect x="710" y="815" width="300" height="80" class="data"/>
+  <text x="860" y="848" text-anchor="middle" class="label">Encrypted Local Storage</text><text x="860" y="875" text-anchor="middle" class="text">Snapshots • clips • face data</text>
+
+  <rect x="1320" y="430" width="230" height="160" class="client"/>
+  <text x="1435" y="470" text-anchor="middle" class="label">React Dashboard</text>
+  <text x="1435" y="500" text-anchor="middle" class="text">LAN / VPN</text><text x="1435" y="530" text-anchor="middle" class="text">Live view • alerts</text><text x="1435" y="560" text-anchor="middle" class="text">History • settings</text>
+  <rect x="1320" y="650" width="230" height="125" class="client"/>
+  <text x="1435" y="688" text-anchor="middle" class="label">Người thân / quản trị</text>
+  <text x="1435" y="718" text-anchor="middle" class="text">Xác nhận an toàn</text><text x="1435" y="746" text-anchor="middle" class="text">Báo nhầm / cần trợ giúp</text>
+
+  <path d="M185 245 L185 380" class="line"/><path d="M450 245 L450 380" class="line"/><path d="M715 245 L715 380" class="line"/>
+  <path d="M655 470 L225 505" class="line"/><path d="M655 470 L520 505" class="line"/><path d="M655 470 L815 505" class="line"/><path d="M655 470 L1097 505" class="line"/>
+  <path d="M225 620 L245 660" class="line"/><path d="M520 620 L300 660" class="line"/><path d="M815 620 L340 660" class="line"/>
+  <path d="M395 712 L430 712" class="line"/><path d="M675 712 L710 712" class="line"/><path d="M960 712 L995 712" class="line"/>
+  <path d="M835 765 L500 815" class="line"/><path d="M835 765 L860 815" class="line"/>
+  <path d="M1215 712 L1320 540" class="line"/><path d="M1320 710 L1255 560" class="line dash"/>
+  <path d="M1435 590 L1435 650" class="line"/>
+
+  <text x="70" y="970" class="small">Local-first: camera không chạy AI riêng • video thô không gửi cloud • phát hiện và cảnh báo vẫn hoạt động khi mất Internet</text>
+</svg>

@@ -42,6 +42,11 @@ htmlcov/
 .coverage
 coverage.xml
 
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
 # Docker
 docker-compose.override.yml
 
@@ -58,3 +63,15 @@ out/
 # AI logs — tracked structure, ignored content
 .ai-log/*.jsonl
 .ai-log/archive/
+
+# Vision local data and generated artifacts
+/vision/models/
+/vision/register face/
+/vision/work_dir/**/runs/
+/vision/work_dir/**/*.pt
+/vision/work_dir/**/*_matrix.csv
+/vision/work_dir/**/log.txt
+/vision/demo/**/*.npy
+/vision/**/*.onnx
+/vision/**/*.engine
+/vision/yolov8n.pt

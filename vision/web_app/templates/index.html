@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Realtime Fall Detection</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --bg-color: #f8fafc;
+            --card-bg: #ffffff;
+            --text-main: #0f172a;
+            --text-muted: #64748b;
+            --normal-color: #10b981;
+            --fall-color: #ef4444;
+            --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+            --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+            --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Inter', sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 2rem;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+
+        header h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+            color: var(--text-main);
+        }
+
+        header p {
+            color: var(--text-muted);
+            margin-top: 0.5rem;
+            font-size: 1.1rem;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 2rem;
+            max-width: 1200px;
+            width: 100%;
+        }
+
+        /* Video Section */
+        .video-card {
+            background: var(--card-bg);
+            border-radius: 1rem;
+            padding: 1rem;
+            box-shadow: var(--shadow-md);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            width: fit-content;
+            margin: 0 auto;
+        }
+
+        .video-card img {
+            border-radius: 0.5rem;
+            width: 1024px;
+            height: 1024px;
+            object-fit: contain;
+            background-color: #000;
+        }
+
+        /* Status Section */
+        .status-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            width: 1024px;
+            margin: 0 auto;
+        }
+
+        .status-box {
+            background: var(--card-bg);
+            border-radius: 1rem;
+            padding: 1.5rem;
+            box-shadow: var(--shadow-sm);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            transition: all 0.3s ease;
+            border: 2px solid transparent;
+        }
+
+        .status-label {
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            font-weight: 600;
+            color: var(--text-muted);
+            letter-spacing: 0.05em;
+            margin-bottom: 0.5rem;
+        }
+
+        .status-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            transition: color 0.3s ease;
+        }
+
+        /* Specific Status Styling */
+        .status-box.normal {
+            border-color: var(--normal-color);
+            background-color: #ecfdf5;
+        }
+
+        .status-box.normal .status-value {
+            color: var(--normal-color);
+        }
+
+        .status-box.danger {
+            border-color: var(--fall-color);
+            background-color: #fef2f2;
+            animation: pulse-danger 1.5s infinite;
+        }
+
+        .status-box.danger .status-value {
+            color: var(--fall-color);
+            font-size: 2rem;
+        }
+
+        /* Animations */
+        @keyframes pulse-danger {
+            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+            70% { box-shadow: 0 0 0 15px rgba(239, 68, 68, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+
+        /* Responsiveness */
+        @media (max-width: 1100px) {
+            .video-card img {
+                width: 100%;
+                height: auto;
+            }
+            .status-container {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>Smart Fall Detection</h1>
+        <p>Realtime monitoring system powered by SDA-GCN</p>
+    </header>
+
+    <div class="container">
+        <!-- Status Row -->
+        <div class="status-container">
+            <!-- Action Box -->
+            <div id="actionBox" class="status-box">
+                <span class="status-label">Current Status</span>
+                <span id="actionValue" class="status-value">Connecting...</span>
+            </div>
+
+            <!-- Person Box -->
+            <div id="personBox" class="status-box">
+                <span class="status-label">Recognized Person</span>
+                <span id="personValue" class="status-value">Unknown</span>
+            </div>
+        </div>
+
+        <!-- Video Row -->
+        <div class="video-card">
+            <!-- Load the MJPEG stream from the Flask endpoint -->
+            <img src="/video_feed" alt="Video Stream">
+        </div>
+    </div>
+
+    <script>
+        // DOM Elements
+        const actionBox = document.getElementById('actionBox');
+        const actionValue = document.getElementById('actionValue');
+        const personValue = document.getElementById('personValue');
+
+        // Function to fetch status and update UI
+        async function fetchStatus() {
+            try {
+                const response = await fetch('/status');
+                const data = await response.json();
+
+                // Update Action Status
+                const currentAction = data.action;
+                actionValue.textContent = currentAction;
+
+                // Update Box Styling based on Action
+                if (currentAction === "FALL DETECTED!") {
+                    actionBox.className = "status-box danger";
+                } else if (currentAction === "Normal") {
+                    actionBox.className = "status-box normal";
+                } else {
+                    actionBox.className = "status-box"; // default state
+                }
+
+                // Update Person Name
+                personValue.textContent = data.person_name;
+
+            } catch (error) {
+                console.error("Error fetching status:", error);
+                actionValue.textContent = "Connection Lost";
+                actionBox.className = "status-box";
+            }
+        }
+
+        // Poll every 500ms
+        setInterval(fetchStatus, 500);
+    </script>
+</body>
+</html>

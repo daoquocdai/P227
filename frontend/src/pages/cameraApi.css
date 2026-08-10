@@ -1,0 +1,6 @@
+.camera-api-state { min-height: 65vh; display: grid; place-items: center; align-content: center; gap: 12px; color: #52657b; }
+.camera-api-state > svg { width: 44px; height: 44px; color: #3b82f6; }
+.camera-api-state.error > svg { color: #dc3e3e; }
+.camera-api-state button { padding: 9px 13px; border: 1px solid #bdd2e9; border-radius: 10px; background: #fff; color: #2567b3; }
+.camera-source-placeholder { position: absolute; inset: 0; display: grid; place-items: center; background: #1f2937; color: #94a3b8; }
+.camera-source-placeholder > svg { width: 32px; height: 32px; }

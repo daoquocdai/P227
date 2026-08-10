@@ -1,201 +1,191 @@
-# 🤖 AI20K Agent Template
+# An Tâm Home — GuardianCam Local Hub
 
-Template chính thức cho học viên **VinUni AI20K Build Phase** — cung cấp sẵn cấu trúc dự án, code mẫu, và hướng dẫn kỹ thuật chi tiết để xây dựng AI Agent đạt điểm cao (35+/50).
+> Hệ thống AI chạy tại nhà để phát hiện té ngã, nhận diện người lạ và hỗ trợ gia đình xử lý cảnh báo theo thời gian thực mà không phụ thuộc vào cloud.
 
-> 📖 **Technical Guidebook:** [phoenix.note.transformerlabs.ai/technical-book](https://phoenix.note.transformerlabs.ai/technical-book)
+## Vấn đề (Problem)
 
-## 🎯 Template này dùng để làm gì?
+Người cao tuổi hoặc người sống một mình có thể gặp sự cố nhưng không thể chủ động gọi trợ giúp. Camera thông thường chỉ ghi hình; người thân phải theo dõi thủ công, dễ bỏ lỡ thời điểm quan trọng. Việc gửi video liên tục lên cloud cũng làm tăng chi phí, độ trễ và rủi ro riêng tư.
 
-Khi tham gia AI20K Build Phase, mỗi đội cần xây dựng một AI Agent hoàn chỉnh — từ kiến trúc, code, test, đến deploy. Thay vì bắt đầu từ con số không, template này cung cấp:
+## Giải pháp (Solution)
 
-- **Cấu trúc thư mục chuẩn** — đã được thiết kế theo best practices (separation of concerns)
-- **Code mẫu** cho các phần cốt lõi: LangGraph agent, FastAPI API, config, schemas
-- **Docker + CI/CD sẵn** — Dockerfile multi-stage, GitHub Actions workflow
-- **Hướng dẫn kỹ thuật 10 chương** — từ clone template đến nộp bài Demo Day
-- **Checklist 10 deliverables** — đảm bảo không bỏ sót yêu cầu BTC
-- **AI Usage Logging tự động** — Pre-configured hooks cho Claude Code, Cursor, Codex, Gemini CLI, Antigravity, và GitHub Copilot
+An Tâm Home biến camera USB, video hoặc luồng RTSP thành hệ thống giám sát an toàn chạy trên Local Hub:
 
-## ⚡ Quick Start
+- Phát hiện người và ước lượng keypoint bằng YOLO/MediaPipe.
+- Phân loại hành vi té ngã bằng mô hình SDAGCN trên skeleton 25 khớp.
+- Nhận diện người thân và phát hiện người lạ bằng InsightFace.
+- Chuẩn hóa sự kiện vision, chống ghi trùng và lưu vào SQLite.
+- Phát cảnh báo realtime đến dashboard, hỗ trợ xác nhận an toàn, báo nhầm hoặc yêu cầu trợ giúp.
+- Dùng LangGraph cho diễn giải và quy trình human-in-the-loop; quyết định an toàn cốt lõi không phụ thuộc LLM.
 
-### Bước 1: Fork hoặc Clone
+## Người dùng mục tiêu
 
-```bash
-# Clone template
-git clone https://github.com/AI20K-Build-Cohort-2/starter-code-template.git team-YOUR_TEAM_NAME
-cd team-YOUR_TEAM_NAME
+- Chính: gia đình có người cao tuổi, người sống một mình hoặc người cần được theo dõi an toàn.
+- Phụ: người chăm sóc, cơ sở chăm sóc quy mô nhỏ và nhóm vận hành hệ thống camera nội bộ.
 
-# Xóa git history cũ và khởi tạo lại
-rm -rf .git
-git init
-git add .
-git commit -m "feat: khởi tạo dự án từ template"
+## Tech Stack
+
+| Lớp | Công nghệ |
+|---|---|
+| Vision AI | YOLO, MediaPipe, SDAGCN, InsightFace, PyTorch |
+| AI workflow | LangGraph, LangChain, OpenAI tùy chọn |
+| Backend | FastAPI, Python 3.11, SSE |
+| Frontend | React, TypeScript, Vite |
+| Database | SQLite trên Local Hub |
+| DevOps | Docker Compose, GitHub Actions |
+| Testing | pytest, Ruff |
+
+## Quick Start
+
+Yêu cầu: Windows/Linux 64-bit, Python 3.11, Node.js 20+ và webcam hoặc video mẫu.
+
+```powershell
+# 1. Clone
+git clone https://github.com/AI20K-Build-Phase-Cohort-3/P-227.git
+cd P-227
+
+# 2. Python environment
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+Copy-Item .env.example .env
+python -m pip install -r requirements.txt
+python -m pip install -e vision\torchlight
+
+# 3. Frontend
+cd frontend
+npm ci
+Copy-Item .env.example .env
+cd ..
 ```
 
-### Bước 2: Setup môi trường
+Chạy backend và frontend trong hai terminal:
 
-```bash
-# Tạo virtual environment
-python3.11 -m venv .venv
-source .venv/bin/activate
+```powershell
+# Terminal 1
+.\.venv\Scripts\python.exe -m uvicorn src.main:app --reload --port 8000
 
-# Cài dependencies
-pip install -e ".[dev]"
-
-# Cấu hình API keys
-cp .env.example .env
-# Mở .env và thêm OPENAI_API_KEY của bạn
-# Đồng thời cập nhật AI_LOG_API_KEY bằng key riêng từ link mời của BTC
-# (giá trị trong .env.example chỉ là placeholder)
+# Terminal 2
+cd frontend
+npm run dev
 ```
 
-### Bước 3: Cài AI Logging Hooks
+Truy cập:
 
-```bash
-# Linux / macOS / Git Bash
-bash scripts/setup_hooks.sh
+- Dashboard: `http://localhost:5173`
+- Swagger API: `http://localhost:8000/docs`
+- Health check: `http://localhost:8000/health`
 
-# Windows PowerShell
-# powershell -ExecutionPolicy Bypass -File scripts\setup_hooks.ps1
+Để chạy vision, cần đặt model local đúng vị trí được mô tả tại [docs/vision.md](docs/vision.md), sau đó:
+
+```powershell
+cd vision
+..\.venv\Scripts\python.exe realtime.py
 ```
 
-Hooks tự động log mọi AI prompt khi dùng Claude Code, Cursor, Codex, Gemini CLI, Antigravity, hoặc GitHub Copilot. Không cần thao tác thủ công.
+## Luồng hoạt động
 
-### Bước 4: Chạy server
-
-```bash
-# Chạy FastAPI backend
-uvicorn src.main:app --reload --port 8000
-
-# Mở Swagger UI
-# http://localhost:8000/docs
+```mermaid
+flowchart LR
+    CAM[Camera thường / Video / RTSP]
+    subgraph HUB[Một Local Smart Hub]
+        VISION[Ingest + YOLO + Pose + Face]
+        EVENT[Temporal Event Engine]
+        API[FastAPI + LangGraph/HITL]
+        DB[(SQLite + Local Media)]
+        VISION --> EVENT --> API --> DB
+    end
+    UI[React Dashboard]
+    CAM -->|video thô trong LAN| VISION
+    API <-->|REST + SSE| UI
 ```
 
-### Bước 5: Đọc hướng dẫn
+Không có Edge AI riêng cho từng camera; mọi model và dữ liệu được quản lý tập trung trên một Local Hub.
 
-📖 Mở **[Technical Guidebook](https://phoenix.note.transformerlabs.ai/technical-book)** và làm theo từng chương.
+![Sơ đồ một Local Hub xử lý toàn bộ AI](docs/architecture_diagram.png)
 
-## 📁 Cấu trúc dự án
+## Cấu trúc dự án
 
-```
-├── src/
-│   ├── agents/           # 🧠 LangGraph Agent
-│   │   ├── graph.py      #    State graph (nodes + edges)
-│   │   ├── state.py      #    State schema (TypedDict)
-│   │   ├── nodes/        #    Node functions
-│   │   └── tools/        #    Agent tools (@tool)
-│   ├── api/              # 🌐 FastAPI Backend
-│   │   └── routes.py     #    API endpoints
-│   ├── models/           # 📋 Pydantic schemas
-│   ├── services/         # 🔧 Business logic (LLM, etc.)
-│   ├── config.py         # ⚙️ Pydantic Settings
-│   └── main.py           # 🚀 App entry point
-├── tests/                # 🧪 pytest suite
-│   ├── test_agents/      #    Agent/graph tests
-│   └── test_api/         #    API endpoint tests
-├── scripts/              # 🔌 AI Logging Hooks
-│   ├── log_hook.py       #    Auto-log cho Claude/Cursor/Codex/Gemini/Copilot
-│   ├── log_antigravity.py#    Antigravity IDE prompt scanner
-│   ├── log_manual.py     #    Manual log cho ChatGPT / web tools
-│   ├── submit_log.py     #    Submit logs on git push
-│   └── setup_hooks.sh    #    One-time hook installer
-├── .claude/ .codex/ .cursor/ .gemini/  # Per-tool hook configs
-├── .agents/              # Antigravity rules + workflows
-├── .ai-log/              # 📊 AI usage logs (auto-generated)
-├── docs/
-│   ├── guide/            # 📖 Technical Guidebook (10 chapters)
-│   └── architecture_diagram.md
-├── eval/                 # 📊 Evaluation results
-├── presentation/         # 🎤 Demo Day slides
-├── .github/workflows/    # ⚡ CI/CD (GitHub Actions)
-├── .github/hooks/        # 🪝 Copilot hook config
-├── Dockerfile            # 🐳 Multi-stage build
-├── docker-compose.yml    # 🐙 Full stack orchestration
-└── README_boilerplate.md # 📝 README template cho đội của bạn
+```text
+├── src/                 # FastAPI, agent, service và model API
+├── vision/              # Pipeline phát hiện ngã và người lạ
+├── frontend/            # Dashboard React/Vite
+├── database/            # Schema, query và dữ liệu mẫu SQLite
+├── tests/               # Test backend/agent/API
+├── docs/                # Tài liệu kỹ thuật dự án
+├── scripts/             # Setup và AI logging hooks
+├── eval/                # Bằng chứng đánh giá
+├── presentation/        # Tài liệu demo/pitch
+├── Dockerfile
+└── docker-compose.yml
 ```
 
-## 📚 Technical Guidebook — 10 Chương
+## API chính
 
-| Chương | Nội dung | Thời gian |
-|---------|----------|-----------|
-| 1 | Lời mở đầu — Mục tiêu, cách sử dụng | 15 phút |
-| 2 | Khởi tạo dự án — Clone, setup, git workflow | 4 giờ |
-| 3 | Thiết kế kiến trúc — 3-tier, diagrams, ADR | 6 giờ |
-| 4 | **LangGraph Agent** — State, nodes, edges, tools, RAG | 8 giờ |
-| 5 | FastAPI — Routes, validation, error handling, streaming | 6 giờ |
-| 6 | Giao diện — Next.js + Streamlit quickstart | 6 giờ |
-| 7 | DevOps — Docker, CI/CD, deploy, logging | 6 giờ |
-| 8 | Kiểm thử — Unit test, integration test, RAGAS | 4 giờ |
-| 9 | Demo Day — 10 deliverables, checklist, tips | 2 giờ |
-| 10 | Tài nguyên — Khóa học, docs, BMAD method | tham khảo |
+| Method | Endpoint | Mục đích |
+|---|---|---|
+| GET | `/health` | Kiểm tra backend |
+| POST | `/api/v1/vision/events` | Nhận sự kiện từ vision |
+| GET | `/api/v1/alerts` | Danh sách cảnh báo |
+| GET | `/api/v1/alerts/stream` | Cảnh báo realtime qua SSE |
+| PATCH | `/api/v1/alerts/{id}` | Human-in-the-loop review |
+| GET | `/api/v1/cameras` | Danh sách camera |
+| PATCH | `/api/v1/cameras/{id}/source` | Cập nhật nguồn camera |
+| GET/POST | `/api/v1/persons` | Quản lý người thân |
+| GET | `/api/v1/history` | Lịch sử sự kiện |
+| GET | `/api/v1/overview` | Dữ liệu tổng quan dashboard |
 
-📖 **Đọc online:** [phoenix.note.transformerlabs.ai/technical-book](https://phoenix.note.transformerlabs.ai/technical-book)
+Chi tiết tại [docs/api.md](docs/api.md).
 
-## 📋 10 Deliverables cho Demo Day
+## Kiểm tra
 
-| # | Deliverable | File vị trí | Template có sẵn |
-|---|-------------|-------------|:---:|
-| 1 | Source Code | `src/` | ✅ |
-| 2 | README.md | `README_boilerplate.md` → copy thành `README.md` | ✅ |
-| 3 | Architecture Diagram | `docs/architecture_diagram.md` | ✅ |
-| 4 | AI Logs | LangSmith (3 env vars) + Auto AI Usage Logging | ✅ |
-| 5 | Live URL | Deploy lên Render/Vercel | ⚡ CI/CD sẵn |
-| 6 | Video Demo | `presentation/` | 📝 |
-| 7 | Pitch Deck | `presentation/` | 📝 |
-| 8 | Development Journal | `JOURNAL.md` | ✅ |
-| 9 | Worklog | `WORKLOG.md` | ✅ |
-| 10 | Evaluation Evidence | `eval/` | 📝 |
-
-## 🛠 Tech Stack
-
-| Layer | Technology | Version |
-|-------|-----------|---------|
-| AI Agent | LangGraph + LangChain | Latest |
-| Backend | FastAPI + Uvicorn | 0.100+ |
-| LLM | OpenAI GPT-4o-mini | API |
-| Frontend | Next.js / Streamlit | 14+ / 1.30+ |
-| Database | SQLite (dev) / PostgreSQL (prod) | — |
-| DevOps | Docker + GitHub Actions | — |
-| Testing | pytest + pytest-asyncio | 8+ |
-
-## 📊 AI Usage Logging
-
-Template đã tích hợp sẵn auto-logging hooks cho 6 AI tools:
-
-| Tool | Cơ chế | Config |
-|------|--------|--------|
-| Claude Code | `.claude/settings.json` hooks | Tự động |
-| Cursor | `.cursor/hooks.json` | Tự động |
-| OpenAI Codex CLI | `.codex/hooks.json` | Tự động |
-| Gemini CLI | `.gemini/settings.json` | Tự động |
-| GitHub Copilot | `.github/hooks/hooks.json` | Tự động |
-| Antigravity IDE | Pre-push scan transcript | Tự động trên `git push` |
-
-Tất cả prompts và tool calls được log vào `.ai-log/session.jsonl` và tự động submit lên grading server mỗi khi `git push`.
-
-**ChatGPT / web tools khác** — log thủ công:
-```bash
-bash scripts/_pyrun.sh scripts/log_manual.py --tool chatgpt --prompt "What you asked"
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m ruff check src tests
+cd frontend
+npm run build
 ```
 
-> ⚠️ Chạy `bash scripts/setup_hooks.sh` một lần sau khi clone để cài pre-push hook.
+## Tài liệu
 
-## 📖 Đọc Technical Guidebook
+| Tài liệu | Nội dung |
+|---|---|
+| [docs/README.md](docs/README.md) | Mục lục tài liệu |
+| [docs/setup.md](docs/setup.md) | Cài đặt và cấu hình |
+| [docs/architecture.md](docs/architecture.md) | Kiến trúc và luồng dữ liệu |
+| [docs/vision.md](docs/vision.md) | Vision pipeline và model |
+| [docs/api.md](docs/api.md) | API và event contract |
+| [docs/database.md](docs/database.md) | SQLite schema và seed |
+| [docs/frontend.md](docs/frontend.md) | Dashboard React |
+| [docs/deployment.md](docs/deployment.md) | Docker và vận hành |
+| [docs/testing.md](docs/testing.md) | Test và quality gate |
+| [docs/security.md](docs/security.md) | Quyền riêng tư và bảo mật |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | Xử lý lỗi thường gặp |
+| [docs/roadmap.md](docs/roadmap.md) | Trạng thái và ưu tiên tiếp theo |
+| [README_GUIDE.md](README_GUIDE.md) | Hướng dẫn template AI20K ban đầu |
 
-**Online (khuyến nghị):** [phoenix.note.transformerlabs.ai/technical-book](https://phoenix.note.transformerlabs.ai/technical-book)
+## Trạng thái deliverables
 
-Đăng nhập bằng GitHub (cùng account đã được BTC mời vào org `AI20K-Build-Cohort-2`)
-→ chọn tab **Technical Book** ở sidebar trái → đọc 10 chương + topic sections,
-có table of contents bên phải, hỗ trợ light/dark/cyberpunk theme.
+- [x] Source code backend, frontend và vision
+- [x] README và tài liệu kỹ thuật
+- [x] Architecture diagram
+- [x] SQLite schema và API contract
+- [x] Test suite và CI workflow
+- [x] AI usage logging
+- [ ] Public deployment URL
+- [ ] Video demo hoàn chỉnh
+- [ ] Báo cáo benchmark model trên tập kiểm thử cuối
 
-**Offline:** mọi chương đều ở thư mục `docs/guide/` trong template này — mở bằng
-bất kỳ markdown viewer/editor nào (VS Code, Obsidian, GitHub UI, …).
+## Giới hạn hiện tại
 
-## 🔗 Liên kết
+- Model weights và dữ liệu khuôn mặt không được lưu trong Git; phải cung cấp riêng trên Local Hub.
+- Vision realtime hiện ưu tiên webcam Windows và cần tiếp tục chuẩn hóa adapter RTSP/multi-camera.
+- SQLite phù hợp MVP một hub; triển khai nhiều node cần database và message transport khác.
+- Đây là hệ thống hỗ trợ cảnh báo, không thay thế thiết bị y tế hoặc dịch vụ khẩn cấp chuyên nghiệp.
 
-- 📖 **Technical Guidebook:** [phoenix.note.transformerlabs.ai/technical-book](https://phoenix.note.transformerlabs.ai/technical-book)
-- 🏫 **AI20K Program:** VinUni AI20K Build Phase
-- 👨‍🏫 **Mentor:** Đặng Hải Lộc
+## Nhóm phát triển
 
-## 📄 License
+Dự án thuộc AI20K Build Phase Cohort 3. Danh sách thành viên và đóng góp được lưu trong [GitHub contributors](https://github.com/AI20K-Build-Phase-Cohort-3/P-227/graphs/contributors), `JOURNAL.md` và `WORKLOG.md`.
 
-MIT — Sử dụng tự do cho mục đích giáo dục..
+## License
+
+MIT. Xem [LICENSE](vision/LICENSE) cho phần mã vision được tích hợp. Sử dụng tự do cho mục đích giáo dục.
+
