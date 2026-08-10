@@ -1,96 +1,164 @@
-# Backend API
+# API Contract
 
-Base URL local: `http://localhost:8000`. API nghiệp vụ dùng prefix `/api/v1`.
+Base URL nghiệp vụ: `/api/v1`.
 
-Swagger/OpenAPI là tài liệu schema chính xác nhất tại `/docs` và `/openapi.json`.
+> `/docs` và `/openapi.json` là nguồn schema thực thi chính xác nhất. Tài liệu này mô tả contract sản phẩm và các invariant quan trọng; nếu payload chi tiết khác tài liệu, kiểm tra OpenAPI/runtime trước.
 
-## Health và trạng thái
+## 1. System
 
-| Method | Path | Mô tả |
+| Method | Path | Ý nghĩa |
 |---|---|---|
-| GET | `/health` | Health check và môi trường |
-| GET | `/api/v1/status` | Trạng thái hệ thống |
-| GET | `/api/v1/overview` | Tổng quan dashboard |
+| `GET` | `/health` | Process health và environment |
+| `GET` | `/api/v1/status` | Trạng thái dịch vụ |
+| `GET` | `/api/v1/overview` | Metrics/alerts/cameras cho Tổng quan |
 
-## Vision integration
+## 2. Cameras
 
-### `POST /api/v1/vision/events`
+| Method | Path | Ý nghĩa |
+|---|---|---|
+| `GET` | `/api/v1/cameras` | Danh sách camera và observed state |
+| `GET` | `/api/v1/cameras/{id}` | Chi tiết camera, source public và event gần đây |
+| `PATCH` | `/api/v1/cameras/{id}` | Sửa metadata/source theo schema hiện tại |
+| `DELETE` | `/api/v1/cameras/{id}` | Xoá camera nếu đáp ứng constraint |
+| `PATCH` | `/api/v1/cameras/{id}/source` | Đổi source |
+| `POST` | `/api/v1/cameras/{id}/start` | Persist desired ON + start runtime |
+| `POST` | `/api/v1/cameras/{id}/stop` | Persist desired OFF + stop runtime |
+| `GET` | `/api/v1/cameras/{id}/stream` | Live MJPEG |
+| `GET` | `/api/v1/cameras/{id}/preview` | Latest JPEG preview |
+| `GET` | `/api/v1/cameras/{id}/runtime/status` | Observed capture status |
+| `POST` | `/api/v1/cameras/{id}/vision/enable` | Persist Vision desired ON |
+| `POST` | `/api/v1/cameras/{id}/vision/disable` | Persist Vision desired OFF + reset session |
+| `GET` | `/api/v1/cameras/{id}/vision/status` | Device, result, dispatcher, temporal status |
+
+### Source privacy
+
+`source_uri` có thể chứa RTSP credential.
+
+Frontend chỉ nên nhận các trường public/sanitized do backend cung cấp. Không log hoặc phản chiếu raw credential.
+
+### Preview
+
+Preview là latest static JPEG, không phải event evidence.
+
+Nếu chưa có frame:
+
+- API có thể trả `404` hoặc contract `preview_url=null` ở object tổng hợp;
+- frontend phải dùng placeholder;
+- không retry broken image vô hạn.
+
+## 3. Alerts
+
+| Method | Path | Ý nghĩa |
+|---|---|---|
+| `GET` | `/api/v1/alerts` | Danh sách alerts mới nhất |
+| `GET` | `/api/v1/alerts/{id}` | Chi tiết alert |
+| `GET` | `/api/v1/alerts/stream` | SSE ready/alert/heartbeat |
+| `PATCH` | `/api/v1/alerts/{id}` | Human review status/note |
+| `POST` | `/api/v1/alerts/{id}/read` | Đánh dấu đã đọc |
+| `POST` | `/api/v1/alerts/confirm` | Compatibility endpoint cho client cũ |
+
+UI status hiện hành có thể gồm:
+
+```text
+pending
+checking
+need_help
+safe
+false_alarm
+resolved
+```
+
+SSE contract:
+
+1. Client tải state ban đầu bằng REST.
+2. Client mở SSE.
+3. Server publish alert chỉ sau persistence thành công.
+4. Client phải chịu được reconnect.
+5. Khi nhận event, client refresh/merge state mà không tạo duplicate UI item.
+
+## 4. Vision event ingestion
+
+`POST /api/v1/vision/events` là compatibility boundary cho nguồn Vision ngoài internal dispatcher.
+
+Ví dụ:
 
 ```json
 {
   "schema_version": 1,
-  "event_id": "cam-living-20260806-001",
-  "camera_id": "living-room",
-  "camera_location": "Phòng khách",
+  "event_id": "incident-id:fall_confirmed",
+  "camera_id": "camera-id",
+  "camera_location": "Khu vực ngủ",
   "event_type": "FALL_CONFIRMED",
-  "occurred_at": "2026-08-06T10:20:31+07:00",
-  "confidence": 0.93,
+  "occurred_at": "2026-08-09T11:23:31Z",
+  "confidence": 0.91,
   "track_id": "37",
-  "identity_status": "KNOWN",
-  "identity_name": "Nguyễn Văn An",
-  "snapshot_path": "snapshots/event-001.jpg",
-  "immobile_seconds": 8.2,
-  "metadata": {"vision_version": "sdagcn-v1"}
+  "identity_status": "UNKNOWN",
+  "identity_name": null,
+  "snapshot_path": "vision-camera-123-abcd.jpg",
+  "immobile_seconds": 2.0,
+  "metadata": {}
 }
 ```
 
-Response HTTP 202:
+Cùng `event_id` phải idempotent: retry không được tạo alert thứ hai.
 
-```json
-{
-  "id": "internal-record-id",
-  "event_id": "cam-living-20260806-001",
-  "accepted": true,
-  "duplicate": false,
-  "status": "pending"
-}
-```
+Internal Local Hub Vision không cần đi HTTP vòng ra ngoài nếu dispatcher/service đã kết nối trực tiếp.
 
-Gửi lại cùng `event_id` phải trả `duplicate: true` thay vì tạo cảnh báo mới.
+## 5. Persons / Face Profiles
 
-## Alerts
-
-| Method | Path | Mô tả |
+| Method | Path | Ý nghĩa |
 |---|---|---|
-| GET | `/api/v1/alerts` | Danh sách mới nhất trước |
-| GET | `/api/v1/alerts/stream` | SSE: `ready`, `alert`, heartbeat |
-| GET | `/api/v1/alerts/{alert_id}` | Chi tiết cảnh báo |
-| PATCH | `/api/v1/alerts/{alert_id}` | Review trạng thái và ghi chú |
-| POST | `/api/v1/alerts/{alert_id}/read` | Đánh dấu đã đọc |
-| POST | `/api/v1/alerts/confirm` | Endpoint tương thích client cũ |
+| `GET` | `/api/v1/persons` | Danh sách người thân từ database |
+| `POST` | `/api/v1/persons` | Tạo hồ sơ |
+| `PATCH` | `/api/v1/persons/{id}` | Sửa hoặc active/deactivate |
+| `POST` | `/api/v1/persons/{id}/faces` | Trích xuất và lưu face embedding |
+| `DELETE` | `/api/v1/persons/{id}/faces/{face_id}` | Xoá face profile |
 
-Trạng thái review: `pending`, `checking`, `resolved`, `safe`, `false_alarm`, `need_help`.
+Mutation face profile phải làm refresh/invalidate FaceGallery.
 
-## Cameras
+Ảnh enrollment không được tự trở thành public static file.
 
-| Method | Path | Mô tả |
+## 6. Settings
+
+| Method | Path | Ý nghĩa |
 |---|---|---|
-| GET | `/api/v1/cameras` | Danh sách camera |
-| GET | `/api/v1/cameras/{camera_id}` | Chi tiết camera |
-| PATCH | `/api/v1/cameras/{camera_id}/source` | Đổi `video_file`, `webcam` hoặc `rtsp` |
+| `GET` | `/api/v1/settings` | General/notification/camera settings |
+| `PATCH` | `/api/v1/settings/general` | Cập nhật cấu hình chung |
+| `PATCH` | `/api/v1/settings/notifications` | Cập nhật notification settings |
+| `POST` | `/api/v1/settings/users` | Tạo người dùng |
+| `PATCH` | `/api/v1/settings/users/{id}` | Bật/tắt người dùng |
+| `PATCH` | `/api/v1/settings/users/{id}/permissions/{permission}` | Cập nhật quyền |
+| `PATCH` | `/api/v1/settings/cameras/{id}` | Đồng bộ camera/Vision desired state |
 
-`source_uri` có thể chứa credential RTSP và không được trả về frontend. Frontend chỉ nhận playback URL đã được phép công khai.
+Nếu Settings thay camera/Vision ON/OFF, backend phải đồng bộ cả persistence và runtime; không chỉ sửa UI.
 
-## Người thân, lịch sử và settings
+## 7. History
 
-| Method | Path | Mô tả |
+| Method | Path | Ý nghĩa |
 |---|---|---|
-| GET/POST | `/api/v1/persons` | Danh sách/tạo người thân |
-| PATCH | `/api/v1/persons/{id}` | Cập nhật hồ sơ |
-| POST | `/api/v1/persons/{id}/faces` | Thêm metadata ảnh khuôn mặt |
-| DELETE | `/api/v1/persons/{id}/faces/{face_id}` | Xóa face profile |
-| GET | `/api/v1/history` | Lịch sử sự kiện |
-| GET | `/api/v1/settings` | Toàn bộ settings |
-| PATCH | `/api/v1/settings/general` | Cấu hình chung |
-| PATCH | `/api/v1/settings/notifications` | Cấu hình thông báo |
+| `GET` | `/api/v1/history` | Event + media history đã persist |
 
-## Snapshot
+History là audit/review lịch sử, không phải live incident list.
 
-Backend mount thư mục local `snapshots/` tại `/snapshots`. Chỉ lưu relative path trong database. Không chấp nhận path traversal hoặc URL tùy ý từ client công khai.
+## 8. Status codes
 
-## Error handling
+| Code | Ý nghĩa |
+|---|---|
+| `200` | Thành công đồng bộ |
+| `202` | Action/ingestion đã được chấp nhận |
+| `204` | Xoá thành công |
+| `404` | Resource/preview không tồn tại |
+| `409` | Xung đột trạng thái/constraint |
+| `422` | Payload/source/path không hợp lệ |
 
-- `404`: camera, person, face profile hoặc alert không tồn tại.
-- `422`: payload/schema hoặc source camera không hợp lệ.
-- `202`: vision event đã được nhận vào pipeline bất đồng bộ.
-- Client phải chịu được duplicate event và kết nối lại SSE.
+Không suy luận lỗi chỉ từ message frontend; kiểm tra status code và response body trong Browser Network hoặc Swagger.
+
+## 9. API invariants
+
+- Camera ONLINE chỉ phản ánh capture/source health, không phản ánh Vision health.
+- Vision ERROR không làm Camera OFFLINE.
+- Start/Stop và Vision Enable/Disable là persisted desired-state actions.
+- `preview` và event `snapshot` là hai loại media khác nhau.
+- RTSP credential không được phản chiếu ra frontend.
+- Event ID phải idempotent.
+- Face identity production dùng database-backed gallery.

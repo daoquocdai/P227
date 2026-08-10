@@ -1,8 +1,8 @@
 import { Bell, Camera, HeartHandshake, HelpCircle, Send, ShieldCheck, Sparkles, UsersRound, Wifi, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
-import { initialAlerts } from "../features/alerts/alertMockData";
-import type { AlertStatus } from "../features/alerts/alert.types";
+import type { AlertEvent, AlertStatus } from "../features/alerts/alert.types";
+import { fetchAlerts } from "../features/alerts/alertService";
 import { answerAntamQuestion } from "./antamAssistantEngine";
 
 type CompanionMessage={id:string;role:"user"|"assistant";text:string;time:string;suggestions?:string[]};
@@ -13,9 +13,16 @@ export default function FloatingAssistant() {
   const [peekVisible,setPeekVisible]=useState(false);
   const [helpOpen,setHelpOpen]=useState(false); const [question,setQuestion]=useState(""); const [typing,setTyping]=useState(false);
   const [messages,setMessages]=useState<CompanionMessage[]>(()=>{try{const saved=JSON.parse(localStorage.getItem("antam_companion_messages")||"[]");return Array.isArray(saved)?saved:[]}catch{return []}}); const conversationRef=useRef<HTMLDivElement>(null);
+  const [alerts, setAlerts] = useState<AlertEvent[]>([]);
   const [statusOverrides, setStatusOverrides] = useState<Record<string, AlertStatus>>({});
   const [position,setPosition]=useState<{x:number;y:number}|null>(()=>{try{const saved=JSON.parse(localStorage.getItem("antam_pet_position")||"null");return Number.isFinite(saved?.x)&&Number.isFinite(saved?.y)?saved:null}catch{return null}});
   const [dragging,setDragging]=useState(false); const skipClickRef=useRef(false); const dragRef=useRef({pointerId:-1,startX:0,startY:0,originX:0,originY:0,moved:false});
+  useEffect(() => {
+    const refreshAlerts = () => { void fetchAlerts().then(setAlerts).catch(() => undefined); };
+    refreshAlerts();
+    window.addEventListener("antam:alerts-changed", refreshAlerts);
+    return () => window.removeEventListener("antam:alerts-changed", refreshAlerts);
+  }, []);
   useEffect(() => {
     const syncAlertStatus = (event: Event) => {
       const detail = (event as CustomEvent<{ id: string; status: AlertStatus }>).detail;
@@ -26,7 +33,7 @@ export default function FloatingAssistant() {
   }, []);
   useEffect(()=>{const keepInViewport=()=>setPosition(current=>current?{x:Math.max(8,Math.min(current.x,window.innerWidth-(window.innerWidth<=600?58:66)-8)),y:Math.max(8,Math.min(current.y,window.innerHeight-(window.innerWidth<=600?58:66)-8))}:current);keepInViewport();window.addEventListener("resize",keepInViewport);return()=>window.removeEventListener("resize",keepInViewport)},[]);
   useEffect(()=>{localStorage.setItem("antam_companion_messages",JSON.stringify(messages));const area=conversationRef.current;if(area)requestAnimationFrame(()=>area.scrollTo({top:area.scrollHeight,behavior:"smooth"}))},[messages,typing]);
-  const urgentAlerts = initialAlerts.filter((alert) => {const occurredAt=new Date(alert.occurredAt),today=new Date();const isToday=occurredAt.getFullYear()===today.getFullYear()&&occurredAt.getMonth()===today.getMonth()&&occurredAt.getDate()===today.getDate();return isToday&&["high", "critical"].includes(alert.severity) && ["pending", "need_help"].includes(statusOverrides[alert.id] ?? alert.status)});
+  const urgentAlerts = alerts.filter((alert) => {const occurredAt=new Date(alert.occurredAt),today=new Date();const isToday=occurredAt.getFullYear()===today.getFullYear()&&occurredAt.getMonth()===today.getMonth()&&occurredAt.getDate()===today.getDate();return isToday&&["high", "critical"].includes(alert.severity) && ["pending", "need_help"].includes(statusOverrides[alert.id] ?? alert.status)});
   const urgentAlert = urgentAlerts[0];
   useEffect(()=>{if(!urgentAlert||open)return;setPeekVisible(true);const timer=window.setTimeout(()=>setPeekVisible(false),8000);return()=>window.clearTimeout(timer)},[urgentAlert?.id,open]);
 

@@ -51,7 +51,7 @@ function toAlertEvent(alert: BackendAlert): AlertEvent {
   return {
     id: String(alert.id), eventId: alert.event_id ?? String(alert.id), cameraId: alert.camera_id ?? "unknown-camera", occurredAt,
     type: presentation.type, title: presentation.title,
-    subject: alert.identity_name ?? (presentation.type === "stranger" ? "Người chưa xác định" : "Camera gia đình"),
+    subject: alert.identity_name ?? (presentation.type === "stranger" ? "Người chưa nhận diện" : presentation.type === "fall" ? "Người trong khu vực" : "Không xác định"),
     location: alert.camera_location ?? "Khu vực chưa xác định",
     time: new Intl.DateTimeFormat("vi-VN", { hour: "2-digit", minute: "2-digit" }).format(new Date(occurredAt)),
     timestamp: occurredAt, severity: alert.severity ?? presentation.severity, status: normalizeStatus(alert.status),

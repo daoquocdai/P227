@@ -1,8 +1,11 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+VISION_ROOT = Path(__file__).resolve().parent / "vision"
 
 
 class Settings(BaseSettings):
@@ -21,6 +24,40 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"
 
     api_base_url: str = "http://localhost:8000"
+
+    # Explicit test/demo control. Empty means the production mock emits no events.
+    mock_vision_event_frame_ids: str = ""
+
+    # Vision. Mock remains the safe default; Legacy imports and models are lazy.
+    vision_engine: Literal["mock", "legacy", "legacy_v1", "legacy_v2"] = "mock"
+    vision_device: str = "auto"
+    vision_legacy_yolo_path: Path = VISION_ROOT / "yolov8n.pt"
+    vision_legacy_config_path: Path = (
+        VISION_ROOT / "work_dir" / "fall_detection" / "ntu25-bone" / "config.yaml"
+    )
+    vision_legacy_checkpoint_path: Path = (
+        VISION_ROOT / "work_dir" / "fall_detection" / "ntu25-bone" / "runs-best_val.pt"
+    )
+    vision_v2_config_path: Path = VISION_ROOT / "work_dir" / "fall_detection" / "joint" / "config.yaml"
+    vision_v2_checkpoint_path: Path = (
+        VISION_ROOT / "work_dir" / "fall_detection" / "joint" / "runs-best_val.pt"
+    )
+    vision_legacy_known_faces_dir: Path = VISION_ROOT / "register face"
+    vision_legacy_identity_enabled: bool = False
+    vision_legacy_identity_provider: Literal["auto", "cpu", "directml"] = "auto"
+    vision_legacy_insightface_root: Path = Path.home() / ".insightface"
+    vision_temporal_target_sample_rate: float = Field(default=15.0, gt=0)
+    vision_temporal_buffer_capacity: int = Field(default=8, ge=2, multiple_of=2)
+
+    @field_validator("vision_device")
+    @classmethod
+    def validate_vision_device(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized in {"auto", "cpu", "cuda"}:
+            return normalized
+        if normalized.startswith("cuda:") and normalized[5:].isdigit():
+            return normalized
+        raise ValueError("VISION_DEVICE must be auto, cpu, cuda, or cuda:N")
 
     # LLM
     openai_api_key: str = ""

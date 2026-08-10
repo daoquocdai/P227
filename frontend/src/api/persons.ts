@@ -30,9 +30,10 @@ export function updatePerson(id: string, data: Partial<Omit<PersonDto, "id" | "f
   return apiClient(`/persons/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(data) });
 }
 
-export function addFace(id: string, quality: number, angle = "Ảnh mới"): Promise<PersonDto> {
+export function addFace(id: string, imageDataUrl: string, angle = "Face image"): Promise<PersonDto> {
   return apiClient(`/persons/${encodeURIComponent(id)}/faces`, {
-    method: "POST", body: JSON.stringify({ quality, angle }),
+    method: "POST",
+    body: JSON.stringify({ image_data_url: imageDataUrl, angle }),
   });
 }
 

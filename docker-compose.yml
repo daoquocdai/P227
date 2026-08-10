@@ -3,17 +3,50 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: guardiancam_backend
     ports:
-      - "8000:8000"
+      - "${APP_PORT:-8000}:8000"
     env_file:
-      - .env
+      - path: .env
+        required: false
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
+      DATABASE_URL: sqlite:///./data/app.db
+      CHROMA_PERSIST_DIR: ./data/chroma
+      CORS_ORIGINS: http://localhost:${FRONTEND_PORT:-5173}
+      VISION_ENGINE: ${VISION_ENGINE:-legacy}
+      VISION_DEVICE: cpu
+      VISION_LEGACY_IDENTITY_ENABLED: ${VISION_LEGACY_IDENTITY_ENABLED:-false}
+      VISION_LEGACY_IDENTITY_PROVIDER: cpu
+      VISION_LEGACY_INSIGHTFACE_ROOT: /home/appuser/.insightface
     volumes:
       - ./data:/app/data
       - ./snapshots:/app/snapshots
+      # The current SQLite camera records reference demo files below this path.
+      - ./frontend/public:/app/frontend/public:ro
+      - insightface_models:/home/appuser/.insightface
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)
       interval: 30s
       timeout: 10s
+      start_period: 60s
       retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  insightface_models:

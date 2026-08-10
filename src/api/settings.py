@@ -1,8 +1,9 @@
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from src.services.camera_service import CameraNotFoundError
 from src.services.settings_service import SettingsConflictError, SettingsNotFoundError, settings_service
 
 router = APIRouter(prefix="/settings", tags=["Settings"])
@@ -43,12 +44,14 @@ class PermissionUpdate(BaseModel):
 
 
 class CameraStatusUpdate(BaseModel):
-    active: bool
+    active: bool | None = None
+    vision_enabled: bool | None = None
 
 
 @router.get("")
-async def get_settings():
-    return settings_service.get()
+async def get_settings(request: Request):
+    runtime = request.app.state.local_runtime
+    return settings_service.get(runtime.camera, runtime.vision)
 
 
 @router.patch("/general")
@@ -90,8 +93,13 @@ async def update_permission(user_id: str, permission: str, data: PermissionUpdat
 
 
 @router.patch("/cameras/{camera_id}")
-async def update_camera(camera_id: str, data: CameraStatusUpdate):
+async def update_camera(camera_id: str, data: CameraStatusUpdate, request: Request):
     try:
-        return settings_service.update_camera(camera_id, data.active)
-    except SettingsNotFoundError as exc:
+        runtime = request.app.state.local_runtime
+        if data.active is not None:
+            runtime.set_camera_enabled(camera_id, data.active)
+        if data.vision_enabled is not None:
+            runtime.set_vision_enabled(camera_id, data.vision_enabled)
+        return settings_service.get(runtime.camera, runtime.vision)
+    except (SettingsNotFoundError, CameraNotFoundError) as exc:
         raise HTTPException(status_code=404, detail="Không tìm thấy camera") from exc

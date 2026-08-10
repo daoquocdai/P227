@@ -1,298 +1,820 @@
-# TÀI LIỆU GATE 1: AN TÂM HOME — GUARDIANCAM LOCAL HUB
+# Gate 1 — GuardianCam Local Hub
 
-> Phiên bản cập nhật theo kiến trúc và mã nguồn hiện tại: nhiều camera thường truyền video về **một Local Smart Hub**; toàn bộ Vision AI, event engine, backend, agent, database và media chạy tập trung trên hub.
+> Đây là artifact yêu cầu/scope của Gate 1 nên các cụm “V1” trong tài liệu này
+> chỉ phiên bản sản phẩm tại thời điểm Gate 1. Trạng thái runtime hiện hành,
+> bao gồm Vision V1/V2, được mô tả tại [architecture.md](architecture.md),
+> [setup.md](setup.md) và [testing.md](testing.md).
 
----
+> **Gate 1 submission:** Brief + PRD + Wireframe/UI Flow + GitHub Repo & AI Log Setup.
 
-## 1-PAGE BRIEF
+GuardianCam là một Local Hub giám sát an toàn cho gia đình, nhận webcam/video/RTSP, chạy Vision cục bộ để hỗ trợ phát hiện té ngã và nhận diện người thân/người chưa được đăng ký, sau đó lưu sự kiện và hiển thị cảnh báo realtime trên web.
 
-### Tên đề tài
-
-**An Tâm Home — GuardianCam Local Hub: phát hiện té ngã và người lạ trong gia đình bằng AI xử lý cục bộ.**
-
-### Vấn đề
-
-Camera gia đình thông thường chủ yếu ghi hình, buộc người thân phải theo dõi thủ công. Khi người cao tuổi té ngã hoặc người lạ xuất hiện, cảnh báo chậm hoặc báo giả có thể khiến gia đình bỏ lỡ thời điểm xử lý. Giải pháp gửi video liên tục lên cloud còn làm tăng băng thông, chi phí và rủi ro riêng tư trong không gian sống.
-
-### Giải pháp
-
-Một Local Hub trong nhà nhận luồng từ camera USB, RTSP/ONVIF hoặc video file và chạy toàn bộ pipeline:
-
-1. YOLO phát hiện người và tracking.
-2. MediaPipe trích xuất keypoint; SDAGCN phân tích chuỗi skeleton để phát hiện té ngã.
-3. InsightFace so khớp người thân và phát hiện người lạ.
-4. Temporal Event Engine xác nhận theo thời gian, chống trùng và gán mức độ nghiêm trọng.
-5. FastAPI lưu sự kiện vào SQLite và phát cảnh báo realtime đến dashboard React.
-6. LangGraph hỗ trợ diễn giải và quy trình human-in-the-loop; không thay Vision AI quyết định tín hiệu té ngã.
-
-### Người dùng mục tiêu
-
-- Gia đình có người cao tuổi sống một mình hoặc ở nhà trong thời gian người thân đi làm.
-- Người chăm sóc cần xem cảnh báo, lịch sử và xác nhận tình huống từ xa trong LAN/VPN.
-- Gia đình ưu tiên xử lý local và không muốn tải video sinh hoạt liên tục lên cloud.
-
-### Giá trị khác biệt
-
-- Camera không cần AI, GPU hoặc edge computer riêng.
-- Một hub quản lý tập trung model, dữ liệu, cập nhật và chính sách riêng tư.
-- Video thô không được gửi ra cloud theo mặc định.
-- Phát hiện và lưu cảnh báo cốt lõi vẫn hoạt động khi mất Internet hoặc LLM không khả dụng.
+> GuardianCam là công cụ hỗ trợ cảnh báo, không thay thế thiết bị y tế, người chăm sóc hoặc dịch vụ khẩn cấp.
 
 ---
 
-## PRODUCT REQUIREMENTS DOCUMENT (PRD)
+# 1. Brief
 
-### 1. Problem Statement
+## 1.1 Problem
 
-Người thân không thể quan sát camera liên tục, trong khi motion detection đơn giản tạo nhiều cảnh báo không có ý nghĩa. Bài toán cần phân biệt người quen/người lạ, nhận biết té ngã từ diễn biến theo thời gian và đưa đúng bằng chứng đến người chăm sóc mà vẫn bảo vệ dữ liệu hình ảnh gia đình.
+Camera gia đình chủ yếu cung cấp hình ảnh hoặc bản ghi. Người thân/người chăm sóc vẫn phải chủ động mở camera và theo dõi, trong khi các tình huống như té ngã có thể xảy ra bất ngờ.
 
-### 2. Product Goals
+GuardianCam tập trung vào các pain point:
 
-- Phát hiện sớm tình huống nghi ngờ té ngã hoặc người lạ.
-- Giảm cảnh báo trùng và cảnh báo từ một frame đơn lẻ.
-- Cung cấp dashboard thống nhất cho camera, alert, history, family và settings.
-- Cho phép người dùng xác nhận `safe`, `false_alarm` hoặc `need_help`.
-- Lưu event, alert và thao tác review để audit và đánh giá model.
-- Chạy local-first trên một máy trung tâm với camera phổ thông.
+- Người thân không thể quan sát camera liên tục.
+- Một luồng video không tự biến thành cảnh báo có ngữ nghĩa.
+- Phát hiện té ngã cần diễn biến theo thời gian, không chỉ một frame.
+- Nhận diện người chưa đăng ký cần một danh sách người thân đáng tin cậy.
+- Dữ liệu camera trong nhà có tính riêng tư cao nên ưu tiên xử lý local.
 
-### 3. Non-goals của MVP
+> **Evidence note:** repository hiện chưa có một study định lượng đủ để đưa các con số như “giảm X% thời gian” hay “Y% hộ gia đình”. Không tự thêm số liệu chưa được kiểm chứng vào Gate 1. Nếu chương trình yêu cầu evidence định lượng, bổ sung artifact riêng trong `eval/`.
 
-- Không phải thiết bị y tế hoặc hệ thống gọi cấp cứu được chứng nhận.
-- Không cam kết loại bỏ hoàn toàn false positive/false negative.
-- Không triển khai một thiết bị AI riêng cho từng camera.
-- Không hỗ trợ nhiều backend node hoặc high availability trong MVP SQLite.
-- Không tự động gửi frame, face embedding hoặc video thô cho LLM/cloud.
+## 1.2 Target User
 
-### 4. AI Leverage
+### Primary
 
-#### Vision AI quyết định tín hiệu thị giác
+Gia đình có người cao tuổi hoặc thành viên cần được theo dõi an toàn tại nhà.
 
-- **YOLO:** phát hiện người và vùng quan tâm.
-- **MediaPipe:** trích xuất pose/keypoint.
-- **SDAGCN:** phân loại hành vi từ chuỗi skeleton 25 khớp thay vì ảnh tĩnh.
-- **InsightFace:** tạo và so khớp face embedding để xác định known/unknown.
+### Secondary
 
-#### Temporal reasoning giảm nhiễu
+Người thân/người chăm sóc cần:
 
-Temporal Event Engine dùng nhiều frame, confidence, thời gian bất động, `camera_id` và `track_id` để xác nhận, deduplicate và cooldown. Đây là logic xác định an toàn, không phụ thuộc LLM.
+- xem trạng thái camera;
+- xem live stream khi cần;
+- nhận cảnh báo;
+- quản lý người thân;
+- xem lại lịch sử sự kiện;
+- không phải quan sát video liên tục.
 
-#### Agent hỗ trợ workflow
+## 1.3 Solution
 
-LangGraph nhận event đã được Vision xác nhận để diễn giải, đề xuất hành động và điều phối human-in-the-loop. Khi LLM lỗi hoặc không có Internet, backend dùng dữ liệu deterministic và vẫn lưu/phát alert.
+GuardianCam dùng một Local Hub tại nhà:
 
-### 5. MVP Scope
+```text
+Webcam / Video / RTSP
+        ↓
+CameraRuntime
+        ↓
+FrameHub
+   ├── Overview Preview
+   ├── Camera MJPEG
+   └── Vision
+         ↓
+YOLO + Pose + SDA-GCN + InsightFace
+         ↓
+Business Event
+         ↓
+EventService
+   ├── SQLite
+   └── SSE
+         ↓
+React Web
+```
 
-#### Đã có trong repository
+Các điểm chính:
 
-- Vision code cho webcam/video: YOLO, MediaPipe, SDAGCN và InsightFace.
-- FastAPI nhận `VisionEvent`, chống ghi trùng và lưu SQLite.
-- Alert list/detail/review, SSE realtime stream và history.
-- Quản lý camera source, người thân, face profile metadata và settings.
-- Dashboard React/Vite cho overview, cameras, alerts, history, family và settings.
-- Test backend/API, Docker backend và GitHub Actions CI.
+- Một Local Hub quản lý nhiều camera.
+- Camera state và Vision desired state được persist trong SQLite.
+- Backend restart sẽ tự restore các camera/Vision đã được bật.
+- Vision không sở hữu camera capture riêng.
+- Overview dùng static preview nhẹ.
+- Camera page dùng live MJPEG.
+- Face identity production lấy từ database.
+- Alert được persist trước khi phát realtime qua SSE.
+- Một camera lỗi không làm toàn bộ hub lỗi.
 
-#### Cần hoàn thiện để demo end-to-end
+## 1.4 Value Proposition
 
-- Chuẩn hóa adapter từ `vision/realtime.py` sang `VisionEventRequest`.
-- Cung cấp model weights qua artifact/Git LFS kèm checksum.
-- Đồng bộ face enrollment filesystem với hồ sơ database.
-- Hoàn thiện RTSP reconnect và scheduling nhiều camera.
-- Thu thập benchmark trên tập test tách biệt và báo cáo metric thực đo.
-- Kiểm tra retention, backup/restore và quyền truy cập media.
+**GuardianCam biến camera gia đình từ một nguồn video thụ động thành một hệ thống giám sát local-first có cảnh báo và lịch sử sự kiện.**
 
-### 6. Functional Requirements
+Khác biệt V1:
 
-| ID | Yêu cầu | Mức ưu tiên |
+- không cần AI box riêng cho từng camera;
+- critical path không phụ thuộc LLM;
+- database là source of truth của product state;
+- face gallery production không dùng thư mục ảnh thủ công;
+- bounded buffering để bảo vệ latency/memory;
+- degraded capacity được báo trung thực thay vì che frame drop.
+
+## 1.5 Product Scope V1
+
+### In scope
+
+- Camera CRUD.
+- Webcam/video/RTSP source contract.
+- Persisted desired state.
+- Startup auto-restore.
+- Overview static preview.
+- Camera live MJPEG.
+- Fall detection pipeline.
+- Face identity khi bật.
+- Persons + face profiles database.
+- Alerts + SSE.
+- History.
+- Settings.
+- Event snapshots.
+- Human review.
+- CPU fallback.
+- Failure isolation.
+
+### Out of scope
+
+- Chứng nhận thiết bị y tế.
+- Cam kết zero false positive/false negative.
+- Gọi cấp cứu tự động.
+- Multi-hub/high availability.
+- Distributed message broker.
+- Cloud video storage mặc định.
+- Runtime model retraining.
+- LLM quyết định tín hiệu fall/unknown.
+- Tuyên bố multi-camera strict khi chưa benchmark hardware phù hợp.
+
+---
+
+# 2. PRD — Product Requirements Document
+
+## 2.1 Product Goal
+
+Sau khi cài đặt, normal product flow phải là:
+
+```text
+Start Backend
+      +
+Start Frontend
+      ↓
+Open Web
+      ↓
+Overview hoạt động ngay từ database
+```
+
+Người dùng bình thường không cần mở Swagger để:
+
+- start camera;
+- enable Vision;
+- populate frontend;
+- copy face images vào thư mục legacy.
+
+## 2.2 Product Principles
+
+1. **Database-backed:** camera, persons, settings, alerts/history và desired state lấy từ backend/database.
+2. **Local-first:** critical Vision pipeline không cần cloud.
+3. **Camera independent from Vision:** Vision error không làm camera offline.
+4. **Bounded runtime:** không có unbounded frame backlog.
+5. **Honest observability:** overload/degraded phải được báo.
+6. **No dead UI:** nút hiển thị cho user phải có backend behavior thật hoặc bị loại bỏ.
+7. **Failure isolation:** một camera/source lỗi không làm toàn application fail.
+
+## 2.3 Main User Stories
+
+### US-01 — Xem tổng quan
+
+**Là người thân**, tôi muốn mở web và thấy tất cả camera, trạng thái và ảnh gần nhất để biết hệ thống đang hoạt động thế nào mà không mở tất cả live stream.
+
+Acceptance:
+
+- root route mở Overview;
+- camera list lấy từ DB;
+- có online/offline/error state;
+- có static preview hoặc placeholder;
+- không mở toàn bộ MJPEG stream.
+
+### US-02 — Xem camera live
+
+**Là người thân**, tôi muốn chọn một camera để xem video trực tiếp.
+
+Acceptance:
+
+- camera lấy từ DB;
+- live source đúng persisted config;
+- camera online mở MJPEG;
+- camera offline/error có UI state rõ;
+- chỉ camera đang chọn mở live stream.
+
+### US-03 — Khôi phục hệ thống sau restart
+
+**Là người dùng**, tôi muốn backend restart nhưng các camera/Vision đã bật tự hoạt động lại.
+
+Acceptance:
+
+- desired ON → auto restore;
+- desired OFF → vẫn OFF;
+- một camera lỗi không block camera khác;
+- không cần gọi manual Swagger startup.
+
+### US-04 — Nhận cảnh báo
+
+**Là người chăm sóc**, tôi muốn xem alert đã lưu và nhận alert mới realtime.
+
+Acceptance:
+
+- initial data bằng REST;
+- update bằng SSE;
+- event persist trước khi SSE;
+- không duplicate UI item;
+- snapshot chỉ hiện khi file hợp lệ.
+
+### US-05 — Quản lý người thân
+
+**Là người dùng**, tôi muốn thêm/sửa/deactivate người thân và đăng ký khuôn mặt từ web.
+
+Acceptance:
+
+- Persons lấy từ SQLite;
+- face image được backend xử lý;
+- embedding/profile được persist;
+- FaceGallery refresh không cần restart;
+- không cần copy ảnh vào `register face/`.
+
+### US-06 — Thay đổi cài đặt
+
+**Là người dùng**, tôi muốn thay camera/Vision settings và giữ lại sau restart.
+
+Acceptance:
+
+- UI đọc current settings;
+- update gọi backend;
+- backend update persistence + runtime khi cần;
+- reload/restart vẫn giữ.
+
+### US-07 — Xem lịch sử
+
+**Là người dùng**, tôi muốn xem lại lịch sử sự kiện đã persist.
+
+Acceptance:
+
+- không dùng mock data;
+- event/media lấy DB;
+- snapshot missing được biểu diễn trung thực.
+
+## 2.4 Functional Requirements
+
+| ID | Requirement | Acceptance |
 |---|---|---|
-| FR-01 | Hub nhận webcam, video file hoặc RTSP source | Must |
-| FR-02 | Phát hiện và tracking người | Must |
-| FR-03 | Phân tích té ngã từ chuỗi pose | Must |
-| FR-04 | Phân biệt người thân và người lạ | Must |
-| FR-05 | Tạo event idempotent theo `event_id` | Must |
-| FR-06 | Lưu event/alert và phát realtime qua SSE | Must |
-| FR-07 | Người dùng review alert và để lại ghi chú | Must |
-| FR-08 | Quản lý camera, người thân và settings | Should |
-| FR-09 | Lưu snapshot/clip local theo retention | Should |
-| FR-10 | Giám sát health/reconnect nhiều camera | Should |
+| FR-01 | Camera list từ DB | Các trang dùng cùng camera metadata/state |
+| FR-02 | Camera desired-state persistence | Start/Stop được restore sau restart |
+| FR-03 | Vision desired-state persistence | Enable/Disable được restore sau restart |
+| FR-04 | Sole capture owner | Chỉ CameraRuntime mở `VideoCapture` |
+| FR-05 | Overview static preview | Không dùng mọi MJPEG stream trên Dashboard |
+| FR-06 | Camera live MJPEG | Camera selected xem stream thật |
+| FR-07 | Camera source contract | Webcam/video/RTSP theo DB config |
+| FR-08 | Fall sequence detection | Model/state machine dùng temporal evidence |
+| FR-09 | DB-backed identity | FaceGallery lấy từ persons/face_profiles |
+| FR-10 | Face gallery refresh | Person/face mutation cập nhật gallery |
+| FR-11 | Alert persistence | Business event lưu DB |
+| FR-12 | Alert realtime | SSE sau persistence |
+| FR-13 | Event idempotency | Retry không tạo alert trùng |
+| FR-14 | Snapshot evidence | Đúng event frame hoặc missing state |
+| FR-15 | Human review | Review/note được persist |
+| FR-16 | Settings persistence | Reload/restart đọc lại |
+| FR-17 | History persistence | Event/media từ DB |
+| FR-18 | Failure isolation | Một camera lỗi không làm hub fail |
+| FR-19 | UI cleanup | Không có dead/mock product controls |
+| FR-20 | Startup auto-restore | Normal startup không cần Swagger |
 
-### 7. Non-functional Requirements
+## 2.5 Non-Functional Requirements
 
-- **Privacy:** video, snapshot và face data ở Local Hub; không commit hoặc gửi cloud mặc định.
-- **Resilience:** detection, persistence và alert cơ bản hoạt động offline.
-- **Idempotency:** retry cùng `event_id` không tạo alert mới.
-- **Security:** không trả RTSP credential cho frontend; `.env` và dữ liệu nhạy cảm không vào Git.
-- **Maintainability:** một `requirements.txt`, schema rõ ràng và tài liệu API/architecture đồng bộ.
-- **Performance:** sampling/FPS phải cấu hình theo tài nguyên của một hub và số camera.
+| ID | Requirement |
+|---|---|
+| NFR-01 | Video/frame backlog phải bounded |
+| NFR-02 | Vision worker không block FastAPI event loop |
+| NFR-03 | Vision error độc lập camera capture health |
+| NFR-04 | RTSP credential không phản chiếu ra frontend |
+| NFR-05 | Media path phải chống traversal/URL tùy ý |
+| NFR-06 | Face embedding được xem là dữ liệu nhạy cảm |
+| NFR-07 | CPU fallback hoạt động |
+| NFR-08 | Overload phải có metrics/fidelity status |
+| NFR-09 | Snapshot/SSE/persistence failure không làm CameraRuntime chết |
+| NFR-10 | Shutdown phải release runtime resources sạch |
 
-### 8. Metrics và tiêu chí đánh giá
+## 2.6 Data Requirements
 
-Các số dưới đây là **mục tiêu Gate/MVP**, chưa được xem là kết quả đạt nếu chưa có báo cáo trong `eval/`.
+Database là source of truth của:
 
-| Metric | Mục tiêu ban đầu | Cách đo |
-|---|---:|---|
-| Fall recall | ≥ 95% | Video test tách train, theo từng góc camera |
-| Fall precision | ≥ 90% | TP/(TP+FP) trên tập test |
-| Unknown-person F1 | ≥ 90% | Tập known/unknown dưới nhiều ánh sáng |
-| False alerts | < 1/camera/giờ | Chạy liên tục trong kịch bản sinh hoạt |
-| Time-to-alert p95 | < 10 giây | Từ thời điểm event đủ điều kiện đến SSE client |
-| Duplicate alerts | 0 với cùng `event_id` | Retry HTTP/event sink test |
-| Offline core flow | 100% | Tắt Internet vẫn detect, persist và review được |
+- cameras;
+- camera sources;
+- camera/Vision desired state;
+- persons;
+- face profiles/embeddings;
+- alerts;
+- events;
+- media references;
+- settings;
+- history/audit.
 
-Không tối ưu recall bằng cách bỏ qua precision; cả false negative và alert fatigue đều phải được báo cáo.
+Runtime-only:
+
+- latest FramePacket;
+- MJPEG connection;
+- preview bytes;
+- Vision session temporal state;
+- queue/buffer metrics;
+- actual device/provider status.
+
+Không persist mọi frame.
+
+## 2.7 Vision Contract
+
+Current V1:
+
+```text
+YOLO
+  ↓
+Person Crop
+  ├── MediaPipe Pose → Skeleton → 64-sample window → SDA-GCN → Fall state
+  └── InsightFace → FaceGallery → Known/Unknown
+```
+
+SDA-GCN input:
+
+```text
+(1, 3, 64, 25, 1)
+```
+
+Không thay:
+
+- model graph;
+- preprocessing;
+- window;
+- stride;
+- tensor math;
+- class mapping;
+
+chỉ để làm hardware chậm “chạy được”.
+
+CPU throughput thiếu có thể được báo `SUPPORTED-DEGRADED`.
+
+## 2.8 Success / Acceptance Criteria
+
+Gate 1 product acceptance:
+
+- Problem/Solution/Target User rõ.
+- Product scope và non-goals rõ.
+- Main UI flow rõ.
+- Architecture rõ.
+- GitHub repository truy cập được.
+- AI logging setup được mô tả.
+- README/Quick Start nhất quán.
+
+Engineering acceptance tiếp theo:
+
+- Unit/regression PASS.
+- Integration PASS.
+- Frontend build PASS.
+- Startup restore PASS.
+- Camera failure isolation PASS.
+- Real Legacy smoke được báo đúng hardware profile.
+- Event → DB → SSE → UI E2E PASS.
+- Snapshot behavior PASS.
+- Known limitations được ghi.
 
 ---
 
-## KIẾN TRÚC MVP
+# 3. Wireframe / UI Flow
+
+## 3.1 Information Architecture
 
 ```mermaid
 flowchart LR
-    C1[Camera USB]
-    C2[Camera RTSP/ONVIF]
-    C3[Video file]
-    subgraph HUB[Một Local Smart Hub]
-        INGEST[Video ingest + camera manager]
-        VISION[YOLO + MediaPipe/SDAGCN + InsightFace]
-        ENGINE[Temporal Event Engine]
-        QUEUE[Bounded async queue]
-        API[FastAPI + LangGraph/HITL]
-        DB[(SQLite + local media)]
-        INGEST --> VISION --> ENGINE --> QUEUE --> API --> DB
-    end
-    UI[React Dashboard]
-    C1 -->|raw video| INGEST
-    C2 -->|raw video| INGEST
-    C3 -->|raw video| INGEST
-    API <-->|REST + SSE| UI
+    ROOT[/]
+    OVERVIEW[Tổng quan]
+    CAMERAS[Camera]
+    ALERTS[Cảnh báo]
+    FAMILY[Người thân]
+    SETTINGS[Cài đặt]
+    HISTORY[Lịch sử]
+
+    ROOT --> OVERVIEW
+    OVERVIEW --> CAMERAS
+    OVERVIEW --> ALERTS
+    CAMERAS --> ALERTS
+    FAMILY --> SETTINGS
+    ALERTS --> HISTORY
 ```
 
-### Quyết định kiến trúc
+Main navigation:
 
-- Camera chỉ là nguồn video; không chạy model và không có edge node riêng.
-- Toàn bộ AI nằm trên một Local Hub để dùng chung GPU/NPU, model và storage.
-- Event transport mặc định là bounded queue trong process; không cần MQTT broker cho MVP.
-- HTTP `POST /api/v1/vision/events` là adapter khi vision chạy process riêng.
-- SQLite phù hợp một hub; nhiều hub/backend worker là bài toán sau MVP.
-
-Sơ đồ đầy đủ: [architecture_diagram.png](architecture_diagram.png).
-
----
-
-## EVENT CONTRACT
-
-```json
-{
-  "schema_version": 1,
-  "event_id": "living-room-20260806-001",
-  "camera_id": "living-room",
-  "camera_location": "Phòng khách",
-  "event_type": "FALL_CONFIRMED",
-  "occurred_at": "2026-08-06T10:20:31+07:00",
-  "confidence": 0.93,
-  "track_id": "37",
-  "identity_status": "KNOWN",
-  "identity_name": "Nguyễn Văn An",
-  "snapshot_path": "snapshots/event-001.jpg",
-  "immobile_seconds": 8.2,
-  "metadata": {"vision_version": "sdagcn-v1"}
-}
+```text
+GuardianCam
+├── Tổng quan
+├── Camera
+├── Cảnh báo
+├── Người thân
+├── Cài đặt
+└── Lịch sử
 ```
 
-Event type hỗ trợ: `FALL_SUSPECTED`, `FALL_CONFIRMED`, `UNKNOWN_PERSON`, `PERSON_RECOGNIZED`, `INACTIVITY_DETECTED`, `CAMERA_OFFLINE`, `CAMERA_ONLINE`.
+## 3.2 Overview Wireframe
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ GuardianCam                            System / Alert status │
+├──────────────┬──────────────────────────────────────────────┤
+│ Tổng quan    │ Tổng quan                                   │
+│ Camera       │                                              │
+│ Cảnh báo     │ [Camera 1] [Camera 2] [Camera 3]            │
+│ Người thân   │  Preview    Preview    Placeholder           │
+│ Cài đặt      │  Online     Online     Offline               │
+│ Lịch sử      │                                              │
+│              │ Recent Alerts / System Summary               │
+└──────────────┴──────────────────────────────────────────────┘
+```
+
+Rules:
+
+- camera cards từ DB;
+- static JPEG preview;
+- không open mọi MJPEG;
+- missing preview → placeholder.
+
+## 3.3 Camera Page Wireframe
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ Cameras                                                     │
+├────────────────┬────────────────────────────────────────────┤
+│ Camera list    │ Selected Camera                            │
+│                │                                            │
+│ ● Living Room  │       LIVE MJPEG STREAM                    │
+│ ○ Bedroom      │                                            │
+│ ! Camera 3     │                                            │
+│                │ Status: Online                             │
+│ Thumbnails     │ Vision: Running / Degraded / Disabled      │
+│ static preview │ [Start/Stop] [Vision On/Off]               │
+└────────────────┴────────────────────────────────────────────┘
+```
+
+Rules:
+
+- only selected camera opens live stream;
+- controls persist desired state;
+- source error shown independently.
+
+## 3.4 Alerts Wireframe
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ Alerts                                                      │
+├──────────────────────┬──────────────────────────────────────┤
+│ Alert list           │ Alert Detail                         │
+│                      │                                      │
+│ Fall - Bedroom       │ Camera / time / confidence           │
+│ Unknown - Entrance   │ Snapshot or placeholder              │
+│ ...                  │ Review status                        │
+│                      │ [Safe] [Need help] [False alarm]      │
+└──────────────────────┴──────────────────────────────────────┘
+```
+
+Data:
+
+- initial REST;
+- realtime SSE;
+- review action gọi backend thật.
+
+## 3.5 Family / Persons Wireframe
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ Người thân                                   [+ Thêm người] │
+├─────────────────────────────────────────────────────────────┤
+│ [Avatar] Nguyễn ...     Active        [Edit] [Deactivate]   │
+│ [Avatar] ...            Active        [Edit] [Deactivate]   │
+└─────────────────────────────────────────────────────────────┘
+
+Add/Edit:
+┌──────────────────────────────────────┐
+│ Name                                 │
+│ Metadata                             │
+│ Face image upload                    │
+│                                      │
+│ [Save]                               │
+└──────────────────────────────────────┘
+```
+
+Flow:
+
+```mermaid
+flowchart LR
+    FORM[Add/Edit Person] --> API[Persons API]
+    API --> DB[(persons)]
+    FORM --> FACE[Face Image]
+    FACE --> EMB[InsightFace Embedding]
+    EMB --> PROFILE[(face_profiles)]
+    PROFILE --> GALLERY[FaceGallery refresh]
+```
+
+## 3.6 Settings Wireframe
+
+```text
+┌──────────────────────────────────────────────┐
+│ Settings                                     │
+├──────────────────────────────────────────────┤
+│ General                                      │
+│ Notifications                                │
+│                                              │
+│ Camera 1       ON     Vision ON              │
+│ Camera 2       OFF    Vision OFF             │
+│                                              │
+│ [Save supported settings]                    │
+└──────────────────────────────────────────────┘
+```
+
+Không hiển thị control nếu không có backend semantics thật.
+
+## 3.7 Main User Flow
+
+### Normal startup
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant B as Backend
+    participant DB as SQLite
+    participant C as CameraRuntime
+    participant V as Vision
+    participant UI as Frontend
+
+    U->>B: Start backend
+    B->>DB: Load desired state
+    B->>C: Auto-start camera ON
+    B->>V: Auto-enable Vision ON
+    U->>UI: Open web
+    UI->>B: Load Overview
+    B-->>UI: Cameras + status + preview URLs
+```
+
+### Alert flow
+
+```mermaid
+sequenceDiagram
+    participant C as Camera
+    participant V as Vision
+    participant E as EventService
+    participant DB as SQLite
+    participant SSE as SSE
+    participant UI as Frontend
+
+    C->>V: Frames
+    V->>E: Business event
+    E->>DB: Persist event/alert
+    DB-->>E: Commit success
+    E->>SSE: Publish alert
+    SSE-->>UI: Realtime update
+```
+
+### Person enrollment
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant UI as Frontend
+    participant API as Persons API
+    participant F as FaceIdentityService
+    participant DB as SQLite
+    participant G as FaceGallery
+
+    U->>UI: Add person + face image
+    UI->>API: Submit
+    API->>F: Extract embedding
+    F->>DB: Persist person/profile
+    F->>G: Reload/Invalidate
+    API-->>UI: Success
+```
 
 ---
 
-## WIREFRAME & UI FLOW
+# 4. GitHub Repo & AI Log Setup
 
-### 1. Overview
+## 4.1 Repository
 
-- Hiển thị số camera online/offline, cảnh báo chưa đọc và trạng thái hệ thống.
-- Điều hướng nhanh tới camera hoặc alert cần xử lý.
+Repository:
 
-### 2. Cameras
+```text
+https://github.com/AI20K-Build-Phase-Cohort-3/P-227
+```
 
-- Danh sách camera, vị trí, trạng thái và playback an toàn.
-- Cấu hình `video_file`, `webcam` hoặc `rtsp` mà không lộ `source_uri` credential.
+Clone:
 
-### 3. Alerts và Human-in-the-loop
+```cmd
+git clone https://github.com/AI20K-Build-Phase-Cohort-3/P-227.git
+cd P-227
+```
 
-- Danh sách cảnh báo realtime qua SSE.
-- Chi tiết loại event, camera, confidence, người nhận diện và snapshot.
-- Review theo trạng thái `checking`, `safe`, `false_alarm`, `need_help` hoặc `resolved`.
-- Ghi chú review được lưu vào audit trail.
+Main development work has used the repository branch workflow defined by the team; before working, verify:
 
-### 4. History
+```cmd
+git branch --show-current
+git status
+git remote -v
+```
 
-- Tra cứu sự kiện đã lưu và kết quả xử lý.
-- Dùng dữ liệu review làm bằng chứng đánh giá model, không tự động retrain trong MVP.
+Do not place secrets/runtime user data in Git.
 
-### 5. Family
-
-- Quản lý hồ sơ người thân và face profile metadata.
-- Face image/embedding thật chỉ lưu local, không vào Git.
-
-### 6. Settings
-
-- Ngưỡng fall/unknown person, cấu hình notification, người dùng và camera.
-- Các quyền production cần được hoàn thiện trước khi mở truy cập ngoài LAN.
-
----
-
-## GITHUB REPOSITORY SETUP
+## 4.2 Relevant Repository Structure
 
 ```text
 P-227/
-├── src/                     # FastAPI, LangGraph, API, services, schemas
-├── vision/                  # YOLO, pose, SDAGCN, InsightFace, realtime
-├── frontend/                # React/Vite dashboard
-├── database/                # SQLite schema, seed và query tham khảo
-├── tests/                   # Agent, service và API tests
-├── docs/                    # Tài liệu kỹ thuật và Gate deliverables
-├── eval/                    # Metric/bằng chứng đánh giá
-├── presentation/            # Demo và pitch materials
-├── scripts/                 # Setup và AI logging hooks
-├── requirements.txt         # Dependency Python hợp nhất
-├── Dockerfile
-├── docker-compose.yml
-└── README.md
+├── .ai-log/              # AI log structure/output managed by project scripts
+├── .github/              # GitHub Actions / repository automation
+├── scripts/              # Setup + AI logging scripts
+├── src/                  # Backend, runtime, Vision
+├── frontend/             # React/Vite
+├── database/             # SQLite schema
+├── tests/                # Tests
+├── docs/                 # Project docs
+├── eval/                 # Evaluation artifacts when available
+├── presentation/         # Demo/pitch materials when available
+├── README.md
+└── requirements.txt
 ```
 
-Model `.pt`, database, face data, `.env`, TensorBoard runs và training artifacts bị Git ignore. Model triển khai phải được phân phối riêng và có checksum.
+## 4.3 AI Log Purpose
+
+AI-assisted development must leave an auditable log rather than chỉ ghi “dùng AI”.
+
+Current project flow:
+
+```text
+Antigravity / Gemini coding activity
+        ↓
+scripts/log_antigravity.py --auto
+        ↓
+.ai-log / collected entries
+        ↓
+scripts/submit_log.py
+        ↓
+AI logging submission endpoint / Phoenix integration
+```
+
+Git pre-push hook is used so AI logs are collected/submitted when pushing code.
+
+## 4.4 Pre-push Hook
+
+The project hook has used the following flow:
+
+```bash
+#!/usr/bin/env bash
+
+bash scripts/_pyrun.sh scripts/log_antigravity.py --auto || true
+bash scripts/_pyrun.sh scripts/submit_log.py || true
+
+exit 0
+```
+
+Meaning:
+
+1. Before push, try to collect Antigravity/Gemini activity.
+2. Try to submit AI log entries.
+3. Logging failure does not block source-code push because these commands use `|| true`.
+
+The hook must use a valid Unix shebang without UTF-8 BOM.
+
+## 4.5 Verify AI Log Setup
+
+Check hook:
+
+```cmd
+type .git\hooks\pre-push
+```
+
+Expected content should call:
+
+```text
+scripts/log_antigravity.py
+scripts/submit_log.py
+```
+
+Check project logging files/scripts exist:
+
+```cmd
+dir scripts
+dir .ai-log
+```
+
+Then make a normal push and verify log output.
+
+A successful setup may show a message equivalent to:
+
+```text
+[ai-log] Submitted ... entries → 202
+```
+
+If Antigravity activity is not found, the collector may report that no Antigravity `brain/` directory was found. That is different from a Git push failure.
+
+## 4.6 Hook Setup / Recovery Notes
+
+If the hook does not execute on Windows:
+
+- ensure Git Bash is installed and available;
+- ensure the first line is a clean `#!/usr/bin/env bash`;
+- remove UTF-8 BOM from the hook if present;
+- ensure scripts are referenced relative to repository root;
+- verify Python environment can run the scripts.
+
+Do not put API credentials directly inside `.git/hooks/pre-push`.
+
+## 4.7 Gate 1 Evidence for GitHub/AI Log
+
+For Gate 1, provide:
+
+- GitHub repository URL;
+- repository accessible to reviewers;
+- README present;
+- source code pushed;
+- `.ai-log/` structure or project AI-log mechanism present;
+- logging scripts present;
+- pre-push hook/setup documented;
+- one successful submission/log example if available;
+- no API key/secrets exposed in screenshot or repository.
+
+A screenshot alone is secondary evidence; repository state and scripts are the source of truth.
 
 ---
 
-## RỦI RO VÀ GIẢM THIỂU
+# 5. Architecture Reference
 
-| Rủi ro | Tác động | Giảm thiểu |
-|---|---|---|
-| Ngã bị che khuất/góc camera xấu | Bỏ sót | Nhiều góc test, temporal window, hướng dẫn lắp camera |
-| Người ngồi/nằm bị báo ngã | Alert fatigue | Time-series, immobility, HITL feedback |
-| Ánh sáng yếu làm sai face | Báo người lạ | Threshold `UNCERTAIN`, nhiều ảnh enrollment, không ép match |
-| Hub quá tải khi nhiều camera | Tăng latency | Sampling, resolution limit, bounded queue, health metric |
-| Mất điện/hỏng hub | Mất giám sát | UPS, watchdog, backup và cảnh báo camera/hub offline |
-| Lộ face/snapshot | Vi phạm riêng tư | Local storage, encryption, retention, access control |
-| LLM không khả dụng | Mất diễn giải | Deterministic fallback; không phụ thuộc LLM cho detection |
+Required architecture deliverable:
 
----
+- [architecture_diagram.md](architecture_diagram.md)
 
-## ACCEPTANCE CRITERIA CHO MVP DEMO
+Technical explanation:
 
-- [ ] Một video/webcam té ngã tạo `FALL_CONFIRMED` và alert xuất hiện trên dashboard.
-- [ ] Một người chưa đăng ký tạo `UNKNOWN_PERSON`.
-- [ ] Gửi lại cùng `event_id` không tạo alert trùng.
-- [ ] Người dùng review alert và xem lại được trong history.
-- [ ] Restart backend không làm mất event/alert đã lưu.
-- [ ] Tắt Internet vẫn chạy được detection, SQLite và dashboard trong LAN.
-- [ ] Không có `.env`, model weight, face image hoặc database trong Git diff.
-- [ ] Báo cáo metric thực đo được lưu trong `eval/` và không trình bày mục tiêu như kết quả.
+- [architecture.md](architecture.md)
+
+The architecture document must preserve these V1 invariants:
+
+- CameraRuntime is sole `VideoCapture` owner.
+- FrameHub uses latest-frame semantics.
+- MJPEG is video transport.
+- SSE is event transport.
+- Vision temporal buffering is bounded and separate.
+- Vision error does not make Camera offline.
+- Database is product source of truth.
+- FaceGallery is database-backed.
+- LLM/Agent is not on the critical detection path.
 
 ---
 
-## TÀI LIỆU LIÊN QUAN
+# 6. Gate 1 Submission Checklist
 
-- [README dự án](../README.md)
-- [Kiến trúc chi tiết](architecture.md)
-- [Vision AI](vision.md)
-- [API contract](api.md)
-- [Database](database.md)
-- [Bảo mật](security.md)
-- [Roadmap](roadmap.md)
+## Required by Gate 1
+
+- [x] **Brief**
+  - Problem
+  - Target User
+  - Solution
+  - Value Proposition
+  - Scope
+
+- [x] **PRD**
+  - Goals
+  - User Stories
+  - Functional Requirements
+  - Non-Functional Requirements
+  - Data Requirements
+  - Acceptance Criteria
+
+- [x] **Wireframe / UI Flow**
+  - Information architecture
+  - Overview
+  - Camera
+  - Alerts
+  - Persons
+  - Settings
+  - Main user flows
+
+- [x] **GitHub Repo & AI Log Setup**
+  - Repository URL
+  - Repository structure
+  - AI log flow
+  - Pre-push hook
+  - Verification
+
+## Supporting
+
+- [x] Architecture Diagram
+- [x] Technical Architecture
+- [x] API Contract
+- [x] Setup / Operations
+- [x] Testing / Acceptance
+- [x] README
+
+## Evidence still requiring actual artifact/state before final submission
+
+Do not tick these unless they really exist at submission time:
+
+- [ ] Evaluation evidence with reproducible metrics
+- [ ] Video demo
+- [ ] Pitch deck
+- [ ] Live deployment URL, if required
+- [ ] Strict hardware capacity evidence, if claimed
+
+---
+
+# 7. References
+
+- [README](../README.md)
+- [Architecture Diagrams](architecture_diagram.md)
+- [Technical Architecture](architecture.md)
+- [API Contract](api.md)
+- [Setup & Operations](setup.md)
+- [Testing & Acceptance](testing.md)

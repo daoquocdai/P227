@@ -2,6 +2,7 @@ from typing import Any
 from uuid import uuid4
 
 from src.database import database_connection
+from src.services.face_identity_service import FaceIdentityService, face_identity_service
 
 
 class PersonNotFoundError(Exception):
@@ -13,6 +14,9 @@ class FaceProfileNotFoundError(Exception):
 
 
 class PersonService:
+    def __init__(self, identity: FaceIdentityService | None = None) -> None:
+        self._identity = identity or face_identity_service
+
     def list_people(self) -> list[dict[str, Any]]:
         with database_connection() as connection:
             people = connection.execute("SELECT * FROM persons ORDER BY display_name").fetchall()
@@ -68,21 +72,22 @@ class PersonService:
             )
             if updated.rowcount == 0:
                 raise PersonNotFoundError(person_id)
+        self._identity.gallery.reload()
         return self.get_person(person_id)
 
-    def add_face(self, person_id: str, data) -> dict[str, Any]:
+    def add_face(self, person_id: str, image_bytes: bytes, angle: str) -> dict[str, Any]:
         self.get_person(person_id)
         face_id = str(uuid4())
-        # Baseline placeholder only. Vision Service will replace this with a real embedding.
-        embedding = bytes([0]) * 512
+        embedding, quality = self._identity.extract(image_bytes)
         with database_connection() as connection:
             connection.execute(
                 """INSERT INTO face_profiles
                    (id, person_id, model_name, model_version, embedding,
                     embedding_dimension, quality_score, is_active, angle_label)
-                   VALUES (?, ?, 'FaceNet', 'baseline', ?, 512, ?, 1, ?)""",
-                (face_id, person_id, embedding, data.quality, data.angle),
+                   VALUES (?, ?, 'buffalo_l', 'insightface-v1', ?, ?, ?, 1, ?)""",
+                (face_id, person_id, embedding.tobytes(), embedding.size, quality, angle),
             )
+        self._identity.gallery.reload()
         return self.get_person(person_id)
 
     def delete_face(self, person_id: str, face_id: str) -> dict[str, Any]:
@@ -92,6 +97,7 @@ class PersonService:
             )
             if deleted.rowcount == 0:
                 raise FaceProfileNotFoundError(face_id)
+        self._identity.gallery.reload()
         return self.get_person(person_id)
 
     @staticmethod

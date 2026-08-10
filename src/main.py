@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from src.api.alerts import router as alerts_router
+from src.api.camera_stream import router as camera_stream_router
 from src.api.cameras import router as cameras_router
 from src.api.history import router as history_router
 from src.api.overview import router as overview_router
@@ -16,7 +17,10 @@ from src.api.settings import router as settings_router
 from src.api.vision import router as vision_router
 from src.config import get_settings
 from src.database import initialize_database
+from src.runtime import LocalRuntime
 from src.services.event_service import vision_event_sink
+from src.services.face_identity_service import face_gallery
+from src.services.vision_event_dispatcher import ThreadsafeVisionEventDispatcher
 
 
 @asynccontextmanager
@@ -24,14 +28,30 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     print(f"Starting {settings.app_name} in {settings.app_env} mode")
     initialize_database()
+    face_gallery.reload()
     vision_event_sink.start()
     consumer = asyncio.create_task(vision_event_sink.consume(), name="vision-event-consumer")
+    dispatcher = ThreadsafeVisionEventDispatcher(vision_event_sink)
+    dispatcher.start(asyncio.get_running_loop())
+    mock_event_frame_ids = {
+        int(value.strip())
+        for value in settings.mock_vision_event_frame_ids.split(",")
+        if value.strip()
+    }
+    runtime = LocalRuntime(event_dispatcher=dispatcher, mock_event_frame_ids=mock_event_frame_ids)
+    app.state.local_runtime = runtime
+    app.state.vision_event_dispatcher = dispatcher
+    runtime.start()
+    runtime.restore_persisted_state()
     try:
         yield
     finally:
+        runtime.stop()
+        dispatcher.stop()
         consumer.cancel()
         with suppress(asyncio.CancelledError):
             await consumer
+        vision_event_sink.stop()
 
 
 app = FastAPI(
@@ -57,6 +77,7 @@ app.mount("/snapshots", StaticFiles(directory=SNAPSHOT_DIR), name="snapshots")
 app.include_router(api_router, prefix="/api/v1")
 app.include_router(alerts_router, prefix="/api/v1")
 app.include_router(cameras_router, prefix="/api/v1")
+app.include_router(camera_stream_router, prefix="/api/v1")
 app.include_router(history_router, prefix="/api/v1")
 app.include_router(overview_router, prefix="/api/v1")
 app.include_router(persons_router, prefix="/api/v1")

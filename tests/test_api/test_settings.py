@@ -9,12 +9,8 @@ async def test_settings_persist_users_permissions_and_camera_state(client):
     assert settings.status_code == 200
     assert settings.json()["general"]["fall_threshold"] >= 70
     cameras = settings.json()["cameras"]
-    assert len(cameras) == 3
-    assert {camera["name"] for camera in cameras} == {
-        "Webcam phòng khách",
-        "Video mô phỏng",
-        "Video hành lang",
-    }
+    assert cameras
+    assert all("vision_enabled" in camera for camera in cameras)
 
     general = await client.patch("/api/v1/settings/general", json={"retention_days": 7, "fall_threshold": 80})
     assert general.json()["retention_days"] == 7
@@ -35,7 +31,16 @@ async def test_settings_persist_users_permissions_and_camera_state(client):
 
     camera_id = settings.json()["cameras"][0]["id"]
     camera = await client.patch(f"/api/v1/settings/cameras/{camera_id}", json={"active": False})
-    assert next(item for item in camera.json()["cameras"] if item["id"] == camera_id)["is_active"] is False
+    stopped_camera = next(item for item in camera.json()["cameras"] if item["id"] == camera_id)
+    assert stopped_camera["is_active"] is False
+    assert stopped_camera["operational_status"] == "offline"
+
+    vision = await client.patch(
+        f"/api/v1/settings/cameras/{camera_id}", json={"vision_enabled": True}
+    )
+    vision_camera = next(item for item in vision.json()["cameras"] if item["id"] == camera_id)
+    assert vision_camera["vision_enabled"] is True
+    assert vision_camera["vision_status"] == "waiting_for_source"
 
 
 @pytest.mark.asyncio

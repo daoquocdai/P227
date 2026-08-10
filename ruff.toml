@@ -5,6 +5,20 @@ line-length = 120
 select = ["E", "F", "I", "N", "W", "UP"]
 ignore = ["E501"]
 
+# Preserve established mathematical notation and checkpoint-facing class names in
+# the retained V1 implementation. These exceptions are naming/style-only.
+[lint.per-file-ignores]
+# Immutable standalone implementations retained as byte-identical golden oracles.
+"legacy/vision_v1/realtime.py" = ["E701", "I001", "N806", "N812", "UP015", "W291", "W293"]
+"legacy/vision_v2/realtime.py" = ["E402", "E701", "F401", "I001", "N806", "N812", "UP015", "W291", "W293"]
+"src/vision/fusion/*.py" = ["N803", "N806"]
+"src/vision/graph/*.py" = ["E741", "N803", "N806", "UP032"]
+"src/vision/model/SDAGCN.py" = ["E721", "F401", "N801", "N803", "N806", "UP008"]
+"tests/test_vision/*golden_regression.py" = ["N802"]
+"tests/test_api/test_camera_vision.py" = ["N802"]
+"tests/test_services/test_camera_runtime.py" = ["N802"]
+"tests/test_services/test_vision_manager.py" = ["N802"]
+
 [format]
 quote-style = "double"
 indent-style = "space"
