@@ -8,9 +8,9 @@ GuardianCam là hệ thống giám sát an toàn chạy tại nhà: tiếp nhậ
 
 - Quản lý nhiều camera từ một SQLite database: tên, vị trí, nguồn phát và trạng thái bật/tắt.
 - Phát MJPEG liên tục ở trang Camera; tổng quan dùng ảnh preview gần nhất.
-- Hai pipeline Vision thực dùng chung Local Hub: V1 binary/bone và V2 năm lớp/joint.
+- Một canonical VisionV2 pipeline dùng chung Local Hub: YOLO, MediaPipe và SDA-GCN năm lớp/joint.
 - InsightFace nhận diện người thân và phát hiện người chưa có trong danh sách.
-- Tự động chọn CPU/CUDA cho PyTorch; trên Windows có thể dùng DirectML cho InsightFace.
+- Tự động dùng OpenVINO trên Intel GPU khi khả dụng; CPU fallback và DirectML identity đều được báo rõ.
 - Lấy mẫu theo source timeline, bounded buffer và bỏ frame khi quá tải để không chặn camera.
 - Chuyển event từ Vision thread sang asyncio bằng bounded, non-blocking dispatcher.
 - Chống ghi trùng, lưu SQLite, tạo snapshot từ đúng frame phát hiện và phát cảnh báo qua SSE.
@@ -21,7 +21,7 @@ GuardianCam là hệ thống giám sát an toàn chạy tại nhà: tiếp nhậ
 | Thành phần | Công nghệ |
 |---|---|
 | Vision | Ultralytics YOLO, MediaPipe, SDA-GCN, InsightFace |
-| Inference | PyTorch, ONNX Runtime, DirectML trên Windows |
+| Inference | OpenVINO Intel GPU, PyTorch fallback, ONNX Runtime DirectML cho identity |
 | Backend | Python 3.11, FastAPI, Uvicorn, SSE |
 | Frontend | React, TypeScript, Vite |
 | Dữ liệu | SQLite và snapshot lưu cục bộ |
@@ -36,7 +36,7 @@ GuardianCam là hệ thống giám sát an toàn chạy tại nhà: tiếp nhậ
 - Webcam, video local hoặc URL RTSP nếu chạy camera thật.
 - Model local tương ứng với `VISION_ENGINE`; tài nguyên InsightFace nếu bật identity.
 
-Máy không có CUDA vẫn chạy được. Trong cấu hình Windows đã kiểm chứng, Torch chạy CPU và InsightFace dùng Intel/AMD GPU qua DirectML nếu provider có sẵn.
+Máy không có CUDA vẫn chạy được. Cấu hình Windows đã kiểm chứng dùng OpenVINO cho YOLO/SDA-GCN trên Intel Iris Xe và DirectML cho InsightFace nếu provider có sẵn.
 
 ## Chạy nhanh trên Windows
 
@@ -49,16 +49,20 @@ cd P-227
 python -m venv .venv
 .venv\Scripts\activate
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+python -m pip install -r requirements/vision-intel.txt
 cd frontend
 npm.cmd ci
 cd ..
 copy /Y .env.example .env
 ```
 
-Hai file dependency Python duy nhất đều nằm tại root:
+Dependency được tách theo runtime để developer không phải cài mọi accelerator:
 
-- `requirements.txt`: dependency trực tiếp của ứng dụng.
+- `requirements/base.txt`: backend, preprocessing và test dùng chung.
+- `requirements/vision-intel.txt`: Intel Iris Xe/OpenVINO/DirectML.
+- `requirements/vision-cuda.txt`: NVIDIA CUDA 12.4.
+- `requirements/vision-cpu.txt`: CPU/Docker portable fallback.
+- `requirements.txt`: compatibility alias chỉ tới base; chưa đủ cho Real Vision.
 - `requirements-lock-cpu.txt`: bản khóa chính xác của môi trường Windows, Torch CPU và DirectML đã kiểm chứng.
 
 Muốn tái tạo đúng môi trường đã kiểm chứng:
@@ -79,16 +83,17 @@ LOG_LEVEL=INFO
 CORS_ORIGINS=http://localhost:5173
 DATABASE_URL=sqlite:///./data/app.db
 
-VISION_ENGINE=legacy
+VISION_ENGINE=canonical
 VISION_DEVICE=auto
-VISION_LEGACY_YOLO_PATH=yolov8n.pt
-VISION_LEGACY_CONFIG_PATH=work_dir/fall_detection/ntu25-bone/config.yaml
-VISION_LEGACY_CHECKPOINT_PATH=work_dir/fall_detection/ntu25-bone/runs-best_val.pt
-VISION_LEGACY_IDENTITY_ENABLED=false
-VISION_LEGACY_IDENTITY_PROVIDER=auto
-VISION_LEGACY_INSIGHTFACE_ROOT=C:/Users/<user>/.insightface
-VISION_LEGACY_KNOWN_FACES_DIR=register face
-VISION_TEMPORAL_TARGET_SAMPLE_RATE=15
+VISION_YOLO_PATH=yolov8n.pt
+VISION_CONFIG_PATH=work_dir/fall_detection/joint/config.yaml
+VISION_CHECKPOINT_PATH=work_dir/fall_detection/joint/runs-best_val.pt
+VISION_MODEL_CACHE_DIR=data/vision-cache
+VISION_IDENTITY_ENABLED=false
+VISION_IDENTITY_PROVIDER=auto
+VISION_INSIGHTFACE_ROOT=C:/Users/<user>/.insightface
+VISION_KNOWN_FACES_DIR=register face
+VISION_TEMPORAL_TARGET_SAMPLE_RATE=5
 VISION_TEMPORAL_BUFFER_CAPACITY=8
 
 OPENAI_API_KEY=
@@ -97,33 +102,29 @@ MODEL_NAME=gpt-4o-mini
 
 Ghi chú:
 
-- `VISION_ENGINE=mock` chạy ứng dụng không cần model thật và mặc định không tạo cảnh báo giả.
-- `VISION_ENGINE=legacy`/`legacy_v1` dùng V1 binary/bone; `legacy_v2` dùng V2 năm lớp/joint.
-- `VISION_DEVICE=auto` chọn CUDA khi Torch hỗ trợ, nếu không sẽ dùng CPU.
-- `VISION_LEGACY_IDENTITY_PROVIDER=auto` ưu tiên DirectML trên Windows, sau đó mới dùng provider phù hợp còn lại.
+- `VISION_ENGINE=canonical` là production path duy nhất; `mock` chỉ dùng cho test.
+- `VISION_DEVICE=auto` ưu tiên native CUDA nếu có, sau đó OpenVINO Intel GPU,
+  cuối cùng CPU; mọi fallback đều được log.
+- `VISION_IDENTITY_PROVIDER=auto` ưu tiên CUDA provider trên NVIDIA, DirectML
+  trên Intel/Windows, sau đó CPU.
+- Target 5 Hz là kết quả acceptance trên Iris Xe: 1–2 cameras giữ đúng fall
+  semantics và zero drops; 6–10 Hz không giữ đủ hai fall của fixed video.
 - Chỉ bật identity sau khi đã cài đủ InsightFace `buffalo_l`; fall detection không phụ thuộc identity.
 - Các đường dẫn Vision tương đối được tính từ `src/vision`; cũng có thể dùng đường dẫn tuyệt đối.
 - Không đưa API key, RTSP credentials, database, snapshot hoặc dữ liệu khuôn mặt vào Git.
 
 ## Tài nguyên model
 
-V1 yêu cầu:
+Canonical production yêu cầu:
 
 ```text
 src/vision/yolov8n.pt
-src/vision/work_dir/fall_detection/ntu25-bone/config.yaml
-src/vision/work_dir/fall_detection/ntu25-bone/runs-best_val.pt
-<VISION_LEGACY_INSIGHTFACE_ROOT>/models/buffalo_l/
-```
-
-V2 thay hai artifact SDA-GCN bằng:
-
-```text
 src/vision/work_dir/fall_detection/joint/config.yaml
 src/vision/work_dir/fall_detection/joint/runs-best_val.pt
+<VISION_INSIGHTFACE_ROOT>/models/buffalo_l/
 ```
 
-`buffalo_l` chỉ bắt buộc khi `VISION_LEGACY_IDENTITY_ENABLED=true`.
+`buffalo_l` chỉ bắt buộc khi `VISION_IDENTITY_ENABLED=true`.
 
 Checkpoint SDA-GCN được load strict. Không tự đổi graph, tensor shape, window, stride, preprocessing hoặc class mapping để né lỗi checkpoint.
 
@@ -203,7 +204,7 @@ Backend regression nên chạy bằng Mock engine để độc lập với model
 
 ```cmd
 set VISION_ENGINE=mock
-set VISION_LEGACY_IDENTITY_ENABLED=false
+set VISION_IDENTITY_ENABLED=false
 python -m pytest -q
 python -m pip check
 ```
@@ -225,16 +226,19 @@ python -c "import torch, onnxruntime as ort; print(torch.__version__, torch.cuda
 
 ```text
 P-227/
+├── visionv2/               # Standalone oracle/reference, không được production import
 ├── src/
 │   ├── api/                 # FastAPI routes
 │   ├── services/            # Camera, event, database và runtime services
-│   └── vision/              # Adapter, worker, graph, model và checkpoint Vision
+│   └── vision/              # Canonical integrated Vision
 ├── frontend/                # React/Vite dashboard
 ├── database/schema.sql      # SQLite schema và triggers
 ├── data/app.db              # Database local, sinh khi chạy
 ├── snapshots/               # Ảnh bằng chứng local
 ├── tests/                   # Backend, API, Vision và regression tests
 ├── docs/                    # Tài liệu kỹ thuật
+├── tools/                   # Parity và hardware benchmark runners
+├── requirements/            # Base/Intel/CUDA/CPU profiles
 ├── requirements.txt
 └── requirements-lock-cpu.txt
 ```
@@ -255,6 +259,7 @@ P-227/
 - [Sơ đồ kiến trúc](docs/architecture_diagram.md)
 - [API](docs/api.md)
 - [Kiểm thử](docs/testing.md)
+- [Vision benchmark và architecture decision](docs/vision-benchmark.md)
 - [Gate 1](docs/Gate1.md)
 
 ## License

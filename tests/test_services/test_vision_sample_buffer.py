@@ -22,8 +22,8 @@ def packet(camera_id: str, frame_id: int, timestamp: float, *, epoch: int = 0, d
     )
 
 
-def test_target_grid_preserves_legacy_pairing_and_model_observation_cadence():
-    buffer = VisionSampleBuffer(target_sample_rate=15.0, legacy_skip_factor=2, capacity=8)
+def test_target_grid_preserves_pairing_and_model_observation_cadence():
+    buffer = VisionSampleBuffer(target_sample_rate=15.0, inference_skip_factor=2, capacity=8)
     buffer.enable("cam01")
 
     accepted = [buffer.offer(packet("cam01", index, index / 30.0)) for index in range(6)]
@@ -31,14 +31,14 @@ def test_target_grid_preserves_legacy_pairing_and_model_observation_cadence():
 
     assert accepted == [True] * 6
     assert [item.frame_id for item in selected] == list(range(6))
-    # Legacy processes the first packet in each pair and skips the second.
+    # Canonical Vision processes the first packet in each pair and skips the second.
     assert [item.source_timestamp for item in selected[::2]] == [0.0, 2 / 30.0, 4 / 30.0]
     assert buffer.get_status("cam01")["target_sample_rate"] == 15.0
     assert buffer.get_status("cam01")["target_input_rate"] == 30.0
 
 
 def test_buffer_is_bounded_nonblocking_and_drops_oldest_pairs_on_overload():
-    buffer = VisionSampleBuffer(capacity=8)
+    buffer = VisionSampleBuffer(target_sample_rate=15.0, capacity=8)
     buffer.enable("cam01")
     finished = threading.Event()
 
@@ -132,9 +132,9 @@ def test_strict_requires_a_complete_source_time_window_without_drops():
     buffer.enable("cam01")
     first = packet("cam01", 0, 0.0)
     buffer.note_result(first, {"sampled": True, "window_source_time_span": None})
-    last = packet("cam01", 126, 4.2)
-    buffer.note_result(last, {"sampled": True, "window_source_time_span": 4.2})
+    last = packet("cam01", 20, 2.0)
+    buffer.note_result(last, {"sampled": True, "window_source_time_span": 2.0})
 
     status = buffer.get_status("cam01")
-    assert status["window_source_time_span"] == 4.2
+    assert status["window_source_time_span"] == 2.0
     assert status["temporal_fidelity"] == "strict"

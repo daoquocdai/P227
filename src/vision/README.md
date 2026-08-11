@@ -1,25 +1,25 @@
 # GuardianCam Vision runtime
 
-Production enters this package through `src.runtime.LocalRuntime` and
-the selected `VisionEngine`; files here are not standalone applications.
+Production enters this package through `src.runtime.LocalRuntime` and the
+single `CanonicalVisionPipeline` in `pipeline.py`. `mock` remains test-only.
 
-Engine selections:
+`visionv2/` at repository root is the standalone oracle. Production never
+imports it; `tools/compare_vision_reference.py` is the explicit comparison
+boundary. Enabled cameras use ordered per-camera workers while immutable model
+state is shared.
 
-- `mock`: lightweight test engine
-- `legacy` or `legacy_v1`: frozen binary V1 bone model
-- `legacy_v2`: five-class V2 joint model; only raw class `1` is a fall candidate
+The canonical pipeline preserves verified VisionV2 behavior: YOLO person
+tracking, MediaPipe pose, a source-time two-second window resampled to 64 joint
+frames, five-class SDA-GCN inference, and class `1` as the fall candidate.
 
 Required inference artifacts:
 
 - `yolov8n.pt`
-- `work_dir/fall_detection/ntu25-bone/config.yaml`
-- `work_dir/fall_detection/ntu25-bone/runs-best_val.pt`
 - `work_dir/fall_detection/joint/config.yaml`
 - `work_dir/fall_detection/joint/runs-best_val.pt`
 
-The unchanged standalone V1 oracle lives in `legacy/vision_v1/realtime.py` and
-is exercised only by `tests/test_vision/golden_regression.py`. Face identity in
-production is supplied by the database-backed `FaceGallery`; old standalone
-register and recognize applications are not runtime dependencies.
-The unchanged V2 oracle lives in `legacy/vision_v2/realtime.py`; production
-does not import from the top-level `visionv2/` source-material directory.
+On supported Intel Windows systems, `VISION_DEVICE=auto` exports fingerprinted
+OpenVINO artifacts into `VISION_MODEL_CACHE_DIR`, validates SDA-GCN FP32 parity,
+and runs YOLO/SDA-GCN on Intel GPU. CUDA-capable hosts keep native PyTorch/YOLO
+CUDA ahead of the Intel path. CPU fallback is explicit in startup logs.
+Face identity is supplied by the database-backed `FaceGallery`.

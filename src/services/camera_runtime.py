@@ -2,6 +2,7 @@ import logging
 import os
 import threading
 import time
+from collections import deque
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -25,6 +26,7 @@ class CameraRuntimeState:
     last_frame_at: float | None = None
 
     error: str | None = None
+    capture_fps: float = 0.0
 
     def to_dict(self):
         state = asdict(self)
@@ -53,6 +55,7 @@ class CameraRuntime:
         self._stop_events = {}
         self._states = {}
         self._captures = {}
+        self._capture_times: dict[str, deque[float]] = {}
 
     def start(
         self,
@@ -126,6 +129,7 @@ class CameraRuntime:
             self._threads.pop(camera_id, None)
             self._stop_events.pop(camera_id, None)
             self._captures.pop(camera_id, None)
+            self._capture_times.pop(camera_id, None)
 
         if remove_frame:
             self.frame_hub.remove(camera_id)
@@ -333,6 +337,10 @@ class CameraRuntime:
                     frame_in_epoch += 1
 
                     captured_at = time.time()
+                    capture_times = self._capture_times.setdefault(camera_id, deque(maxlen=60))
+                    capture_times.append(captured_at)
+                    capture_span = capture_times[-1] - capture_times[0] if len(capture_times) > 1 else 0.0
+                    capture_fps = (len(capture_times) - 1) / capture_span if capture_span > 0 else 0.0
                     source_timestamp = (
                         frame_in_epoch / source_fps
                         if is_file
@@ -360,6 +368,7 @@ class CameraRuntime:
                         frame_id=frame_id,
                         last_frame_at=captured_at,
                         error=None,
+                        capture_fps=capture_fps,
                     )
 
             except Exception as exc:

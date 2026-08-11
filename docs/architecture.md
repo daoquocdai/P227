@@ -103,25 +103,25 @@ Trách nhiệm:
 
 ### VisionWorker
 
-Một background worker xử lý camera đã bật Vision.
+Mỗi camera đã bật Vision có một ordered worker riêng. Các worker share model
+weights/compiled runtime nhưng giữ session, tracker, pose và temporal state riêng.
+SDA-GCN OpenVINO dùng lock hẹp quanh shared infer request; camera chậm không chặn
+detector/pose của camera khác.
 
 Worker:
 
 - không block FastAPI event loop;
+- giữ frame order trong từng camera;
+- không tạo worker mới theo số frontend viewers;
 - không tạo `asyncio.run()` cho mỗi event;
 - gọi VisionEngine;
 - chuyển event qua dispatcher thread-safe.
 
 ### VisionEngine
 
-Production chọn đúng một engine khi startup:
-
-- `LegacyVisionEngine` cho `legacy`/`legacy_v1` (binary, bone input);
-- `V2VisionEngine` cho `legacy_v2` (năm lớp, joint input);
-- `MockVisionEngine` chỉ cho smoke/test không phụ thuộc model.
-
-V2 kế thừa capture, pose, identity, temporal clock và event boundary của V1;
-khác biệt có chủ đích nằm ở SDA-GCN input/checkpoint/output mapping.
+Production dùng đúng một `CanonicalVisionPipeline`; `MockVisionEngine` chỉ dành
+cho smoke/test. Pipeline canonical giữ hành vi VisionV2 năm lớp/joint và không
+còn selector hoặc adapter V1/V2 song song.
 
 Pipeline:
 
@@ -256,10 +256,10 @@ Các stage không nhất thiết cùng device:
 
 | Stage | Runtime |
 |---|---|
-| YOLO | PyTorch device |
+| YOLO | OpenVINO Intel GPU khi khả dụng; PyTorch fallback |
 | MediaPipe Pose | CPU/TFLite trong profile hiện tại |
 | Preprocess | CPU |
-| SDA-GCN | PyTorch device |
+| SDA-GCN | OpenVINO FP32 Intel GPU sau parity check; PyTorch fallback |
 | InsightFace | provider khả dụng theo cấu hình |
 
 Không suy luận GPU support từ tên wheel. Chỉ báo acceleration khi provider/runtime thực tế có.
@@ -273,7 +273,7 @@ persons + face_profiles
         ↓
 FaceGallery cache
         ↓
-LegacyVisionEngine / V2VisionEngine
+CanonicalVisionPipeline
 ```
 
 Quy tắc:
@@ -283,7 +283,7 @@ Quy tắc:
 - chỉ active person/profile được nạp;
 - mutation Persons/face profiles làm gallery reload/invalidate;
 - image enrollment không trở thành public static asset mặc định;
-- `register face/` chỉ là compatibility fallback cho legacy/standalone nếu code còn hỗ trợ.
+- `register face/` chỉ là fallback local khi không dùng database-backed gallery.
 
 Face embedding là dữ liệu sinh trắc học nhạy cảm.
 

@@ -29,15 +29,21 @@ cd P-227
 python -m venv .venv
 .venv\Scripts\activate
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+python -m pip install -r requirements/vision-intel.txt
 cd frontend
 npm.cmd ci
 cd ..
 copy /Y .env.example .env
 ```
 
-Nếu cần tái tạo đúng môi trường Windows/Torch CPU đã khóa, thay lệnh cài
-`requirements.txt` bằng:
+Máy NVIDIA CUDA 12.4 dùng profile sau thay cho Intel:
+
+```cmd
+python -m pip install -r requirements/vision-cuda.txt
+```
+
+CPU/Docker portable dùng `requirements/vision-cpu.txt`. Nếu cần tái tạo đúng
+môi trường Windows/Torch CPU cũ đã khóa:
 
 ```cmd
 python -m pip install -r requirements-lock-cpu.txt
@@ -45,11 +51,11 @@ python -m pip install -r requirements-lock-cpu.txt
 
 ## 3. Chọn Vision engine
 
-File `.env.example` mặc định dùng Vision V1 thật trên CPU:
+File `.env.example` mặc định dùng canonical VisionV2:
 
 ```dotenv
-VISION_ENGINE=legacy
-VISION_DEVICE=cpu
+VISION_ENGINE=canonical
+VISION_DEVICE=auto
 ```
 
 Các lựa chọn hợp lệ:
@@ -57,23 +63,22 @@ Các lựa chọn hợp lệ:
 | Giá trị | Ý nghĩa |
 |---|---|
 | `mock` | Chạy sản phẩm không cần model; không tự sinh cảnh báo giả |
-| `legacy` hoặc `legacy_v1` | Model V1 binary, bone input |
-| `legacy_v2` | Model V2 năm lớp, joint input; raw class `1` là té ngã |
+| `canonical` | Production VisionV2 năm lớp/joint; raw class `1` là fall candidate |
 
-Các model V1 và V2 đi cùng repository tại `src\vision`. Nếu bật nhận diện
+Model canonical đi cùng repository tại `src\vision`. Nếu bật nhận diện
 người lạ, InsightFace còn cần bộ `buffalo_l` trong thư mục được trỏ bởi
-`VISION_LEGACY_INSIGHTFACE_ROOT`. Có thể chạy smoke không cần model nhận diện
+`VISION_INSIGHTFACE_ROOT`. Có thể chạy smoke không cần model nhận diện
 bằng cách đặt:
 
 ```dotenv
-VISION_LEGACY_IDENTITY_ENABLED=false
+VISION_IDENTITY_ENABLED=false
 ```
 
 Muốn xác nhận riêng backend/frontend trước khi chạy AI thật, đặt:
 
 ```dotenv
 VISION_ENGINE=mock
-VISION_LEGACY_IDENTITY_ENABLED=false
+VISION_IDENTITY_ENABLED=false
 ```
 
 ## 4. Chạy dự án

@@ -7,6 +7,7 @@ from src.models.frame import FramePacket
 from src.models.vision import VisionEvent, VisionResult
 from src.runtime import LocalRuntime
 from src.services.frame_hub import FrameHub
+from src.services.stream_service import StreamService
 from src.services.vision_manager import VisionManager
 from src.vision.adapters.mock import MockVisionEngine
 from src.vision.engine import VisionEngine
@@ -28,7 +29,7 @@ def wait_until(predicate, timeout=2.0):
 
 def test_real_vision_event_snapshot_uses_exact_processed_frame(tmp_path, monkeypatch):
     monkeypatch.setattr("src.vision.worker.SNAPSHOT_ROOT", tmp_path)
-    for frame_id, engine_name in enumerate(("legacy", "legacy_v2"), start=42):
+    for frame_id, engine_name in enumerate(("canonical", "canonical"), start=42):
         source = packet("cam01", frame_id)
         source.frame[:, :] = (12, 34, 56)
         event = VisionEvent(type="fall_confirmed", confidence=0.9)
@@ -69,6 +70,24 @@ class BlockingEngine(RecordingEngine):
         if len(self.frame_ids) == 1:
             self.entered.set()
             assert self.release.wait(2)
+        return VisionResult(frame.camera_id, frame.frame_id, frame.captured_at, time.time(), 0.0)
+
+
+class CameraIsolatedBlockingEngine(RecordingEngine):
+    def __init__(self):
+        super().__init__()
+        self.slow_entered = threading.Event()
+        self.release_slow = threading.Event()
+        self.fast_processed = threading.Event()
+
+    def process(self, frame, session):
+        del session
+        self.frame_ids.append((frame.camera_id, frame.frame_id))
+        if frame.camera_id == "slow":
+            self.slow_entered.set()
+            assert self.release_slow.wait(2)
+        else:
+            self.fast_processed.set()
         return VisionResult(frame.camera_id, frame.frame_id, frame.captured_at, time.time(), 0.0)
 
 
@@ -115,6 +134,49 @@ def test_sessions_and_arbitrary_temporal_state_are_per_camera():
 
     assert cam01 is not cam02
     assert "test" not in cam02.state
+
+
+def test_slow_camera_does_not_block_another_camera_worker():
+    hub = FrameHub()
+    engine = CameraIsolatedBlockingEngine()
+    worker = VisionWorker(hub, engine)
+    worker.enable("slow")
+    worker.enable("fast")
+    worker.start()
+    try:
+        assert worker.thread_count == 2
+        hub.publish(packet("slow", 1))
+        assert engine.slow_entered.wait(1)
+        hub.publish(packet("fast", 1))
+        assert engine.fast_processed.wait(1)
+    finally:
+        engine.release_slow.set()
+        worker.stop()
+
+    assert not worker.is_running
+    assert worker.thread_count == 0
+
+
+def test_multiple_viewers_do_not_create_or_duplicate_vision_workers():
+    hub = FrameHub()
+    engine = RecordingEngine()
+    worker = VisionWorker(hub, engine)
+    stream = StreamService(hub)
+    worker.start()
+    worker.enable("cam01")
+    try:
+        hub.publish(packet("cam01", 1))
+        wait_until(lambda: engine.frame_ids == [1])
+        before = worker.thread_count
+        viewer_a = stream.mjpeg("cam01")
+        viewer_b = stream.mjpeg("cam01")
+
+        assert next(viewer_a).startswith(b"--frame")
+        assert next(viewer_b).startswith(b"--frame")
+        assert worker.thread_count == before == 1
+        assert engine.frame_ids == [1]
+    finally:
+        worker.stop()
 
 
 def test_disable_resets_session_and_stops_processing_without_touching_framehub():

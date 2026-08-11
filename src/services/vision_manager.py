@@ -101,6 +101,7 @@ class VisionManager:
             "processed_frames": 0 if session is None else session.processed_frames,
             "dropped_frames": 0 if session is None else session.dropped_frames,
             "last_processed_frame_id": -1 if session is None else session.last_processed_frame_id,
+            "worker_threads": self.worker.thread_count,
             "last_result": None if result is None else asdict(result),
             "current_error": current_error,
             "last_error": last_error,

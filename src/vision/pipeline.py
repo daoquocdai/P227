@@ -14,26 +14,33 @@ import numpy as np
 from src.models.frame import FramePacket
 from src.models.vision import VisionDetection, VisionEvent, VisionResult
 from src.vision.engine import VisionEngine
+from src.vision.runtime import VisionRuntimeResolver
 from src.vision.session import VisionSession
 
 logger = logging.getLogger(__name__)
 
-VISION_ROOT = Path(__file__).resolve().parents[1]
+VISION_ROOT = Path(__file__).resolve().parent
 DEFAULT_INSIGHTFACE_ROOT = Path.home() / ".insightface"
 WINDOW_SIZE = 64
-STRIDE = 32
-MOVEMENT_THRESHOLD = 0.2
+WINDOW_SECONDS = 2.0
+WINDOW_RETAIN_SECONDS = 1.0
+DECISION_DELAY_SECONDS = 3.0
+MOVEMENT_CHECK_SECONDS = 2.0
+MOVEMENT_THRESHOLD = 0.1
 FRAME_SIZE = 1024
 FALL_LABEL = "FALL DETECTED!"
 UNKNOWN_PERSON_COOLDOWN_SECONDS = 30.0
+FACE_RECOGNITION_MAX_ATTEMPTS = 5
+FACE_RECOGNITION_INTERVAL_SECONDS = 1.0
+TRACK_STATE_TTL_SECONDS = 30.0
 
 
-class LegacyVisionInitializationError(RuntimeError):
-    """A required local Legacy Vision resource or model is invalid."""
+class VisionInitializationError(RuntimeError):
+    """A required canonical Vision resource or model is invalid."""
 
 
 @dataclass
-class LegacyCameraContext:
+class CameraContext:
     yolo: Any
     pose: Any
     session_token: object
@@ -44,24 +51,25 @@ class LegacyCameraContext:
             close()
 
 
-class LegacyVisionEngine(VisionEngine):
-    """FramePacket adapter for the binary two-class pipeline in realtime.py.
+class CanonicalVisionPipeline(VisionEngine):
+    """Canonical five-class VisionV2 pipeline adapted from standalone realtime.py.
 
-    The engine is called sequentially by the current VisionWorker. FaceAnalysis
-    is shared only under that boundary. YOLO tracking and MediaPipe Pose remain
-    isolated per camera because both retain stream state.
+    Ordered per-camera workers may call the engine concurrently. YOLO tracking
+    and MediaPipe Pose remain isolated per camera because both retain stream
+    state; shared infer requests and FaceAnalysis have narrow locks.
     """
 
-    EXPECTED_MODEL = {"num_class": 2, "num_person": 1, "num_point": 25, "in_channels": 3}
-    EXPECTED_BONE_MODALITY = True
-    OUTPUT_CLASSES = 2
+    EXPECTED_MODEL = {"num_class": 5, "num_person": 1, "num_point": 25, "in_channels": 3}
+    EXPECTED_BONE_MODALITY = False
+    OUTPUT_CLASSES = 5
     FALL_CLASS_ID = 1
 
     def __init__(
         self,
         yolo_path: str | Path = VISION_ROOT / "yolov8n.pt",
-        config_path: str | Path = VISION_ROOT / "work_dir" / "fall_detection" / "ntu25-bone" / "config.yaml",
-        checkpoint_path: str | Path = VISION_ROOT / "work_dir" / "fall_detection" / "ntu25-bone" / "runs-best_val.pt",
+        config_path: str | Path = VISION_ROOT / "work_dir" / "fall_detection" / "joint" / "config.yaml",
+        checkpoint_path: str | Path = VISION_ROOT / "work_dir" / "fall_detection" / "joint" / "runs-best_val.pt",
+        model_cache_dir: str | Path = Path("data/vision-cache"),
         known_faces_dir: str | Path = VISION_ROOT / "register face",
         identity_enabled: bool = False,
         identity_provider: str = "auto",
@@ -75,23 +83,27 @@ class LegacyVisionEngine(VisionEngine):
         self.yolo_path = self._resolve_path(yolo_path)
         self.config_path = self._resolve_path(config_path)
         self.checkpoint_path = self._resolve_path(checkpoint_path)
+        self.model_cache_dir = Path(model_cache_dir).expanduser().resolve()
         self.known_faces_dir = self._resolve_path(known_faces_dir)
         self.insightface_root = self._resolve_path(insightface_root)
         self.identity_enabled = identity_enabled
         self.identity_provider = identity_provider.strip().lower()
-        self.requested_device = self._normalize_device(device)
+        self.requested_device = VisionRuntimeResolver.normalize_device(device)
         self._face_gallery = face_gallery
         self._clock = clock
         self._incident_factory = incident_factory
         self._lock = threading.RLock()
-        self._contexts: dict[str, LegacyCameraContext] = {}
+        self._face_lock = threading.Lock()
+        self._contexts: dict[str, CameraContext] = {}
         self._dependencies: SimpleNamespace | None = None
         self._device: Any = None
+        self._detector_model_path = self.yolo_path
+        self._detector_device: str | None = None
         self._action_model: Any = None
         self._face_app: Any = None
         self._known_faces: dict[str, np.ndarray] = {}
         self._initialized = False
-        self._initialization_error: LegacyVisionInitializationError | None = None
+        self._initialization_error: VisionInitializationError | None = None
         self._started = False
         self._device_diagnostics: dict[str, Any] = {
             "requested_device": self.requested_device,
@@ -116,15 +128,6 @@ class LegacyVisionEngine(VisionEngine):
             path = VISION_ROOT / path
         return path.resolve()
 
-    @staticmethod
-    def _normalize_device(value: str) -> str:
-        normalized = value.strip().lower()
-        if normalized in {"auto", "cpu", "cuda"}:
-            return normalized
-        if normalized.startswith("cuda:") and normalized[5:].isdigit():
-            return normalized
-        raise ValueError("device must be auto, cpu, cuda, or cuda:N")
-
     def device_diagnostics(self) -> dict[str, Any]:
         diagnostics = dict(self._device_diagnostics)
         diagnostics["stages"] = dict(self._device_diagnostics["stages"])
@@ -133,24 +136,41 @@ class LegacyVisionEngine(VisionEngine):
         return diagnostics
 
     def start(self) -> None:
-        # Heavy resources intentionally remain lazy so FastAPI startup is safe.
         self._started = True
         self._initialization_error = None
+        self._ensure_initialized()
+
+    def prepare_camera(self, camera_id: str, session: VisionSession) -> None:
+        self._ensure_initialized()
+        context = self._camera_context(camera_id, session)
+        predict = getattr(context.yolo, "predict", None)
+        if callable(predict) and not session.state.get("vision_detector_warmed", False):
+            options = {"classes": 0, "verbose": False}
+            if self._detector_device is not None:
+                options["device"] = self._detector_device
+            predict(np.zeros((FRAME_SIZE, FRAME_SIZE, 3), dtype=np.uint8), **options)
+            session.state["vision_detector_warmed"] = True
+
+    def release_camera(self, camera_id: str) -> None:
+        with self._lock:
+            context = self._contexts.pop(camera_id, None)
+        if context is not None:
+            context.close()
 
     def process(self, packet: FramePacket, session: VisionSession) -> VisionResult:
         started = time.perf_counter()
         state = session.state
         self._prepare_source_epoch(state, packet)
         source_timestamp = self._source_timestamp(packet)
-        frame_count = int(state.get("legacy_frame_count", 0)) + 1
-        state["legacy_frame_count"] = frame_count
+        frame_count = int(state.get("vision_frame_count", 0)) + 1
+        state["vision_frame_count"] = frame_count
         source_gap = max(0, packet.frame_id - session.last_processed_frame_id - 1) if session.last_processed_frame_id >= 0 else 0
         events: list[VisionEvent] = []
 
         if self._initialization_error is not None:
             raise self._initialization_error
         if frame_count % 2 == 0:
-            events = self._advance_fall_clock(state, source_timestamp, packet.frame_id)
+            events = self._advance_decisions(state, source_timestamp, packet.frame_id)
             return self._result(
                 packet,
                 session,
@@ -168,10 +188,10 @@ class LegacyVisionEngine(VisionEngine):
 
         frame = packet.frame
         if not isinstance(frame, np.ndarray) or frame.ndim != 3 or frame.shape[2] != 3:
-            raise ValueError("Legacy Vision requires a BGR frame with shape (H, W, 3)")
+            raise ValueError("canonical Vision requires a BGR frame with shape (H, W, 3)")
         height, width = frame.shape[:2]
         if height <= 0 or width <= 0:
-            raise ValueError("Legacy Vision received an empty frame")
+            raise ValueError("canonical Vision received an empty frame")
 
         scale = FRAME_SIZE / max(height, width)
         new_w, new_h = int(width * scale), int(height * scale)
@@ -187,7 +207,12 @@ class LegacyVisionEngine(VisionEngine):
             value=(0, 0, 0),
         )
 
-        results = context.yolo.track(prepared, persist=True, classes=0, verbose=False)
+        track_options = {"persist": True, "classes": 0, "verbose": False}
+        if self._detector_device is not None:
+            track_options["device"] = self._detector_device
+        detector_started = time.perf_counter()
+        results = context.yolo.track(prepared, **track_options)
+        self._record_stage_metric(state, "detector", detector_started)
         person_found = False
         pose_found = False
         detections: list[VisionDetection] = []
@@ -207,9 +232,12 @@ class LegacyVisionEngine(VisionEngine):
                 crop = prepared[y1:y2, x1:x2]
                 confidence = self._box_value(boxes_obj, "conf", best_idx, 0.0)
                 track_id = self._box_int_value(boxes_obj, "id", best_idx)
-                detection_metadata = self._identity_metadata(crop)
+                self._prepare_track_state(state, track_id)
+                face_started = time.perf_counter()
+                detection_metadata = self._identity_metadata(crop, track_id, state, source_timestamp)
+                self._record_stage_metric(state, "face", face_started)
                 if detection_metadata.get("identity_status") == "UNKNOWN":
-                    last_unknown_at = state.get("legacy_last_unknown_event_source_time")
+                    last_unknown_at = state.get("vision_last_unknown_event_source_time")
                     if last_unknown_at is None or source_timestamp - float(last_unknown_at) >= UNKNOWN_PERSON_COOLDOWN_SECONDS:
                         unknown_event_id = str(self._incident_factory())
                         events.append(
@@ -228,7 +256,7 @@ class LegacyVisionEngine(VisionEngine):
                                 },
                             )
                         )
-                        state["legacy_last_unknown_event_source_time"] = source_timestamp
+                        state["vision_last_unknown_event_source_time"] = source_timestamp
                 detections.append(
                     VisionDetection(
                         label="person",
@@ -239,6 +267,7 @@ class LegacyVisionEngine(VisionEngine):
                     )
                 )
                 crop_rgb = deps.cv2.cvtColor(crop, deps.cv2.COLOR_BGR2RGB)
+                pose_started = time.perf_counter()
                 keypoints = deps.extract_from_crop(
                     crop_rgb,
                     context.pose,
@@ -249,21 +278,15 @@ class LegacyVisionEngine(VisionEngine):
                     FRAME_SIZE,
                     FRAME_SIZE,
                 )
+                self._record_stage_metric(state, "pose", pose_started)
                 pose_found = bool(np.any(keypoints))
 
-                if state.get("legacy_pending_fall", False) or state.get("legacy_current_action") == FALL_LABEL:
-                    last_raw = state.get("legacy_last_raw_kpts")
-                    if last_raw is not None:
-                        movement = float(np.mean(np.linalg.norm(keypoints - last_raw, axis=1)))
-                        state["legacy_movement"] = movement
-                        if movement > MOVEMENT_THRESHOLD:
-                            self._reset_episode(state)
-                    state["legacy_last_raw_kpts"] = keypoints
+                self._observe_movement(state, keypoints, source_timestamp)
 
-        kpts_buffer = self._buffer(state, "legacy_kpts_buffer", WINDOW_SIZE)
-        frame_ids = self._buffer(state, "legacy_sampled_frame_ids", WINDOW_SIZE)
-        timestamps = self._buffer(state, "legacy_sampled_timestamps", WINDOW_SIZE)
-        source_timestamps = self._buffer(state, "legacy_sampled_source_timestamps", WINDOW_SIZE)
+        kpts_buffer = self._buffer(state, "vision_kpts_buffer", WINDOW_SIZE)
+        frame_ids = self._buffer(state, "vision_sampled_frame_ids", WINDOW_SIZE)
+        timestamps = self._buffer(state, "vision_sampled_timestamps", WINDOW_SIZE)
+        source_timestamps = self._buffer(state, "vision_sampled_source_timestamps", WINDOW_SIZE)
         if not person_found:
             self._reset_for_no_person(state)
 
@@ -280,8 +303,9 @@ class LegacyVisionEngine(VisionEngine):
         window_source_timestamps: list[float] | None = None
         model_window_index: int | None = None
 
-        if len(kpts_buffer) == WINDOW_SIZE:
-            raw_array = np.asarray(kpts_buffer, dtype=np.float32)
+        if source_timestamps and source_timestamp - source_timestamps[0] >= WINDOW_SECONDS:
+            fall_started = time.perf_counter()
+            raw_array = self._resample_frames(np.asarray(kpts_buffer, dtype=np.float32), WINDOW_SIZE, deps)
             cleaned = deps.clean_out_of_bounds_data(raw_array)
             normalized = deps.normalize_skeleton_dynamic(cleaned)
             transformed = normalized - normalized[:, 0:1, :]
@@ -300,39 +324,43 @@ class LegacyVisionEngine(VisionEngine):
                 if tuple(output.shape) != expected_output:
                     raise RuntimeError(f"SDA-GCN must return shape {expected_output}, got {tuple(output.shape)}")
                 if not bool(deps.torch.isfinite(output).all().item()):
-                    raise RuntimeError("Binary SDA-GCN returned non-finite logits")
+                    raise RuntimeError("SDA-GCN returned non-finite logits")
                 probability_tensor = deps.torch.softmax(output, dim=1).squeeze(0)
                 raw_class = int(deps.torch.argmax(probability_tensor).item())
                 probabilities = [float(value) for value in probability_tensor.detach().cpu().tolist()]
                 logits = [float(value) for value in output.squeeze(0).detach().cpu().tolist()]
+            self._record_stage_metric(state, "fall", fall_started)
 
-            model_window_index = int(state.get("legacy_model_window_index", 0)) + 1
-            state["legacy_model_window_index"] = model_window_index
+            model_window_index = int(state.get("vision_model_window_index", 0)) + 1
+            state["vision_model_window_index"] = model_window_index
             window_ids = list(frame_ids)
             window_timestamps = list(timestamps)
             window_source_timestamps = list(source_timestamps)
-            state["legacy_last_raw_class"] = raw_class
-            state["legacy_last_probabilities"] = probabilities
+            state["vision_last_raw_class"] = raw_class
+            state["vision_last_probabilities"] = probabilities
 
-            if raw_class == self.FALL_CLASS_ID:
-                if not state.get("legacy_pending_fall", False) and state.get("legacy_current_action") != FALL_LABEL:
-                    state["legacy_pending_fall"] = True
-                    state["legacy_fall_start_time"] = window_source_timestamps[-1]
-                    state["legacy_last_raw_kpts"] = raw_array[-1]
-                    state["legacy_incident_id"] = str(self._incident_factory())
-                    state["legacy_confirmed_event_emitted"] = False
-                    state["legacy_fall_state"] = "pending"
-                    state["legacy_pending_confidence"] = probabilities[1]
-            else:
-                self._reset_episode(state)
+            decisions = state.setdefault("vision_pending_decisions", [])
+            decisions.append(
+                {
+                    "created_at": source_timestamp,
+                    "is_fall": raw_class == self.FALL_CLASS_ID,
+                    "confidence": probabilities[self.FALL_CLASS_ID],
+                    "cancelled": False,
+                    "last_raw_kpts": raw_array[-1] if raw_class == self.FALL_CLASS_ID else None,
+                    "incident_id": None,
+                }
+            )
+            state["vision_pending_fall"] = any(item["is_fall"] for item in decisions)
+            if state["vision_pending_fall"] and state.get("vision_current_action") != FALL_LABEL:
+                state["vision_fall_state"] = "pending"
 
-            for _ in range(STRIDE):
+            while source_timestamps and source_timestamp - source_timestamps[0] > WINDOW_RETAIN_SECONDS:
                 kpts_buffer.popleft()
                 frame_ids.popleft()
                 timestamps.popleft()
                 source_timestamps.popleft()
 
-        events.extend(self._advance_fall_clock(state, source_timestamp, packet.frame_id))
+        events.extend(self._advance_decisions(state, source_timestamp, packet.frame_id))
 
         return self._result(
             packet,
@@ -377,7 +405,7 @@ class LegacyVisionEngine(VisionEngine):
             try:
                 self._initialize_shared()
             except Exception as exc:
-                error = exc if isinstance(exc, LegacyVisionInitializationError) else LegacyVisionInitializationError(str(exc))
+                error = exc if isinstance(exc, VisionInitializationError) else VisionInitializationError(str(exc))
                 self._initialization_error = error
                 raise error from exc
             self._initialized = True
@@ -389,7 +417,7 @@ class LegacyVisionEngine(VisionEngine):
             ("SDA-GCN checkpoint", self.checkpoint_path),
         ):
             if not path.is_file():
-                raise LegacyVisionInitializationError(f"Missing {label}: {path}")
+                raise VisionInitializationError(f"Missing {label}: {path}")
 
         deps = self._load_dependencies()
         with self.config_path.open("r", encoding="utf-8") as handle:
@@ -398,27 +426,42 @@ class LegacyVisionEngine(VisionEngine):
         expected = self.EXPECTED_MODEL
         actual = {name: model_args.get(name) for name in expected}
         if actual != expected:
-            raise LegacyVisionInitializationError(f"Expected SDA-GCN config {expected}, got {actual}")
+            raise VisionInitializationError(f"Expected SDA-GCN config {expected}, got {actual}")
         if config.get("test_feeder_args", {}).get("bone") is not self.EXPECTED_BONE_MODALITY:
-            raise LegacyVisionInitializationError(
+            raise VisionInitializationError(
                 f"SDA-GCN config bone modality must be {self.EXPECTED_BONE_MODALITY}"
             )
         model_args["graph"] = "src.vision.graph.ntu_rgb_d_hierarchy.Graph"
 
         device = self._select_torch_device(deps.torch)
+        detector_path, detector_device, detector_diagnostics = VisionRuntimeResolver.resolve_detector(
+            deps.YOLO,
+            self.yolo_path,
+            self.model_cache_dir,
+            self.requested_device,
+            device,
+        )
         action_model = deps.Model(**model_args).to(device)
         try:
             weights = deps.torch.load(self.checkpoint_path, map_location=device, weights_only=True)
         except TypeError:
             weights = deps.torch.load(self.checkpoint_path, map_location=device)
         if not isinstance(weights, dict):
-            raise LegacyVisionInitializationError("SDA-GCN checkpoint must contain a state_dict mapping")
+            raise VisionInitializationError("SDA-GCN checkpoint must contain a state_dict mapping")
         weights = OrderedDict((key.split("module.")[-1], value) for key, value in weights.items())
         try:
             action_model.load_state_dict(weights, strict=True)
         except Exception as exc:
-            raise LegacyVisionInitializationError(f"Invalid SDA-GCN checkpoint: {exc}") from exc
+            raise VisionInitializationError(f"Invalid SDA-GCN checkpoint: {exc}") from exc
         action_model.eval()
+        action_model, action_diagnostics = VisionRuntimeResolver.resolve_action_model(
+            action_model,
+            self.checkpoint_path,
+            self.config_path,
+            self.model_cache_dir,
+            self.requested_device,
+            deps.torch,
+        )
 
         face_app = None
         known_faces: dict[str, np.ndarray] = {}
@@ -428,7 +471,7 @@ class LegacyVisionEngine(VisionEngine):
             present = {path.name for path in model_dir.glob("*.onnx")} if model_dir.is_dir() else set()
             missing = sorted(required - present)
             if missing:
-                raise LegacyVisionInitializationError(
+                raise VisionInitializationError(
                     f"Missing local InsightFace buffalo_l resources in {model_dir}: {', '.join(missing)}"
                 )
             providers, face_ctx_id = self._identity_execution(device)
@@ -444,25 +487,46 @@ class LegacyVisionEngine(VisionEngine):
 
         self._dependencies = deps
         self._device = device
+        self._detector_model_path = detector_path
+        self._detector_device = detector_device
+        self._device_diagnostics["stages"]["yolo"] = detector_diagnostics
+        self._device_diagnostics["stages"]["sda_gcn"] = action_diagnostics
+        accelerated_stages = {
+            name
+            for name, diagnostics in (("detector", detector_diagnostics), ("fall", action_diagnostics))
+            if diagnostics["runtime"] == "openvino"
+        }
+        if accelerated_stages:
+            self._device_diagnostics.update(
+                {
+                    "actual_device": "mixed",
+                    "device_name": "Intel GPU + CPU",
+                    "runtime": "hybrid-openvino-pytorch",
+                    "accelerated": True,
+                    "fallback_reason": None,
+                }
+            )
         self._action_model = action_model
         self._face_app = face_app
         self._known_faces = known_faces
 
     def _identity_execution(self, torch_device: Any) -> tuple[list[str], int]:
         if self.identity_provider not in {"auto", "cpu", "directml"}:
-            raise LegacyVisionInitializationError(
+            raise VisionInitializationError(
                 "Identity provider must be auto, cpu, or directml"
             )
         try:
             import onnxruntime as ort
         except ImportError as exc:
-            raise LegacyVisionInitializationError(f"Missing ONNX Runtime: {exc}") from exc
+            raise VisionInitializationError(f"Missing ONNX Runtime: {exc}") from exc
         available = set(ort.get_available_providers())
+        use_cuda = getattr(torch_device, "type", str(torch_device).split(":", 1)[0]) == "cuda"
+        if self.identity_provider == "auto" and use_cuda and "CUDAExecutionProvider" in available:
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"], 0
         if self.identity_provider in {"auto", "directml"} and "DmlExecutionProvider" in available:
             return ["DmlExecutionProvider", "CPUExecutionProvider"], 0
         if self.identity_provider == "directml":
-            raise LegacyVisionInitializationError("DirectML was requested but is unavailable")
-        use_cuda = getattr(torch_device, "type", str(torch_device).split(":", 1)[0]) == "cuda"
+            raise VisionInitializationError("DirectML was requested but is unavailable")
         if use_cuda and "CUDAExecutionProvider" in available:
             return ["CUDAExecutionProvider", "CPUExecutionProvider"], 0
         return ["CPUExecutionProvider"], -1
@@ -478,32 +542,19 @@ class LegacyVisionEngine(VisionEngine):
                 "torch_cuda_build": torch.version.cuda,
             }
         )
-        requested = self.requested_device
-        if requested == "auto":
-            selected = "cuda:0" if cuda_available and cuda_count > 0 else "cpu"
-        elif requested == "cpu":
-            selected = "cpu"
-        else:
-            index = 0 if requested == "cuda" else int(requested.split(":", 1)[1])
-            if not cuda_available:
-                raise LegacyVisionInitializationError(
-                    f"Requested Vision device {requested!r}, but CUDA is unavailable "
-                    f"(torch={torch.__version__}, torch.version.cuda={torch.version.cuda!r})"
-                )
-            if index >= cuda_count:
-                raise LegacyVisionInitializationError(
-                    f"Requested Vision device {requested!r}, but only {cuda_count} CUDA device(s) are available"
-                )
-            selected = f"cuda:{index}"
-
-        device = torch.device(selected)
-        device_name = torch.cuda.get_device_name(device) if device.type == "cuda" else "CPU"
+        try:
+            device, plan = VisionRuntimeResolver.resolve_pytorch(torch, self.requested_device)
+        except RuntimeError as exc:
+            raise VisionInitializationError(str(exc)) from exc
         self._device_diagnostics.update(
             {
                 "actual_device": str(device),
                 "cuda_available": cuda_available,
                 "cuda_device_count": cuda_count,
-                "device_name": device_name,
+                "device_name": plan.device_name,
+                "runtime": plan.runtime,
+                "accelerated": plan.accelerated,
+                "fallback_reason": plan.fallback_reason,
                 "torch_version": str(torch.__version__),
                 "torch_cuda_build": torch.version.cuda,
                 "stages": {
@@ -522,6 +573,7 @@ class LegacyVisionEngine(VisionEngine):
             import mediapipe as mp
             import torch
             import yaml
+            from scipy.interpolate import interp1d
             from ultralytics import YOLO
 
             from src.vision.extractkpt.extractkpt import (
@@ -529,13 +581,12 @@ class LegacyVisionEngine(VisionEngine):
                 extract_from_crop,
                 normalize_skeleton_dynamic,
             )
-            from src.vision.feeders.bone_pairs import ntu_pairs
             from src.vision.fusion.interpolate import interpolate_missing
             from src.vision.fusion.kalman_filter import apply_kalman_filter
             from src.vision.fusion.normalize_pose import normalize_pose
             from src.vision.model.SDAGCN import Model
         except ImportError as exc:
-            raise LegacyVisionInitializationError(f"Missing Legacy Vision dependency: {exc}") from exc
+            raise VisionInitializationError(f"Missing canonical Vision dependency: {exc}") from exc
         face_analysis = None
         if self.identity_enabled:
             try:
@@ -543,7 +594,7 @@ class LegacyVisionEngine(VisionEngine):
 
                 face_analysis = insightface_app.FaceAnalysis
             except ImportError as exc:
-                raise LegacyVisionInitializationError(f"Missing Legacy Vision identity dependency: {exc}") from exc
+                raise VisionInitializationError(f"Missing canonical Vision identity dependency: {exc}") from exc
 
         return SimpleNamespace(
             cv2=cv2,
@@ -553,56 +604,127 @@ class LegacyVisionEngine(VisionEngine):
             FaceAnalysis=face_analysis,
             YOLO=YOLO,
             Model=Model,
+            interp1d=interp1d,
             clean_out_of_bounds_data=clean_out_of_bounds_data,
             extract_from_crop=extract_from_crop,
             normalize_skeleton_dynamic=normalize_skeleton_dynamic,
             normalize_pose=normalize_pose,
             interpolate_missing=interpolate_missing,
             apply_kalman_filter=apply_kalman_filter,
-            ntu_pairs=ntu_pairs,
         )
 
     @staticmethod
     def _model_input(data_numpy: np.ndarray, deps: SimpleNamespace) -> np.ndarray:
-        bone_data = np.zeros_like(data_numpy)
-        for v1, v2 in deps.ntu_pairs:
-            bone_data[:, :, v1] = data_numpy[:, :, v1] - data_numpy[:, :, v2]
-        return bone_data
+        del deps
+        return data_numpy
 
-    def _camera_context(self, camera_id: str, session: VisionSession) -> LegacyCameraContext:
+    @staticmethod
+    def _resample_frames(kpts_array: np.ndarray, target_frames: int, deps: SimpleNamespace) -> np.ndarray:
+        frame_count, vertices, channels = kpts_array.shape
+        if frame_count == target_frames:
+            return kpts_array
+        if frame_count == 0:
+            return np.zeros((target_frames, vertices, channels), dtype=np.float32)
+        if frame_count == 1:
+            return np.repeat(kpts_array, target_frames, axis=0)
+        old_axis = np.linspace(0, 1, frame_count)
+        new_axis = np.linspace(0, 1, target_frames)
+        flattened = kpts_array.reshape(frame_count, -1)
+        interpolator = deps.interp1d(old_axis, flattened, axis=0, kind="linear", fill_value="extrapolate")
+        return interpolator(new_axis).reshape(target_frames, vertices, channels)
+
+    def _camera_context(self, camera_id: str, session: VisionSession) -> CameraContext:
         with self._lock:
             context = self._contexts.get(camera_id)
-            token = session.state.setdefault("legacy_context_token", object())
+            token = session.state.setdefault("vision_context_token", object())
             if context is not None and context.session_token is not token:
                 context.close()
                 self._contexts.pop(camera_id, None)
                 context = None
             if context is None:
                 assert self._dependencies is not None
-                yolo = self._dependencies.YOLO(str(self.yolo_path), verbose=False)
-                yolo.to(self._device)
+                yolo = self._dependencies.YOLO(
+                    str(self._detector_model_path),
+                    task="detect",
+                    verbose=False,
+                )
+                if self._detector_device is None:
+                    yolo.to(self._device)
                 pose = self._dependencies.mp.solutions.pose.Pose(
                     min_detection_confidence=0.5,
                     min_tracking_confidence=0.5,
                 )
-                context = LegacyCameraContext(yolo=yolo, pose=pose, session_token=token)
+                context = CameraContext(yolo=yolo, pose=pose, session_token=token)
                 self._contexts[camera_id] = context
             return context
 
-    def _identity_metadata(self, crop: np.ndarray) -> dict[str, Any]:
+    def _identity_metadata(
+        self,
+        crop: np.ndarray,
+        track_id: int | None,
+        state: dict[str, Any],
+        source_timestamp: float,
+    ) -> dict[str, Any]:
         if not self.identity_enabled:
             return {}
         assert self._face_app is not None
-        faces = self._face_app.get(crop)
-        best_name: str | None = None
-        best_score = 0.0
-        if not faces:
+        cache = state.setdefault("vision_face_cache", {})
+        for cached_track_id, entry in list(cache.items()):
+            if source_timestamp - float(entry["last_seen_at"]) > TRACK_STATE_TTL_SECONDS:
+                cache.pop(cached_track_id, None)
+        entry = cache.get(track_id) if track_id is not None else None
+        if entry is not None:
+            entry["last_seen_at"] = source_timestamp
+            if entry["status"] in {"RECOGNIZED", "LOCKED_UNKNOWN"}:
+                return dict(entry["metadata"])
+            if (
+                int(entry["attempts"]) >= FACE_RECOGNITION_MAX_ATTEMPTS
+                or source_timestamp - float(entry["last_attempt_at"]) < FACE_RECOGNITION_INTERVAL_SECONDS
+            ):
+                return dict(entry["metadata"])
+        if entry is None and track_id is not None:
+            entry = {
+                "status": "PENDING",
+                "attempts": 0,
+                "last_attempt_at": float("-inf"),
+                "last_seen_at": source_timestamp,
+                "metadata": {
+                    "identity_status": "UNKNOWN",
+                    "identity_name": None,
+                    "identity_person_id": None,
+                    "identity_similarity": 0.0,
+                },
+            }
+            cache[track_id] = entry
+        try:
+            with self._face_lock:
+                faces = self._face_app.get(crop)
+        except Exception as exc:  # Face failure must not stop fall detection.
+            logger.warning("Face recognition failed camera track=%s: %s", track_id, exc)
             return {
                 "identity_status": "UNKNOWN",
                 "identity_name": None,
                 "identity_person_id": None,
                 "identity_similarity": 0.0,
+                "identity_error": str(exc),
             }
+        if entry is not None:
+            entry["attempts"] += 1
+            entry["last_attempt_at"] = source_timestamp
+        best_name: str | None = None
+        best_score = 0.0
+        if not faces:
+            metadata = {
+                "identity_status": "UNKNOWN",
+                "identity_name": None,
+                "identity_person_id": None,
+                "identity_similarity": 0.0,
+            }
+            if entry is not None:
+                entry["metadata"] = metadata
+                if entry["attempts"] >= FACE_RECOGNITION_MAX_ATTEMPTS:
+                    entry["status"] = "LOCKED_UNKNOWN"
+            return metadata
         main_face = max(faces, key=lambda face: (face.bbox[2] - face.bbox[0]) * (face.bbox[3] - face.bbox[1]))
         known_faces = (
             self._face_gallery.snapshot()
@@ -622,12 +744,19 @@ class LegacyVisionEngine(VisionEngine):
                 best_name = name
                 best_person_id = known_face.person_id
         known = best_score > 0.45
-        return {
+        metadata = {
             "identity_status": "KNOWN" if known else "UNKNOWN",
             "identity_name": best_name if known else None,
             "identity_person_id": best_person_id if known else None,
             "identity_similarity": best_score,
         }
+        if entry is not None:
+            entry["metadata"] = metadata
+            if known:
+                entry["status"] = "RECOGNIZED"
+            elif entry["attempts"] >= FACE_RECOGNITION_MAX_ATTEMPTS:
+                entry["status"] = "LOCKED_UNKNOWN"
+        return metadata
 
     def _load_known_faces(self, face_app: Any, cv2: Any) -> dict[str, np.ndarray]:
         known_faces: dict[str, np.ndarray] = {}
@@ -684,29 +813,48 @@ class LegacyVisionEngine(VisionEngine):
         return int(values[index].detach().cpu().item())
 
     @staticmethod
+    def _record_stage_metric(state: dict[str, Any], stage: str, started: float) -> None:
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        metrics = state.setdefault("vision_stage_metrics", {})
+        current = metrics.setdefault(stage, {"count": 0, "total_ms": 0.0, "last_ms": 0.0, "max_ms": 0.0})
+        current["count"] += 1
+        current["total_ms"] += elapsed_ms
+        current["last_ms"] = elapsed_ms
+        current["max_ms"] = max(current["max_ms"], elapsed_ms)
+
+    @staticmethod
     def _reset_episode(state: dict[str, Any]) -> None:
-        state["legacy_pending_fall"] = False
-        state["legacy_current_action"] = "Normal"
-        state["legacy_fall_state"] = "normal"
-        state["legacy_incident_id"] = None
-        state["legacy_confirmed_event_emitted"] = False
-        state["legacy_pending_confidence"] = None
+        state["vision_pending_fall"] = False
+        state["vision_current_action"] = "Normal"
+        state["vision_fall_state"] = "normal"
+        state["vision_incident_id"] = None
+        state["vision_confirmed_event_emitted"] = False
+        state["vision_pending_confidence"] = None
+        state["vision_pending_decisions"] = []
+
+    @staticmethod
+    def _prepare_track_state(state: dict[str, Any], track_id: int | None) -> None:
+        previous = state.get("vision_active_track_id")
+        if previous is not None and track_id != previous:
+            retained = {
+                "vision_source_epoch",
+                "vision_frame_count",
+                "vision_context_token",
+                "vision_face_cache",
+                "vision_stage_metrics",
+                "vision_detector_warmed",
+            }
+            for key in [name for name in state if name.startswith("vision_") and name not in retained]:
+                state.pop(key, None)
+        state["vision_active_track_id"] = track_id
 
     @staticmethod
     def _reset_for_no_person(state: dict[str, Any]) -> None:
-        was_pending = bool(state.get("legacy_pending_fall", False))
-        was_confirmed = state.get("legacy_current_action") == FALL_LABEL
-        state["legacy_pending_fall"] = False
-        state["legacy_incident_id"] = None
-        state["legacy_confirmed_event_emitted"] = False
-        state["legacy_pending_confidence"] = None
-        if was_confirmed:
-            state["legacy_current_action"] = "Normal"
-            state["legacy_fall_state"] = "normal"
-        elif was_pending or state.get("legacy_current_action") == "Normal":
-            state["legacy_fall_state"] = "normal"
-        elif state.get("legacy_current_action") is None:
-            state["legacy_fall_state"] = "waiting"
+        state["vision_pending_decisions"] = []
+        state["vision_pending_fall"] = False
+        state["vision_incident_id"] = None
+        state["vision_current_action"] = "Normal"
+        state["vision_fall_state"] = "normal"
 
     @staticmethod
     def _source_timestamp(packet: FramePacket) -> float:
@@ -714,45 +862,85 @@ class LegacyVisionEngine(VisionEngine):
 
     @staticmethod
     def _prepare_source_epoch(state: dict[str, Any], packet: FramePacket) -> None:
-        previous_epoch = state.get("legacy_source_epoch")
+        previous_epoch = state.get("vision_source_epoch")
         if packet.discontinuity or (previous_epoch is not None and previous_epoch != packet.source_epoch):
-            for key in [name for name in state if name.startswith("legacy_")]:
+            for key in [name for name in state if name.startswith("vision_")]:
                 state.pop(key, None)
-        state["legacy_source_epoch"] = packet.source_epoch
+        state["vision_source_epoch"] = packet.source_epoch
 
-    def _advance_fall_clock(
+    @staticmethod
+    def _observe_movement(state: dict[str, Any], keypoints: np.ndarray, source_timestamp: float) -> None:
+        if state.get("vision_current_action") == FALL_LABEL:
+            previous = state.get("vision_last_raw_kpts")
+            if previous is not None:
+                movement = float(np.mean(np.linalg.norm(keypoints - previous, axis=1)))
+                state["vision_movement"] = movement
+                if movement > MOVEMENT_THRESHOLD:
+                    state["vision_current_action"] = "Normal"
+                    state["vision_fall_state"] = "normal"
+                    state["vision_incident_id"] = None
+            state["vision_last_raw_kpts"] = keypoints
+
+        decisions = state.setdefault("vision_pending_decisions", [])
+        for decision in decisions:
+            if decision["cancelled"] or not decision["is_fall"]:
+                continue
+            elapsed = source_timestamp - float(decision["created_at"])
+            previous = decision.get("last_raw_kpts")
+            if elapsed >= MOVEMENT_CHECK_SECONDS and previous is not None:
+                movement = float(np.mean(np.linalg.norm(keypoints - previous, axis=1)))
+                if movement > MOVEMENT_THRESHOLD:
+                    decision["cancelled"] = True
+            decision["last_raw_kpts"] = keypoints
+
+    def _advance_decisions(
         self,
         state: dict[str, Any],
         source_timestamp: float,
         frame_id: int,
     ) -> list[VisionEvent]:
         events: list[VisionEvent] = []
-        if not state.get("legacy_pending_fall", False):
-            return events
-        if source_timestamp - float(state["legacy_fall_start_time"]) < 2.0:
-            state["legacy_current_action"] = "Normal"
-            state["legacy_fall_state"] = "pending"
-            return events
-
-        state["legacy_current_action"] = FALL_LABEL
-        state["legacy_fall_state"] = "confirmed"
-        state["legacy_pending_fall"] = False
-        if not state.get("legacy_confirmed_event_emitted", False):
-            incident_id = str(state["legacy_incident_id"])
-            events.append(
-                VisionEvent(
-                    type="fall_confirmed",
-                    confidence=float(state.get("legacy_pending_confidence", 0.0)),
-                    metadata={
-                        "incident_id": incident_id,
-                        "event_id": f"{incident_id}:fall_confirmed",
-                        "snapshot_path": None,
-                    },
-                )
-            )
-            state["legacy_confirmed_event_emitted"] = True
-            state["legacy_event_frame_id"] = frame_id
-            state["legacy_event_source_time"] = source_timestamp
+        was_pending = bool(state.get("vision_pending_fall", False))
+        active = []
+        for decision in state.setdefault("vision_pending_decisions", []):
+            if decision["cancelled"]:
+                continue
+            if source_timestamp - float(decision["created_at"]) < DECISION_DELAY_SECONDS:
+                active.append(decision)
+                continue
+            if decision["is_fall"]:
+                if state.get("vision_current_action") != FALL_LABEL:
+                    incident_id = str(self._incident_factory())
+                    state["vision_current_action"] = FALL_LABEL
+                    state["vision_fall_state"] = "confirmed"
+                    state["vision_incident_id"] = incident_id
+                    state["vision_last_raw_kpts"] = decision.get("last_raw_kpts")
+                    events.append(
+                        VisionEvent(
+                            type="fall_confirmed",
+                            confidence=float(decision["confidence"]),
+                            metadata={
+                                "incident_id": incident_id,
+                                "event_id": f"{incident_id}:fall_confirmed",
+                                "snapshot_path": None,
+                            },
+                        )
+                    )
+                    state["vision_event_frame_id"] = frame_id
+                    state["vision_event_source_time"] = source_timestamp
+            else:
+                state["vision_current_action"] = "Normal"
+                state["vision_fall_state"] = "normal"
+                state["vision_incident_id"] = None
+        state["vision_pending_decisions"] = active
+        state["vision_pending_fall"] = any(item["is_fall"] for item in active)
+        if state["vision_pending_fall"] and state.get("vision_current_action") != FALL_LABEL:
+            state["vision_fall_state"] = "pending"
+        elif was_pending and state.get("vision_current_action") != FALL_LABEL:
+            state["vision_current_action"] = "Normal"
+            state["vision_fall_state"] = "normal"
+        elif state.get("vision_current_action") == "Normal":
+            state["vision_fall_state"] = "normal"
         return events
 
     def _result(
@@ -775,21 +963,21 @@ class LegacyVisionEngine(VisionEngine):
         window_source_timestamps: list[float] | None = None,
     ) -> VisionResult:
         state = session.state
-        buffer_value = state.get("legacy_kpts_buffer")
+        buffer_value = state.get("vision_kpts_buffer")
         metadata = {
-            "engine": "legacy",
+            "engine": "canonical",
             "device": self.device_diagnostics(),
             "sampled": sampled,
             "buffer_length": 0 if buffer_value is None else len(buffer_value),
-            "fall_state": state.get("legacy_fall_state", "waiting"),
-            "pending_fall": bool(state.get("legacy_pending_fall", False)),
-            "incident_id": state.get("legacy_incident_id"),
+            "fall_state": state.get("vision_fall_state", "waiting"),
+            "pending_fall": bool(state.get("vision_pending_fall", False)),
+            "incident_id": state.get("vision_incident_id"),
             "pose_found": pose_found,
             "raw_class": raw_class,
             "probabilities": probabilities,
             "logits": logits,
             "model_window_index": model_window_index,
-            "internal_frame_count": state.get("legacy_frame_count", 0),
+            "internal_frame_count": state.get("vision_frame_count", 0),
             "source_frame_gap": source_gap,
             "dropped_frames": session.dropped_frames,
             "sampled_frame_id": packet.frame_id if sampled else None,
@@ -806,6 +994,15 @@ class LegacyVisionEngine(VisionEngine):
                 if not window_source_timestamps
                 else window_source_timestamps[-1] - window_source_timestamps[0]
             ),
+            "performance": {
+                stage: {
+                    "count": values["count"],
+                    "last_ms": values["last_ms"],
+                    "mean_ms": values["total_ms"] / values["count"],
+                    "max_ms": values["max_ms"],
+                }
+                for stage, values in state.get("vision_stage_metrics", {}).items()
+            },
         }
         return VisionResult(
             camera_id=packet.camera_id,
@@ -817,3 +1014,5 @@ class LegacyVisionEngine(VisionEngine):
             events=events or [],
             metadata=metadata,
         )
+
+

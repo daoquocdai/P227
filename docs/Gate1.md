@@ -2,7 +2,7 @@
 
 > Đây là artifact yêu cầu/scope của Gate 1 nên các cụm “V1” trong tài liệu này
 > chỉ phiên bản sản phẩm tại thời điểm Gate 1. Trạng thái runtime hiện hành,
-> bao gồm Vision V1/V2, được mô tả tại [architecture.md](architecture.md),
+> với canonical Vision, được mô tả tại [architecture.md](architecture.md),
 > [setup.md](setup.md) và [testing.md](testing.md).
 
 > **Gate 1 submission:** Brief + PRD + Wireframe/UI Flow + GitHub Repo & AI Log Setup.

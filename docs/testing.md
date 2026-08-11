@@ -20,11 +20,11 @@ Chạy backend regression bằng Mock khi muốn độc lập model/hardware:
 
 ```cmd
 set VISION_ENGINE=mock
-set VISION_LEGACY_IDENTITY_ENABLED=false
+set VISION_IDENTITY_ENABLED=false
 python -m pytest -q
 ```
 
-Mock engine không phải bằng chứng cho Vision V1/V2 thật.
+Mock engine không phải bằng chứng cho canonical Vision thật.
 
 ## 2. Integration
 
@@ -42,7 +42,7 @@ Phải bao phủ:
 
 ## 3. Golden Vision
 
-Golden test so standalone oracle bất biến với engine Local Hub tương ứng trên cùng:
+Golden comparison so standalone `visionv2/` oracle với canonical pipeline trên cùng:
 
 - video;
 - model/config/checkpoint;
@@ -63,21 +63,23 @@ Evidence cần ghi:
 
 Unit test count không thay thế golden evidence.
 
-V1:
+Chạy comparison lâu dài:
 
 ```cmd
-.venv\Scripts\python.exe tests\test_vision\golden_regression.py --frames 127
+.venv\Scripts\python.exe tools\compare_vision_reference.py --frames 127 --device cpu --atol 0
+.venv\Scripts\python.exe tools\compare_vision_reference.py --frames 127 --device auto --atol 0.001
 ```
 
-V2:
+CPU dùng checkpoint/config/reference preprocessing nhưng cần device-safety shim
+vì standalone gọi `Tensor.get_device()` và không chạy native trên CPU. CUDA host
+dùng native standalone model. Báo cáo phải phân biệt numerical parity và logical
+class/event parity.
+
+Benchmark scheduler/hardware ví dụ:
 
 ```cmd
-.venv\Scripts\python.exe tests\test_vision\v2_golden_regression.py --frames 127
+.venv\Scripts\python.exe tools\benchmark_vision_runtime.py --camera fall=frontend/public/videos/kich_ban3.mp4 --target-hz 5 --duration 70 --scheduler per-camera
 ```
-
-Kết quả exact mong đợi cho từng stage: `first_divergence=null`, `max_abs=0.0`
-và `exact_equal=true`. Các runner cần model/video fixture thật và có thể tốn
-nhiều thời gian hơn unit tests.
 
 ## 4. System E2E
 
@@ -101,7 +103,7 @@ Acceptance tối thiểu:
 
 Real Vision acceptance bổ sung:
 
-14. Engine V1 hoặc V2 được chọn load strict thành công.
+14. Canonical engine được chọn load strict thành công.
 15. Vision `running` hoặc `degraded`, không integration `error`.
 16. Fixed-video/person test đi qua model thật.
 17. Event thật đi tới DB/SSE/frontend.
@@ -157,8 +159,7 @@ python -m pip check
 
 ### Ruff toàn repository
 
-Hai oracle standalone có per-file ignore hẹp trong `ruff.toml` để giữ byte-identical;
-không auto-fix chúng. Toàn repository phải lint sạch:
+Toàn repository phải lint sạch:
 
 ```cmd
 python -m ruff check .

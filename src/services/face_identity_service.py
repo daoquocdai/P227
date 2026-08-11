@@ -122,6 +122,6 @@ face_gallery = FaceGallery()
 _settings = get_settings()
 face_identity_service = FaceIdentityService(
     face_gallery,
-    _settings.vision_legacy_insightface_root,
-    _settings.vision_legacy_identity_provider,
+    _settings.vision_insightface_root,
+    _settings.vision_identity_provider,
 )

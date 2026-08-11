@@ -9,10 +9,7 @@ import pytest
 import torch
 
 from src.models.frame import FramePacket
-from src.vision.adapters.legacy import (
-    LegacyVisionEngine,
-    LegacyVisionInitializationError,
-)
+from src.vision.pipeline import CanonicalVisionPipeline, VisionInitializationError
 from src.vision.session import VisionSession
 
 
@@ -44,8 +41,9 @@ class FakeBoxes:
 class FakeYolo:
     instances: ClassVar[list] = []
 
-    def __init__(self, _path, verbose=False):
+    def __init__(self, _path, task=None, verbose=False):
         self.verbose = verbose
+        self.task = task
         self.track_calls = 0
         self.device = None
         self.person_present = True
@@ -88,7 +86,9 @@ class FakeActionModel:
         if self.invalid_shape is not None:
             return torch.zeros(self.invalid_shape, dtype=torch.float32)
         predicted = self.classes.pop(0) if self.classes else 0
-        return torch.tensor([[0.0, 4.0] if predicted == 1 else [4.0, 0.0]], dtype=torch.float32)
+        logits = torch.zeros((1, 5), dtype=torch.float32)
+        logits[0, predicted] = 4.0
+        return logits
 
 
 class FakeClock:
@@ -119,6 +119,15 @@ def make_dependencies(preprocessing_calls=None):
         return pose.keypoints.copy()
 
     pose_namespace = SimpleNamespace(Pose=FakePose)
+
+    def interp1d(old_axis, values, axis, kind, fill_value):
+        assert axis == 0 and kind == "linear" and fill_value == "extrapolate"
+
+        def interpolate(new_axis):
+            return np.stack([np.interp(new_axis, old_axis, values[:, column]) for column in range(values.shape[1])], axis=1)
+
+        return interpolate
+
     return SimpleNamespace(
         cv2=cv2,
         torch=torch,
@@ -130,7 +139,7 @@ def make_dependencies(preprocessing_calls=None):
         normalize_pose=record("pose"),
         interpolate_missing=record("interpolate"),
         apply_kalman_filter=record("kalman"),
-        ntu_pairs=((0, 1), (20, 20)),
+        interp1d=interp1d,
     )
 
 
@@ -138,7 +147,7 @@ def make_engine(tmp_path, *, classes=None, clock=None, invalid_shape=None, prepr
     FakeYolo.instances.clear()
     FakePose.instances.clear()
     fake_clock = clock or FakeClock()
-    engine = LegacyVisionEngine(
+    engine = CanonicalVisionPipeline(
         yolo_path=tmp_path / "yolo.pt",
         config_path=tmp_path / "config.yaml",
         checkpoint_path=tmp_path / "checkpoint.pt",
@@ -146,7 +155,6 @@ def make_engine(tmp_path, *, classes=None, clock=None, invalid_shape=None, prepr
         clock=fake_clock,
         incident_factory=iter(["incident-1", "incident-2", "incident-3"]).__next__,
     )
-    engine.start()
     engine._dependencies = make_dependencies(preprocessing_calls)
     engine._device = torch.device("cpu")
     engine._action_model = FakeActionModel(classes, invalid_shape)
@@ -174,7 +182,7 @@ def process_range(engine, session, start, end):
 
 
 def test_adapter_has_no_capture_ui_async_or_event_sink_ownership():
-    source = inspect.getsource(LegacyVisionEngine)
+    source = inspect.getsource(CanonicalVisionPipeline)
     for forbidden in ("VideoCapture", "imshow", "waitKey", "destroyAllWindows", "asyncio", "VisionEventSink"):
         assert forbidden not in source
 
@@ -201,17 +209,16 @@ def test_frame_count_buffer_yolo_and_pose_are_per_camera(tmp_path):
     engine.process(packet("cam02", 1), second)
     engine.process(packet("cam01", 2), first)
 
-    assert first.state["legacy_frame_count"] == 2
-    assert second.state["legacy_frame_count"] == 1
-    assert len(first.state["legacy_kpts_buffer"]) == 1
-    assert len(second.state["legacy_kpts_buffer"]) == 1
+    assert first.state["vision_frame_count"] == 2
+    assert second.state["vision_frame_count"] == 1
+    assert len(first.state["vision_kpts_buffer"]) == 1
+    assert len(second.state["vision_kpts_buffer"]) == 1
     assert engine._contexts["cam01"].yolo is not engine._contexts["cam02"].yolo
     assert engine._contexts["cam01"].pose is not engine._contexts["cam02"].pose
 
 
 def test_shared_initialization_runs_once_for_two_cameras(tmp_path):
-    engine = LegacyVisionEngine(tmp_path / "y", tmp_path / "c", tmp_path / "w")
-    engine.start()
+    engine = CanonicalVisionPipeline(tmp_path / "y", tmp_path / "c", tmp_path / "w")
     calls = []
 
     def initialize():
@@ -221,6 +228,7 @@ def test_shared_initialization_runs_once_for_two_cameras(tmp_path):
         engine._action_model = FakeActionModel()
 
     engine._initialize_shared = initialize
+    engine.start()
     engine.process(packet("cam01", 1), VisionSession("cam01"))
     engine.process(packet("cam02", 1), VisionSession("cam02"))
 
@@ -228,39 +236,43 @@ def test_shared_initialization_runs_once_for_two_cameras(tmp_path):
     assert engine._action_model is not None
 
 
-def test_window_64_preprocessing_order_stride_and_bone_shape(tmp_path):
+def test_time_window_is_resampled_to_64_joint_frames(tmp_path):
     preprocessing_calls = []
     engine, _ = make_engine(tmp_path, classes=[0], preprocessing_calls=preprocessing_calls)
     session = VisionSession("cam01")
 
     results = process_range(engine, session, 1, 127)
-    model_result = results[-1]
+    model_results = [result for result in results if result.metadata["raw_class"] is not None]
+    model_result = model_results[-1]
 
-    assert len(engine._action_model.calls) == 1
+    assert len(engine._action_model.calls) == 3
     assert tuple(engine._action_model.calls[0].shape) == (1, 3, 64, 25, 1)
-    assert [name for name, _shape in preprocessing_calls] == ["clean", "dynamic", "pose", "interpolate", "kalman"]
+    assert [name for name, _shape in preprocessing_calls] == [
+        "clean", "dynamic", "pose", "interpolate", "kalman",
+    ] * 3
     assert all(shape == (64, 25, 3) for _name, shape in preprocessing_calls)
-    assert model_result.metadata["window_frame_ids"] == list(range(1, 128, 2))
-    assert model_result.metadata["model_window_index"] == 1
+    assert model_result.metadata["window_source_time_span"] >= 2.0
+    assert model_result.metadata["model_window_index"] == 3
     assert model_result.metadata["raw_class"] == 0
-    assert len(session.state["legacy_kpts_buffer"]) == 32
-    assert list(session.state["legacy_sampled_frame_ids"]) == list(range(65, 128, 2))
+    assert len(session.state["vision_kpts_buffer"]) <= 32
+    assert np.shares_memory(engine._action_model.calls[0].numpy(), engine._action_model.calls[1].numpy()) is False
 
 
-def test_binary_logits_shape_is_validated(tmp_path):
+def test_five_class_logits_shape_is_validated(tmp_path):
     engine, _ = make_engine(tmp_path, invalid_shape=(1, 120))
     session = VisionSession("cam01")
 
-    with pytest.raises(RuntimeError, match=r"must return shape \(1, 2\)"):
+    with pytest.raises(RuntimeError, match=r"must return shape \(1, 5\)"):
         process_range(engine, session, 1, 127)
 
 
 def test_normal_prediction_has_no_event(tmp_path):
     engine, _ = make_engine(tmp_path, classes=[0])
-    result = process_range(engine, VisionSession("cam01"), 1, 127)[-1]
+    results = process_range(engine, VisionSession("cam01"), 1, 127)
+    result = next(result for result in reversed(results) if result.metadata["raw_class"] is not None)
 
     assert result.metadata["raw_class"] == 0
-    assert result.metadata["fall_state"] == "normal"
+    assert result.metadata["fall_state"] == "waiting"
     assert result.events == []
 
 
@@ -268,13 +280,13 @@ def test_pending_resets_on_later_normal_window(tmp_path):
     engine, clock = make_engine(tmp_path, classes=[1, 0])
     session = VisionSession("cam01")
     process_range(engine, session, 1, 127)
-    assert session.state["legacy_fall_state"] == "pending"
+    assert session.state["vision_fall_state"] == "pending"
 
     clock.value = 0.5
     process_range(engine, session, 128, 191)
 
-    assert session.state["legacy_fall_state"] == "normal"
-    assert session.state["legacy_incident_id"] is None
+    assert session.state["vision_fall_state"] == "normal"
+    assert session.state.get("vision_incident_id") is None
 
 
 def test_pending_resets_on_movement(tmp_path):
@@ -286,8 +298,8 @@ def test_pending_resets_on_movement(tmp_path):
     engine.process(packet("cam01", 128), session)
     engine.process(packet("cam01", 129), session)
 
-    assert session.state["legacy_fall_state"] == "normal"
-    assert session.state["legacy_incident_id"] is None
+    assert session.state["vision_fall_state"] == "normal"
+    assert session.state.get("vision_incident_id") is None
 
 
 def test_confirmation_emits_exactly_one_stable_event_then_new_episode_after_recovery(tmp_path):
@@ -296,7 +308,7 @@ def test_confirmation_emits_exactly_one_stable_event_then_new_episode_after_reco
     pending = process_range(engine, session, 1, 127)[-1]
     assert pending.metadata["fall_state"] == "pending"
     assert pending.events == []
-    assert session.state["legacy_incident_id"] == "incident-1"
+    assert session.state.get("vision_incident_id") is None
 
     skipped = engine.process(packet("cam01", 128, source_timestamp=6.3), session)
     engine.process(packet("cam01", 129), session)
@@ -311,12 +323,25 @@ def test_confirmation_emits_exactly_one_stable_event_then_new_episode_after_reco
     assert repeated.events == []
 
     engine._contexts["cam01"].pose.keypoints = np.full((25, 3), 0.8, dtype=np.float32)
-    engine.process(packet("cam01", 132), session)
-    engine.process(packet("cam01", 133), session)
-    assert session.state.get("legacy_incident_id") is None
+    engine.process(packet("cam01", 132, source_timestamp=6.4), session)
+    engine.process(packet("cam01", 133, source_timestamp=6.5), session)
+    assert session.state.get("vision_incident_id") is None
 
-    process_range(engine, session, 134, 191)
-    assert session.state["legacy_incident_id"] == "incident-2"
+    engine._action_model.classes = [1] * 10
+    second_events = []
+    for frame_id in range(134, 301):
+        result = engine.process(
+            packet(
+                "cam01",
+                frame_id,
+                source_timestamp=(frame_id - 134) / 30.0,
+                source_epoch=1,
+                discontinuity=frame_id == 134,
+            ),
+            session,
+        )
+        second_events.extend(result.events)
+    assert [event.metadata["incident_id"] for event in second_events] == ["incident-2"]
 
 
 def test_fall_transition_depends_on_source_time_not_processing_clock(tmp_path):
@@ -327,8 +352,8 @@ def test_fall_transition_depends_on_source_time_not_processing_clock(tmp_path):
         session = VisionSession(f"cam-{len(transitions)}")
         pending = process_range(engine, session, 1, 127)[-1]
         processing_clock.value += 50_000.0
-        before = engine.process(packet(session.camera_id, 128, source_timestamp=6.0), session)
-        confirmed = engine.process(packet(session.camera_id, 129, source_timestamp=6.3), session)
+        before = engine.process(packet(session.camera_id, 128, source_timestamp=5.0), session)
+        confirmed = engine.process(packet(session.camera_id, 129, source_timestamp=5.2), session)
         transitions.append(
             (
                 pending.metadata["fall_state"],
@@ -339,8 +364,8 @@ def test_fall_transition_depends_on_source_time_not_processing_clock(tmp_path):
         )
 
     assert transitions == [
-        ("pending", "pending", "confirmed", ["fall_confirmed"]),
-        ("pending", "pending", "confirmed", ["fall_confirmed"]),
+            ("pending", "pending", "confirmed", ["fall_confirmed"]),
+            ("pending", "pending", "confirmed", ["fall_confirmed"]),
     ]
 
 
@@ -360,7 +385,7 @@ def test_source_discontinuity_clears_window_and_pending_incident(tmp_path):
     assert reset.metadata["source_discontinuity"] is True
     assert reset.metadata["fall_state"] == "waiting"
     assert reset.metadata["buffer_length"] == 1
-    assert session.state.get("legacy_incident_id") is None
+    assert session.state.get("vision_incident_id") is None
 
 
 def test_no_person_resets_pending_and_has_no_detection(tmp_path):
@@ -386,7 +411,7 @@ def test_pose_missing_appends_zero_without_treating_person_as_missing(tmp_path):
 
     assert len(result.detections) == 1
     assert result.metadata["pose_found"] is False
-    assert np.count_nonzero(session.state["legacy_kpts_buffer"][-1]) == 0
+    assert np.count_nonzero(session.state["vision_kpts_buffer"][-1]) == 0
 
 
 def test_pose_exception_is_controlled_and_other_camera_context_remains_usable(tmp_path):
@@ -418,7 +443,7 @@ def test_unknown_identity_emits_one_event_per_cooldown(tmp_path, monkeypatch):
     monkeypatch.setattr(
         engine,
         "_identity_metadata",
-        lambda _crop: {
+        lambda _crop, _track_id, _state, _source_timestamp: {
             "identity_status": "UNKNOWN",
             "identity_name": None,
             "identity_person_id": None,
@@ -440,21 +465,18 @@ def test_unknown_identity_emits_one_event_per_cooldown(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("missing_name", ["yolo.pt", "config.yaml", "checkpoint.pt"])
-def test_missing_required_resource_has_clear_lazy_initialization_error(tmp_path, missing_name):
+def test_missing_required_resource_fails_during_startup(tmp_path, missing_name):
     paths = {}
     for name in ("yolo.pt", "config.yaml", "checkpoint.pt"):
         path = tmp_path / name
         if name != missing_name:
             path.write_bytes(b"placeholder")
         paths[name] = path
-    engine = LegacyVisionEngine(paths["yolo.pt"], paths["config.yaml"], paths["checkpoint.pt"])
-    engine.start()
-    session = VisionSession("cam01")
-
-    with pytest.raises(LegacyVisionInitializationError, match=re.escape(str(paths[missing_name].resolve()))):
-        engine.process(packet("cam01", 1), session)
-    with pytest.raises(LegacyVisionInitializationError, match=re.escape(str(paths[missing_name].resolve()))):
-        engine.process(packet("cam01", 2), session)
+    engine = CanonicalVisionPipeline(paths["yolo.pt"], paths["config.yaml"], paths["checkpoint.pt"])
+    with pytest.raises(VisionInitializationError, match=re.escape(str(paths[missing_name].resolve()))):
+        engine.start()
+    with pytest.raises(VisionInitializationError, match=re.escape(str(paths[missing_name].resolve()))):
+        engine.start()
 
 
 def test_new_session_replaces_and_closes_old_camera_context(tmp_path):
@@ -478,3 +500,18 @@ def test_stop_closes_all_pose_contexts(tmp_path):
 
     assert all(pose.closed for pose in poses)
     assert engine._contexts == {}
+
+
+def test_release_camera_closes_only_requested_context(tmp_path):
+    engine, _ = make_engine(tmp_path)
+    engine.process(packet("cam01", 1), VisionSession("cam01"))
+    engine.process(packet("cam02", 1), VisionSession("cam02"))
+    released_pose = engine._contexts["cam01"].pose
+    retained_pose = engine._contexts["cam02"].pose
+
+    engine.release_camera("cam01")
+
+    assert released_pose.closed is True
+    assert retained_pose.closed is False
+    assert set(engine._contexts) == {"cam02"}
+

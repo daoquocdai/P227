@@ -7,33 +7,22 @@ from src.services.stream_service import StreamService
 from src.services.vision_manager import VisionManager
 from src.services.vision_sample_buffer import VisionSampleBuffer
 from src.vision.adapters.mock import MockVisionEngine
+from src.vision.pipeline import CanonicalVisionPipeline
 
 
 def build_vision_engine(settings, mock_event_frame_ids: set[int] | None = None):
     if settings.vision_engine == "mock":
         return MockVisionEngine(emit_event_on_frame_ids=mock_event_frame_ids)
 
-    if settings.vision_engine == "legacy_v2":
-        from src.vision.adapters.v2 import V2VisionEngine
-
-        engine_class = V2VisionEngine
-        config_path = settings.vision_v2_config_path
-        checkpoint_path = settings.vision_v2_checkpoint_path
-    else:
-        from src.vision.adapters.legacy import LegacyVisionEngine
-
-        engine_class = LegacyVisionEngine
-        config_path = settings.vision_legacy_config_path
-        checkpoint_path = settings.vision_legacy_checkpoint_path
-
-    return engine_class(
-        yolo_path=settings.vision_legacy_yolo_path,
-        config_path=config_path,
-        checkpoint_path=checkpoint_path,
-        known_faces_dir=settings.vision_legacy_known_faces_dir,
-        identity_enabled=settings.vision_legacy_identity_enabled,
-        identity_provider=settings.vision_legacy_identity_provider,
-        insightface_root=settings.vision_legacy_insightface_root,
+    return CanonicalVisionPipeline(
+        yolo_path=settings.vision_yolo_path,
+        config_path=settings.vision_config_path,
+        checkpoint_path=settings.vision_checkpoint_path,
+        model_cache_dir=settings.vision_model_cache_dir,
+        known_faces_dir=settings.vision_known_faces_dir,
+        identity_enabled=settings.vision_identity_enabled,
+        identity_provider=settings.vision_identity_provider,
+        insightface_root=settings.vision_insightface_root,
         device=settings.vision_device,
         face_gallery=face_gallery,
     )
@@ -56,7 +45,7 @@ class LocalRuntime:
             if settings.vision_engine != "mock":
                 sample_buffer = VisionSampleBuffer(
                     target_sample_rate=settings.vision_temporal_target_sample_rate,
-                    legacy_skip_factor=2,
+                    inference_skip_factor=2,
                     capacity=settings.vision_temporal_buffer_capacity,
                 )
 

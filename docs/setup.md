@@ -9,7 +9,7 @@ liệu này giải thích cấu hình, vận hành và lỗi thường gặp.
 - Node.js 20+.
 - Windows 10/11 hoặc Linux 64-bit.
 - Webcam, video local hoặc RTSP nếu dùng camera thật.
-- Model local nếu bật Legacy Vision.
+- Model local của canonical VisionV2.
 
 Nên chạy command từ root repository để path database/snapshot/model nhất quán.
 
@@ -23,10 +23,14 @@ cd P-227
 python -m venv .venv
 .venv\Scripts\activate
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+python -m pip install -r requirements/vision-intel.txt
 ```
 
-Nếu cần tái tạo đúng CPU environment đã khóa:
+NVIDIA CUDA 12.4 dùng `requirements/vision-cuda.txt`; portable CPU/Docker dùng
+`requirements/vision-cpu.txt`. Chỉ phát triển backend/test chung, không chạy
+Real Vision, có thể cài `requirements/base.txt`.
+
+Nếu cần tái tạo đúng CPU environment cũ đã khóa:
 
 ```cmd
 python -m pip install -r requirements-lock-cpu.txt
@@ -50,7 +54,7 @@ copy /Y .env.example .env
 
 ## 4. Cấu hình `.env`
 
-Ví dụ runtime Legacy:
+Ví dụ canonical runtime:
 
 ```dotenv
 APP_ENV=development
@@ -60,27 +64,28 @@ LOG_LEVEL=INFO
 CORS_ORIGINS=http://localhost:5173
 DATABASE_URL=sqlite:///./data/app.db
 
-VISION_ENGINE=legacy
+VISION_ENGINE=canonical
 VISION_DEVICE=auto
 
-VISION_LEGACY_YOLO_PATH=yolov8n.pt
-VISION_LEGACY_CONFIG_PATH=work_dir/fall_detection/ntu25-bone/config.yaml
-VISION_LEGACY_CHECKPOINT_PATH=work_dir/fall_detection/ntu25-bone/runs-best_val.pt
+VISION_YOLO_PATH=yolov8n.pt
+VISION_CONFIG_PATH=work_dir/fall_detection/joint/config.yaml
+VISION_CHECKPOINT_PATH=work_dir/fall_detection/joint/runs-best_val.pt
+VISION_MODEL_CACHE_DIR=data/vision-cache
 
-VISION_LEGACY_IDENTITY_ENABLED=false
-VISION_LEGACY_IDENTITY_PROVIDER=auto
-VISION_LEGACY_INSIGHTFACE_ROOT=C:/Users/<user>/.insightface
+VISION_IDENTITY_ENABLED=false
+VISION_IDENTITY_PROVIDER=auto
+VISION_INSIGHTFACE_ROOT=C:/Users/<user>/.insightface
 
-VISION_TEMPORAL_TARGET_SAMPLE_RATE=15
+VISION_TEMPORAL_TARGET_SAMPLE_RATE=5
 VISION_TEMPORAL_BUFFER_CAPACITY=8
 ```
 
 Lưu ý:
 
-- `VISION_ENGINE=mock` dùng cho test/backend smoke độc lập model và không tự phát cảnh báo giả.
-- `VISION_ENGINE=legacy`/`legacy_v1` chọn V1 binary/bone.
-- `VISION_ENGINE=legacy_v2` chọn V2 năm lớp/joint; raw class `1` là fall candidate.
-- `VISION_DEVICE=auto` chọn device theo runtime thật.
+- `VISION_ENGINE=canonical` là production path duy nhất; `mock` chỉ dùng cho test/backend smoke.
+- `VISION_DEVICE=auto` ưu tiên native CUDA, sau đó OpenVINO Intel GPU, cuối cùng
+  CPU; runtime/device/fallback thực tế đều xuất hiện trong startup log.
+- Intel Iris Xe hiện được acceptance ở 5 Hz cho tối đa hai concurrent cameras.
 - Identity production lấy gallery từ SQLite và chỉ nên bật sau khi có đủ `buffalo_l`.
 - `register face/` không phải production source of truth.
 - Không commit `.env`, credential, database, snapshot, face data.
@@ -88,13 +93,13 @@ Lưu ý:
 
 ## 5. Model local
 
-V1 cần các artifact tương ứng:
+Canonical production cần các artifact tương ứng:
 
 ```text
 src/vision/yolov8n.pt
-src/vision/work_dir/fall_detection/ntu25-bone/config.yaml
-src/vision/work_dir/fall_detection/ntu25-bone/runs-best_val.pt
-<VISION_LEGACY_INSIGHTFACE_ROOT>/models/buffalo_l/
+src/vision/work_dir/fall_detection/joint/config.yaml
+src/vision/work_dir/fall_detection/joint/runs-best_val.pt
+<VISION_INSIGHTFACE_ROOT>/models/buffalo_l/
 ```
 
 V2 dùng chung YOLO nhưng thay model action bằng:
