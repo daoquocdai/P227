@@ -1,0 +1,55 @@
+.overview-loading,
+.overview-error {
+  min-height: 60vh;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  color: #52657b;
+  text-align: center;
+}
+
+.overview-loading > svg,
+.overview-error > svg {
+  width: 42px;
+  height: 42px;
+  color: #3b82f6;
+}
+
+.overview-error > svg {
+  color: #dc3e3e;
+}
+
+.overview-error p {
+  margin: 0;
+}
+
+.overview-error button {
+  padding: 9px 13px;
+  display: flex;
+  gap: 7px;
+  border: 1px solid #bdd2e9;
+  border-radius: 10px;
+  background: #fff;
+  color: #2567b3;
+}
+
+.home-hero.attention {
+  border-color: #f4cccc;
+  background: #fffafa;
+}
+
+.home-hero.attention .hero-status-icon {
+  background: #ffe9e9;
+  color: #dc3e3e;
+}
+
+.camera-live.offline,
+.camera-live.error {
+  color: #b42318;
+}
+
+.camera-live.offline i,
+.camera-live.error i {
+  background: #ef4444;
+}

@@ -1,22 +1,20 @@
 import { useEffect, useState } from "react";
-import { BarChart3, Bell, Camera, HeartHandshake, History, Home, Menu, Settings, ShieldCheck, UsersRound } from "lucide-react";
+import { Bell, Camera, HeartHandshake, History, Home, Menu, Settings, ShieldCheck, UsersRound } from "lucide-react";
 import AlertsPage from "./features/alerts/AlertsPage";
 import CameraPage from "./pages/CameraPage";
 import FamilyPage from "./pages/FamilyPage";
 import HistoryPage from "./pages/HistoryPage";
 import OverviewPage from "./pages/OverviewPage";
 import SettingsPage from "./pages/SettingsPage";
-import StatisticsPage from "./pages/StatisticsPage";
-import FloatingAssistant from "./components/FloatingAssistant";
-import CameraDetailPage from "./features/camera-detail/CameraDetailPage";
+import { fetchAlerts } from "./features/alerts/alertService";
+import { API_BASE_URL } from "./api/client";
 
 const navItems = [
   { label: "Tổng quan", path: "/", icon: Home, badge: undefined },
   { label: "Camera", path: "/camera", icon: Camera, badge: undefined },
-  { label: "Cảnh báo", path: "/alerts", icon: Bell, badge: 1 },
+  { label: "Cảnh báo", path: "/alerts", icon: Bell, badge: undefined },
   { label: "Người thân", path: "/family", icon: UsersRound, badge: undefined },
   { label: "Lịch sử", path: "/history", icon: History, badge: undefined },
-  { label: "Thống kê", path: "/statistics", icon: BarChart3, badge: undefined },
   { label: "Cài đặt", path: "/settings", icon: Settings, badge: undefined },
 ] as const;
 
@@ -32,6 +30,7 @@ function App() {
   const [activePath, setActivePath] = useState<RoutePath>(currentPath);
   const [routeRevision, setRouteRevision] = useState(0);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [unreadAlerts, setUnreadAlerts] = useState(0);
   const [isMobileLayout, setIsMobileLayout] = useState(() => window.matchMedia("(max-width: 860px)").matches);
 
   useEffect(() => {
@@ -40,6 +39,22 @@ function App() {
     const syncRoute = () => { setActivePath(currentPath()); setRouteRevision((value) => value + 1); };
     syncLayout(); mobileQuery.addEventListener("change", syncLayout); window.addEventListener("resize", syncLayout); window.visualViewport?.addEventListener("resize", syncLayout); window.addEventListener("popstate", syncRoute);
     return () => { mobileQuery.removeEventListener("change", syncLayout); window.removeEventListener("resize", syncLayout); window.visualViewport?.removeEventListener("resize", syncLayout); window.removeEventListener("popstate", syncRoute); };
+  }, []);
+  useEffect(() => {
+    const stream = new EventSource(`${API_BASE_URL}/alerts/stream`);
+    const sync = () => window.dispatchEvent(new CustomEvent("antam:alerts-changed"));
+    stream.addEventListener("ready", sync);
+    stream.addEventListener("alert", sync);
+    return () => { stream.removeEventListener("ready", sync); stream.removeEventListener("alert", sync); stream.close(); };
+  }, []);
+  useEffect(() => {
+    const refreshUnread = () => { void fetchAlerts().then((items) => setUnreadAlerts(items.filter((item) => item.unread).length)).catch(() => undefined); };
+    refreshUnread();
+    const timer = window.setInterval(refreshUnread, 15_000);
+    window.addEventListener("focus", refreshUnread);
+    window.addEventListener("antam:alerts-changed", refreshUnread);
+    window.addEventListener("antam:alert-status", refreshUnread);
+    return () => { window.clearInterval(timer); window.removeEventListener("focus", refreshUnread); window.removeEventListener("antam:alerts-changed", refreshUnread); window.removeEventListener("antam:alert-status", refreshUnread); };
   }, []);
 
   const navigate = (path: RoutePath) => {
@@ -52,26 +67,24 @@ function App() {
 
   return <div className={`app-shell ${isMobileLayout ? "mobile-layout" : "desktop-layout"} ${activePath === "/alerts" ? "alerts-active" : ""}`}>
     <aside className={`sidebar ${mobileOpen ? "is-open" : ""}`} aria-label="Điều hướng chính" aria-hidden={isMobileLayout && !mobileOpen}>
-      <button className="brand brand-link" onClick={() => navigate("/")} aria-label="Về Tổng quan" title="An Tâm Home Care"><span className="brand-mark"><HeartHandshake /></span><span><strong>An Tâm</strong><small>Home Care</small></span></button>
-      <nav>{navItems.map(({ label, path, icon: Icon, badge }) => <a key={path} href={path} title={label} className={`nav-item ${activePath === path ? "active" : ""}`} onClick={(event) => { event.preventDefault(); navigate(path); }} aria-current={activePath === path ? "page" : undefined}><Icon /><span>{label}</span>{badge ? <span className="nav-badge" aria-label={`${badge} cảnh báo chờ xử lý`}>{badge}</span> : null}</a>)}</nav>
+      <button className="brand brand-link" onClick={() => navigate("/")} aria-label="Về Tổng quan" title="GuardianCam Local Hub"><span className="brand-mark"><HeartHandshake /></span><span><strong>GuardianCam</strong><small>Local Hub</small></span></button>
+      <nav>{navItems.map(({ label, path, icon: Icon }) => { const badge = path === "/alerts" ? unreadAlerts : 0; return <a key={path} href={path} title={label} className={`nav-item ${activePath === path ? "active" : ""}`} onClick={(event) => { event.preventDefault(); navigate(path); }} aria-current={activePath === path ? "page" : undefined}><Icon /><span>{label}</span>{badge > 0 ? <span className="nav-badge" aria-label={`${badge} cảnh báo chưa đọc`}>{badge > 99 ? "99+" : badge}</span> : null}</a>; })}</nav>
       <div className="privacy-note"><ShieldCheck /><div><strong>Dữ liệu được bảo vệ</strong><span>Xử lý cục bộ, không gửi video thô lên cloud.</span></div></div>
     </aside>
     {isMobileLayout && mobileOpen && <button className="scrim" aria-label="Đóng menu" onClick={() => setMobileOpen(false)} />}
     <main className="main-content">
-      <header className="topbar"><button className="icon-button menu-button" onClick={() => setMobileOpen(true)} aria-label="Mở menu"><Menu /></button><div className="topbar-spacer" />{activePath === "/alerts" && <span className="topbar-protection"><ShieldCheck /> Đang bảo vệ</span>}<div className="profile"><span className="avatar small">M</span><span><strong>Minh Nguyễn</strong><small>Người chăm sóc</small></span></div></header>
+      <header className="topbar"><button className="icon-button menu-button" onClick={() => setMobileOpen(true)} aria-label="Mở menu"><Menu /></button><div className="topbar-spacer" />{activePath === "/alerts" && <span className="topbar-protection"><ShieldCheck /> Đang bảo vệ</span>}<div className="profile"><span className="avatar small">G</span><span><strong>GuardianCam</strong><small>Local Hub</small></span></div></header>
       <div className={`route-content ${activeNav === "Tổng quan" ? "overview-route" : ""} ${activePath === "/history" ? "history-route" : ""} ${activePath === "/family" ? "family-route" : ""}`} key={`${activePath}-${routeRevision}`}><RouteContent path={activePath} /></div>
     </main>
-    {activePath !== "/alerts" && <FloatingAssistant />}
-    {isMobileLayout && <nav className="mobile-bottom-nav" aria-label="Điều hướng nhanh trên điện thoại">{navItems.slice(0,4).map(({ label,path,icon:Icon,badge }) => <a key={path} href={path} className={activePath === path ? "active" : ""} onClick={(event) => { event.preventDefault(); navigate(path); }} aria-current={activePath === path ? "page" : undefined}><span className="mobile-nav-icon"><Icon />{badge ? <span className="mobile-nav-badge">{badge}</span> : null}</span><span>{label}</span></a>)}</nav>}
+    {isMobileLayout && <nav className="mobile-bottom-nav" aria-label="Điều hướng nhanh trên điện thoại">{navItems.slice(0,4).map(({ label,path,icon:Icon }) => { const badge = path === "/alerts" ? unreadAlerts : 0; return <a key={path} href={path} className={activePath === path ? "active" : ""} onClick={(event) => { event.preventDefault(); navigate(path); }} aria-current={activePath === path ? "page" : undefined}><span className="mobile-nav-icon"><Icon />{badge > 0 ? <span className="mobile-nav-badge">{badge > 99 ? "99+" : badge}</span> : null}</span><span>{label}</span></a>; })}</nav>}
   </div>;
 }
 
 function RouteContent({ path }: { path: RoutePath }) {
-  if (path === "/camera") return window.location.pathname.startsWith("/camera/") ? <CameraDetailPage cameraId={decodeURIComponent(window.location.pathname.split("/")[2] || "camera-bedroom")} /> : <CameraPage />;
+  if (path === "/camera") return <CameraPage />;
   if (path === "/alerts") return <AlertsPage />;
   if (path === "/family") return <FamilyPage />;
   if (path === "/history") return <HistoryPage />;
-  if (path === "/statistics") return <StatisticsPage />;
   if (path === "/settings") return <SettingsPage />;
   return <OverviewPage />;
 }

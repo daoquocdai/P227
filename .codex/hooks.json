@@ -6,7 +6,9 @@
         "hooks": [
           {
             "name": "log-prompt",
-            "command": "bash scripts/_pyrun.sh scripts/log_hook.py --tool=codex",
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/scripts/_pyrun.sh\" \"$(git rev-parse --show-toplevel)/scripts/log_hook.py\" --tool=codex",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; & (Join-Path $root 'scripts\\_pyrun.cmd') (Join-Path $root 'scripts\\log_hook.py') --tool=codex\"",
             "timeout": 10
           }
         ]
@@ -17,7 +19,9 @@
         "hooks": [
           {
             "name": "log-stop",
-            "command": "bash scripts/_pyrun.sh scripts/log_hook.py --tool=codex",
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/scripts/_pyrun.sh\" \"$(git rev-parse --show-toplevel)/scripts/log_hook.py\" --tool=codex",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; & (Join-Path $root 'scripts\\_pyrun.cmd') (Join-Path $root 'scripts\\log_hook.py') --tool=codex\"",
             "timeout": 10
           }
         ]

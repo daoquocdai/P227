@@ -1,38 +1,10 @@
-import { useMemo, useState } from "react";
+import { Bell, Camera, Check, Clock3, History, LockKeyhole, Plus, RefreshCw, Save, Settings, ShieldCheck, SlidersHorizontal, UserPlus, UsersRound, X } from "lucide-react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
-  ArrowLeft, Bell, Camera, Check, ChevronRight, History, LockKeyhole,
-  Settings, ShieldCheck, UserCog, UsersRound,
-} from "lucide-react";
+  createSettingsUser, getSettings, saveGeneral, saveNotifications, setSettingsCameraActive, setSettingsCameraVision,
+  setSettingsUserActive, setUserPermission, type PermissionKey, type SettingsData, type SettingsUser,
+} from "../api/settings";
 import "./settings.css";
-import { GeneralSettings, NotificationSettings, UsersSettings } from "./SettingsSections";
-
-type PermissionKey = "view_history" | "acknowledge_alert" | "resolve_alert" | "manage_cameras" | "manage_persons" | "manage_users";
-type Caregiver = { id: string; displayName: string; email: string; isActive: boolean; initials: string };
-type PermissionState = Record<PermissionKey, boolean>;
-
-const caregivers: Caregiver[] = [
-  { id: "caregiver-minh", displayName: "Minh Nguyễn", email: "caregiver@example.local", isActive: true, initials: "MN" },
-  { id: "caregiver-mai", displayName: "Mai Anh", email: "maianh@example.local", isActive: true, initials: "MA" },
-  { id: "caregiver-ha", displayName: "Thanh Hà", email: "thanhha@example.local", isActive: false, initials: "TH" },
-];
-
-const defaults = (): PermissionState => ({
-  view_history: true, acknowledge_alert: true, resolve_alert: false,
-  manage_cameras: false, manage_persons: false, manage_users: false,
-});
-
-const permissionGroups: { title: string; icon: typeof History; items: { key: PermissionKey; label: string; description: string }[] }[] = [
-  { title: "Xem & xử lý cảnh báo", icon: Bell, items: [
-    { key: "view_history", label: "Xem Lịch sử", description: "Tra cứu sự kiện và lịch sử xử lý đã ghi nhận." },
-    { key: "acknowledge_alert", label: "Xác nhận cảnh báo", description: "Xác nhận đã tiếp nhận và kiểm tra cảnh báo." },
-    { key: "resolve_alert", label: "Xử lý / đóng cảnh báo", description: "Đánh dấu tình huống đã được xử lý hoàn tất." },
-  ] },
-  { title: "Quản trị hệ thống", icon: Settings, items: [
-    { key: "manage_cameras", label: "Quản lý camera", description: "Thêm, chỉnh sửa và thay đổi trạng thái camera." },
-    { key: "manage_persons", label: "Quản lý thành viên & khuôn mặt", description: "Quản lý người thân và hồ sơ nhận diện." },
-    { key: "manage_users", label: "Quản lý tài khoản người dùng", description: "Thêm, khóa và cập nhật tài khoản hệ thống." },
-  ] },
-];
 
 const tabs = [
   { id: "general", label: "Cài đặt chung", icon: Settings },
@@ -40,40 +12,58 @@ const tabs = [
   { id: "permissions", label: "Phân quyền", icon: LockKeyhole },
   { id: "notifications", label: "Thông báo", icon: Bell },
 ] as const;
+type Tab = typeof tabs[number]["id"];
+const permissionLabels: Record<PermissionKey,string> = {
+  view_history:"Xem lịch sử", acknowledge_alert:"Xác nhận cảnh báo", resolve_alert:"Xử lý / đóng cảnh báo",
+  manage_cameras:"Quản lý camera", manage_persons:"Quản lý người thân", manage_users:"Quản lý người dùng",
+};
+
+function Toggle({ value, onChange, disabled=false, label }: { value:boolean; onChange:()=>void; disabled?:boolean; label:string }) {
+  return <button className={`permission-toggle ${value?"on":""}`} role="switch" aria-checked={value} aria-label={label} disabled={disabled} onClick={onChange}><i /></button>;
+}
 
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState<(typeof tabs)[number]["id"]>("general");
-  const [permissionIsNew, setPermissionIsNew] = useState(true);
-  const [selectedId, setSelectedId] = useState(caregivers[0]?.id ?? "");
-  const [mobileDetail, setMobileDetail] = useState(false);
-  const [savedKey, setSavedKey] = useState<PermissionKey | null>(null);
-  const [permissions, setPermissions] = useState<Record<string, PermissionState>>(() => ({
-    "caregiver-minh": defaults(),
-    "caregiver-mai": { ...defaults(), resolve_alert: true, manage_persons: true },
-    "caregiver-ha": defaults(),
-  }));
-  const selected = useMemo(() => caregivers.find((item) => item.id === selectedId), [selectedId]);
-
-  const togglePermission = (key: PermissionKey) => {
-    if (!selected?.isActive) return;
-    setPermissions((current) => ({ ...current, [selected.id]: { ...current[selected.id], [key]: !current[selected.id][key] } }));
-    setSavedKey(key);
-    window.setTimeout(() => setSavedKey((current) => current === key ? null : current), 1400);
-  };
+  const [data,setData]=useState<SettingsData|null>(null); const [tab,setTab]=useState<Tab>("general");
+  const [loading,setLoading]=useState(true); const [error,setError]=useState(""); const [saved,setSaved]=useState(false);
+  const [invite,setInvite]=useState(false); const [selectedUser,setSelectedUser]=useState("");
+  const settingsRequestInFlight=useRef(false); const dirtyRef=useRef(false); const pollErrorLoggedRef=useRef(false); const mountedRef=useRef(true);
+  const load=()=>{if(settingsRequestInFlight.current)return;settingsRequestInFlight.current=true;setLoading(true);setError("");getSettings().then((value)=>{if(!mountedRef.current)return;setData(value);dirtyRef.current=false;setSelectedUser((current)=>current||value.users[0]?.id||"")}).catch(()=>{if(mountedRef.current)setError("Không tải được cài đặt từ Local Hub")}).finally(()=>{settingsRequestInFlight.current=false;if(mountedRef.current)setLoading(false)})};
+  useEffect(()=>{mountedRef.current=true;return()=>{mountedRef.current=false}},[]);
+  useEffect(load,[]);
+  useEffect(()=>{let cancelled=false;let timer:number|undefined;const schedule=()=>{if(!cancelled)timer=window.setTimeout(poll,3000)};const poll=async()=>{if(settingsRequestInFlight.current){schedule();return}settingsRequestInFlight.current=true;try{const value=await getSettings();if(!cancelled&&!dirtyRef.current){setData(value);setSelectedUser((current)=>current||value.users[0]?.id||"")}pollErrorLoggedRef.current=false}catch(pollError){if(!cancelled&&!pollErrorLoggedRef.current){console.warn("Không thể làm mới cài đặt nền",pollError);pollErrorLoggedRef.current=true}}finally{settingsRequestInFlight.current=false;schedule()}};schedule();return()=>{cancelled=true;if(timer!==undefined)window.clearTimeout(timer)}},[]);
+  const flashSaved=()=>{setSaved(true);window.setTimeout(()=>setSaved(false),1400)};
+  if(loading)return <section className="settings-page page-wrap"><div className="permission-empty"><RefreshCw/><h3>Đang tải cài đặt…</h3></div></section>;
+  if(!data)return <section className="settings-page page-wrap"><div className="permission-empty"><Settings/><h3>{error||"Không có dữ liệu cài đặt"}</h3><button onClick={load}>Thử lại</button></div></section>;
+  const selected=data.users.find((user)=>user.id===selectedUser);
+  const updateData=(next:SettingsData)=>{dirtyRef.current=false;setData(next)};
+  const updateDraft=(next:SettingsData)=>{dirtyRef.current=true;setData(next)};
+  const saveGeneralSettings=()=>void saveGeneral(data.general).then((general)=>{dirtyRef.current=false;setData({...data,general});flashSaved()}).catch(()=>setError("Không lưu được cài đặt chung"));
+  const saveNotificationSettings=()=>void saveNotifications(data.notifications).then((notifications)=>{dirtyRef.current=false;setData({...data,notifications});flashSaved()}).catch(()=>setError("Không lưu được thông báo"));
+  const toggleCamera=(id:string,active:boolean)=>{updateDraft({...data,cameras:data.cameras.map((camera)=>camera.id===id?{...camera,is_active:active}:camera)});void setSettingsCameraActive(id,active).then(updateData).catch(load)};
+  const toggleVision=(id:string,enabled:boolean)=>{updateDraft({...data,cameras:data.cameras.map((camera)=>camera.id===id?{...camera,vision_enabled:enabled}:camera)});void setSettingsCameraVision(id,enabled).then(updateData).catch(load)};
+  const toggleUser=(user:SettingsUser)=>{void setSettingsUserActive(user.id,!user.active).then((updated)=>setData({...data,users:data.users.map((item)=>item.id===updated.id?updated:item)})).catch(()=>setError("Không thể thay đổi tài khoản này"))};
+  const togglePermission=(key:PermissionKey)=>{if(!selected||selected.role==="admin")return;const granted=!selected.permissions[key];void setUserPermission(selected.id,key,granted).then((updated)=>setData({...data,users:data.users.map((item)=>item.id===updated.id?updated:item)})).catch(()=>setError("Không lưu được quyền"))};
+  const addUser=async(event:FormEvent<HTMLFormElement>)=>{event.preventDefault();const form=new FormData(event.currentTarget);try{const user=await createSettingsUser({name:String(form.get("name")),email:String(form.get("email")),role:String(form.get("role")) as "admin"|"caregiver"});setData({...data,users:[...data.users,user]});setInvite(false);setSelectedUser(user.id)}catch{setError("Email đã tồn tại hoặc dữ liệu không hợp lệ")}};
 
   return <section className="settings-page page-wrap">
-    <header className="settings-heading"><div><h1>Cài đặt</h1><p>Quản lý hệ thống, tài khoản và quyền truy cập.</p></div><span><ShieldCheck /> Chỉ dành cho quản trị viên</span></header>
-    <div className="settings-shell">
-      <nav className="settings-tabs" aria-label="Danh mục cài đặt">{tabs.map(({ id, label, icon: Icon }) => <button key={id} className={activeTab === id ? "active" : ""} onClick={() => { setActiveTab(id); if (id === "permissions") setPermissionIsNew(false); }}><Icon /><span>{label}</span>{id === "permissions" && permissionIsNew && <small>Mới</small>}<ChevronRight /></button>)}</nav>
+    <header className="settings-heading"><div><h1>Cài đặt</h1><p>Quản lý cấu hình được lưu trên Local Hub.</p></div><span><ShieldCheck/> Chỉ dành cho quản trị viên</span></header>
+    {error&&<div className="inactive-notice"><LockKeyhole/><span>{error}</span><button onClick={()=>setError("")}><X/></button></div>}
+    <div className="settings-shell"><nav className="settings-tabs">{tabs.map(({id,label,icon:Icon})=><button key={id} className={tab===id?"active":""} onClick={()=>setTab(id)}><Icon/><span>{label}</span></button>)}</nav>
       <main className="settings-content">
-        {activeTab === "general" ? <GeneralSettings /> : activeTab === "users" ? <UsersSettings /> : activeTab === "notifications" ? <NotificationSettings /> : <div className={`permission-view ${mobileDetail ? "show-detail" : ""}`}>
-          <header className="permission-heading"><div><h2>Phân quyền thành viên</h2><p>Quản lý quyền truy cập và thao tác của từng thành viên trong hệ thống.</p></div><span>{caregivers.length} caregiver</span></header>
-          {caregivers.length === 0 ? <div className="permission-empty"><UserCog /><h3>Chưa có thành viên nào khác</h3><p>Thêm thành viên ở mục Quản lý người dùng để phân quyền.</p><button onClick={() => setActiveTab("users")}>Đi tới Quản lý người dùng</button></div> : <div className="permission-layout">
-            <aside className="caregiver-panel"><div className="caregiver-panel-title"><strong>Thành viên</strong><small>Chọn caregiver để chỉnh quyền</small></div><div className="caregiver-list">{caregivers.map((caregiver) => <button key={caregiver.id} className={selectedId === caregiver.id ? "selected" : ""} onClick={() => { setSelectedId(caregiver.id); setMobileDetail(true); }}><span className="caregiver-avatar">{caregiver.initials}</span><span><strong>{caregiver.displayName}</strong><small>{caregiver.email}</small></span><i className={caregiver.isActive ? "active" : "inactive"}>{caregiver.isActive ? "Hoạt động" : "Đã khóa"}</i><ChevronRight /></button>)}</div></aside>
-            {selected && <section className="permission-panel"><header><button className="permission-back" onClick={() => setMobileDetail(false)} aria-label="Quay lại danh sách"><ArrowLeft /></button><span className="caregiver-avatar large">{selected.initials}</span><div><h3>{selected.displayName}</h3><p>{selected.email}</p></div><i className={selected.isActive ? "active" : "inactive"}>{selected.isActive ? "Đang hoạt động" : "Tài khoản đã khóa"}</i></header>{!selected.isActive && <div className="inactive-notice"><LockKeyhole /><span>Tài khoản đang bị khóa. Kích hoạt lại tài khoản để thay đổi quyền.</span></div>}<div className="permission-groups">{permissionGroups.map(({ title, icon: GroupIcon, items }) => <section key={title}><h4><GroupIcon /> {title}</h4>{items.map((item) => <div className={`permission-row ${!selected.isActive ? "disabled" : ""}`} key={item.key}><div><strong>{item.label}</strong><p>{item.description}</p></div><div className="permission-control">{savedKey === item.key && <span className="saved-feedback"><Check /> Đã lưu</span>}<button role="switch" aria-checked={permissions[selected.id][item.key]} aria-label={item.label} disabled={!selected.isActive} className={`permission-toggle ${permissions[selected.id][item.key] ? "on" : ""}`} onClick={() => togglePermission(item.key)}><i /></button></div></div>)}</section>)}</div><footer><ShieldCheck /><span>Admin luôn có toàn quyền. Các thay đổi của caregiver được lưu ngay khi bật hoặc tắt.</span></footer></section>}
-          </div>}
+        {tab==="general"&&<div className="settings-scroll-content"><header className="section-page-heading"><div><h2>Cài đặt chung</h2><p>Camera, lưu trữ và ngưỡng phát hiện AI.</p></div></header>
+          <section className="settings-section-card"><div className="settings-card-heading"><span><Camera/></span><div><h3>Camera</h3><p>{data.cameras.length} camera trong SQLite. Công tắc thể hiện cấu hình ON/OFF; badge thể hiện trạng thái chạy thực tế.</p></div></div><div className="settings-data-list">{data.cameras.map((camera)=><div className="camera-setting-row" key={camera.id}><span className="data-icon"><Camera/></span><div><strong>{camera.name}</strong><small>{camera.location_label||"Chưa đặt vị trí"} · {camera.source_kind} · Vision: {camera.vision_enabled?camera.vision_status:"OFF"}</small></div><span className={`operational-badge ${camera.operational_status}`}>{runtimeLabel(camera.operational_status)}</span><div className="camera-setting-toggles"><label>Camera {camera.is_active?"ON":"OFF"} <Toggle label={`Camera ${camera.name}`} value={camera.is_active} onChange={()=>toggleCamera(camera.id,!camera.is_active)}/></label><label>Vision {camera.vision_enabled?"ON":"OFF"} <Toggle label={`Vision ${camera.name}`} value={camera.vision_enabled} onChange={()=>toggleVision(camera.id,!camera.vision_enabled)}/></label></div></div>)}</div></section>
+          <section className="settings-section-card"><div className="settings-card-heading"><span><ShieldCheck/></span><div><h3>Lưu trữ cục bộ</h3><p>Video thô không được tải lên cloud.</p></div></div><div className="setting-inline-row"><label><span>Thời gian lưu snapshot</span><select value={data.general.retention_days} onChange={(event)=>updateDraft({...data,general:{...data.general,retention_days:Number(event.target.value) as 7|30|90}})}><option value={7}>7 ngày</option><option value={30}>30 ngày</option><option value={90}>90 ngày</option></select></label></div></section>
+          <section className="settings-section-card"><div className="settings-card-heading"><span><SlidersHorizontal/></span><div><h3>Ngưỡng cảnh báo</h3><p>Giá trị này sẵn sàng để Vision Service đọc từ Local Hub.</p></div></div><div className="threshold-grid"><label><span>Người lạ <strong>{data.general.stranger_threshold}%</strong></span><input type="range" min="50" max="99" value={data.general.stranger_threshold} onChange={(event)=>updateDraft({...data,general:{...data.general,stranger_threshold:Number(event.target.value)}})}/></label><label><span>Té ngã <strong>{data.general.fall_threshold}%</strong></span><input type="range" min="70" max="99" value={data.general.fall_threshold} onChange={(event)=>updateDraft({...data,general:{...data.general,fall_threshold:Number(event.target.value)}})}/></label></div><div className="sensitive-hours"><Clock3/><div><strong>Khung giờ nhạy cảm</strong><small>Tăng ưu tiên cảnh báo ngoài giờ.</small></div><input type="time" value={data.general.sensitive_from} onChange={(event)=>updateDraft({...data,general:{...data.general,sensitive_from:event.target.value}})}/><span>đến</span><input type="time" value={data.general.sensitive_to} onChange={(event)=>updateDraft({...data,general:{...data.general,sensitive_to:event.target.value}})}/><Toggle label="Khung giờ nhạy cảm" value={data.general.sensitive_enabled} onChange={()=>updateDraft({...data,general:{...data.general,sensitive_enabled:!data.general.sensitive_enabled}})}/></div><div className="settings-card-actions"><button className={`settings-save ${saved?"saved":""}`} onClick={saveGeneralSettings}>{saved?<><Check/> Đã lưu</>:<><Save/> Lưu thay đổi</>}</button></div></section>
         </div>}
-      </main>
-    </div>
+
+        {tab==="users"&&<div className="settings-scroll-content"><header className="section-page-heading"><div><h2>Quản lý người dùng</h2><p>Tài khoản truy cập Local Hub.</p></div><button className="settings-primary-small" onClick={()=>setInvite(true)}><UserPlus/> Thêm thành viên</button></header><section className="settings-section-card user-table-card"><div className="settings-user-table"><div className="user-table-head"><span>Thành viên</span><span>Vai trò</span><span>Trạng thái</span><span>Ngày tạo</span><span>Hành động</span></div>{data.users.map((user)=><div className="user-table-row" key={user.id}><div><span className="caregiver-avatar">{user.name.split(" ").map((part)=>part[0]).slice(-2).join("")}</span><span><strong>{user.name}</strong><small>{user.email}</small></span></div><span className={`role-badge ${user.role}`}>{user.role}</span><span className={`account-badge ${user.active?"active":"inactive"}`}>{user.active?"Hoạt động":"Đã khóa"}</span><time>{new Date(user.created_at).toLocaleDateString("vi-VN")}</time><div><button title={user.active?"Vô hiệu hóa":"Kích hoạt"} onClick={()=>toggleUser(user)}><ShieldCheck/></button></div></div>)}</div><p className="last-admin-note"><ShieldCheck/> Không thể vô hiệu hóa admin cuối cùng.</p></section></div>}
+
+        {tab==="permissions"&&<div className="permission-view"><header className="permission-heading"><div><h2>Phân quyền</h2><p>Quyền caregiver được lưu trong `user_permissions`.</p></div></header><div className="permission-layout"><aside className="caregiver-panel"><div className="caregiver-list">{data.users.map((user)=><button key={user.id} className={selectedUser===user.id?"selected":""} onClick={()=>setSelectedUser(user.id)}><span className="caregiver-avatar">{user.name.split(" ").map((part)=>part[0]).slice(-2).join("")}</span><span><strong>{user.name}</strong><small>{user.email}</small></span></button>)}</div></aside>{selected&&<section className="permission-panel"><header><span className="caregiver-avatar large">{selected.name[0]}</span><div><h3>{selected.name}</h3><p>{selected.role}</p></div></header><div className="permission-groups"><section><h4><History/> Quyền hệ thống</h4>{(Object.keys(permissionLabels) as PermissionKey[]).map((key)=><div className="permission-row" key={key}><div><strong>{permissionLabels[key]}</strong><p>{selected.role==="admin"?"Admin luôn có quyền này.":"Cho phép caregiver thực hiện thao tác."}</p></div><Toggle label={permissionLabels[key]} value={selected.permissions[key]} disabled={selected.role==="admin"||!selected.active} onChange={()=>togglePermission(key)}/></div>)}</section></div></section>}</div></div>}
+
+        {tab==="notifications"&&<div className="settings-scroll-content"><header className="section-page-heading"><div><h2>Thông báo</h2><p>Cấu hình cách Local Hub thông báo cảnh báo.</p></div></header><section className="settings-section-card"><div className="settings-card-heading"><span><Bell/></span><div><h3>Kênh thông báo</h3><p>SMS bị khóa vì baseline chưa có hạ tầng gửi thật.</p></div></div><div className="notification-options">{(["app","email","sms"] as const).map((key)=><div key={key}><Bell/><span><strong>{key.toUpperCase()}</strong><small>{key==="sms"?"Chưa khả dụng":"Được lưu trên Local Hub"}</small></span><Toggle label={key} disabled={key==="sms"} value={data.notifications[key]} onChange={()=>updateDraft({...data,notifications:{...data.notifications,[key]:!data.notifications[key]}})}/></div>)}</div></section><section className="settings-section-card"><div className="setting-inline-row"><label><span>Mức độ nhận</span><select value={data.notifications.level} onChange={(event)=>updateDraft({...data,notifications:{...data.notifications,level:event.target.value as "all"|"important"}})}><option value="all">Tất cả</option><option value="important">Chỉ high / critical</option></select></label><div><strong>Gộp cảnh báo</strong><small>Gộp cảnh báo liên tiếp.</small></div><Toggle label="Gộp cảnh báo" value={data.notifications.grouped} onChange={()=>updateDraft({...data,notifications:{...data.notifications,grouped:!data.notifications.grouped}})}/></div><div className="quiet-hours"><Toggle label="Giờ yên tĩnh" value={data.notifications.quiet_enabled} onChange={()=>updateDraft({...data,notifications:{...data.notifications,quiet_enabled:!data.notifications.quiet_enabled}})}/><label><span>Từ</span><input type="time" value={data.notifications.quiet_from} onChange={(event)=>updateDraft({...data,notifications:{...data.notifications,quiet_from:event.target.value}})}/></label><label><span>Đến</span><input type="time" value={data.notifications.quiet_to} onChange={(event)=>updateDraft({...data,notifications:{...data.notifications,quiet_to:event.target.value}})}/></label></div><div className="settings-card-actions"><button className={`settings-save ${saved?"saved":""}`} onClick={saveNotificationSettings}>{saved?<><Check/> Đã lưu</>:<><Save/> Lưu thông báo</>}</button></div></section></div>}
+      </main></div>
+    {invite&&<div className="settings-modal-backdrop"><form className="settings-modal" onSubmit={addUser}><header><div><h3>Thêm thành viên</h3><p>Tạo tài khoản cục bộ.</p></div><button type="button" onClick={()=>setInvite(false)}><X/></button></header><label><span>Tên</span><input name="name" required/></label><label><span>Email</span><input name="email" type="email" required/></label><label><span>Vai trò</span><select name="role"><option value="caregiver">Caregiver</option><option value="admin">Admin</option></select></label><footer><button type="button" onClick={()=>setInvite(false)}>Huỷ</button><button type="submit"><Plus/> Thêm</button></footer></form></div>}
   </section>;
 }
+
+function runtimeLabel(status:string):string{if(status==="online")return "Đang chạy";if(status==="connecting")return "Đang kết nối";if(status==="error")return "Lỗi nguồn";if(status==="ended")return "Đã kết thúc";return "Đã dừng"}

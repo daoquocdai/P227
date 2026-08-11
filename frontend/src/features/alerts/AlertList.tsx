@@ -14,7 +14,7 @@ export function AlertList({ alerts, selectedId, loading, error, search, filter, 
     </div>
     <div className="alert-list-scroll">
       {loading && Array.from({ length: 5 }, (_, index) => <div className="alert-skeleton" key={index}><i /><span /><span /></div>)}
-      {!loading && error && <div className="alert-list-state"><AlertTriangle /><strong>Chưa thể tải cảnh báo</strong><p>Đây là lỗi mô phỏng. Bạn có thể thử lại.</p><button onClick={onRetry}><RefreshCw /> Thử lại</button></div>}
+      {!loading && error && <div className="alert-list-state"><AlertTriangle /><strong>Chưa thể tải cảnh báo</strong><p>Không kết nối được tới backend. Hãy kiểm tra FastAPI đang chạy.</p><button onClick={onRetry}><RefreshCw /> Thử lại</button></div>}
       {!loading && !error && alerts.length === 0 && <div className="alert-list-state"><Search /><strong>Không tìm thấy cảnh báo</strong><p>Hãy thử từ khóa hoặc bộ lọc khác.</p></div>}
       {!loading && !error && alerts.map((alert) => <AlertListItem key={alert.id} alert={alert} selected={selectedId === alert.id} onSelect={() => onSelect(alert.id)} />)}
     </div>

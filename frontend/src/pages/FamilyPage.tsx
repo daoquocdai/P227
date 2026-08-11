@@ -1,24 +1,19 @@
-import { useMemo, useState } from "react";
-import {
-  AlertTriangle, Camera, Check, ChevronLeft, ChevronRight, Image, MoreHorizontal, Pencil, Plus,
-  RefreshCw, Search, ShieldCheck, Trash2, Upload, UserRoundX, UsersRound, X,
-} from "lucide-react";
+import { AlertTriangle, Camera, Check, Image, Plus, RefreshCw, Search, ShieldCheck, Trash2, UsersRound, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { addFace, createPerson, deleteFace, getPeople, updatePerson, type PersonDto } from "../api/persons";
 import "./family.css";
 
-type FaceProfile = { id: string; quality: number; angle: string; model: string; active: boolean };
-type Person = { id: string; name: string; relationship: string; birth?: string; notes?: string; active: boolean; color: string; faces: FaceProfile[] };
-
-const initialPeople: Person[] = [
-  { id: "p-lan", name: "Bà Lan", relationship: "Mẹ", birth: "1952-08-12", notes: "Thường sinh hoạt tại phòng khách.", active: true, color: "blue", faces: [{ id: "f1", quality: .94, angle: "Chính diện", model: "FaceNet 2.0" }, { id: "f2", quality: .88, angle: "Nghiêng trái", model: "FaceNet 2.0" }, { id: "f3", quality: .84, angle: "Nghiêng phải", model: "FaceNet 2.0" }].map((item) => ({ ...item, active: true })) },
-  { id: "p-minh", name: "Ông Minh", relationship: "Bố", birth: "1949-11-03", notes: "Ưu tiên theo dõi nguy cơ té ngã.", active: true, color: "teal", faces: [{ id: "f4", quality: .78, angle: "Chính diện", model: "FaceNet 2.0", active: true }, { id: "f5", quality: .66, angle: "Nghiêng trái", model: "FaceNet 2.0", active: true }] },
-  { id: "p-an", name: "Bé An", relationship: "Cháu", birth: "2015-04-21", notes: "", active: true, color: "violet", faces: [{ id: "f6", quality: .86, angle: "Chính diện", model: "FaceNet 2.0", active: true }] },
-  { id: "p-hoa", name: "Cô Hoa", relationship: "Người chăm sóc", notes: "Ca chăm sóc ban ngày.", active: false, color: "orange", faces: [{ id: "f7", quality: .43, angle: "Chính diện", model: "FaceNet 2.0", active: true }] },
-  { id: "p-chau", name: "Minh Châu", relationship: "Con", birth: "1992-04-16", active: true, color: "pink", faces: [] },
-];
-
-const normalize = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/g, "d").replace(/Đ/g, "D").toLowerCase();
+type Person = PersonDto & { color: string };
+const colors = ["blue", "teal", "violet", "orange", "pink"];
+const supportedFaceTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
+const maxFaceFileSize = 10 * 1024 * 1024;
+const faceDataUrlPattern = /^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/;
+const toPerson = (person: PersonDto): Person => ({ ...person, color: colors[person.id.charCodeAt(0) % colors.length] });
+const normalize = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/g, "d").toLowerCase();
 const averageQuality = (person: Person) => person.faces.length ? person.faces.reduce((sum, face) => sum + face.quality, 0) / person.faces.length : 0;
-const qualityInfo = (score: number, count: number) => count === 0 || score < .5 ? { tone: "poor", label: "Chưa đủ dữ liệu" } : score <= .8 ? { tone: "fair", label: "Cần cải thiện" } : { tone: "good", label: "Nhận diện tốt" };
+const qualityInfo = (score: number, count: number) => count === 0 || score < .5
+  ? { tone: "poor", label: "Chưa đủ dữ liệu" }
+  : score <= .8 ? { tone: "fair", label: "Cần cải thiện" } : { tone: "good", label: "Nhận diện tốt" };
 
 function PersonAvatar({ person, large = false }: { person: Person; large?: boolean }) {
   const initials = person.name.split(" ").map((part) => part[0]).slice(-2).join("");
@@ -26,46 +21,165 @@ function PersonAvatar({ person, large = false }: { person: Person; large?: boole
 }
 
 export default function FamilyPage() {
-  const [people, setPeople] = useState(initialPeople);
+  const [people, setPeople] = useState<Person[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
   const [search, setSearch] = useState("");
   const [showHidden, setShowHidden] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [menuId, setMenuId] = useState<string | null>(null);
-  const [addingPerson, setAddingPerson] = useState(false);
+  const [adding, setAdding] = useState(false);
   const [faceFlow, setFaceFlow] = useState(false);
-  const [facePreview, setFacePreview] = useState<{ quality: number } | null>(null);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
-  const selected = people.find((person) => person.id === selectedId) ?? null;
-  const visiblePeople = useMemo(() => people.filter((person) => (showHidden || person.active) && normalize(`${person.name} ${person.relationship}`).includes(normalize(search.trim()))), [people, search, showHidden]);
-  const totalPages = Math.max(1, Math.ceil(visiblePeople.length / pageSize));
-  const currentPage = Math.min(page, totalPages);
-  const pagePeople = visiblePeople.slice((currentPage - 1) * pageSize, currentPage * pageSize);
-  const pageStart = visiblePeople.length ? (currentPage - 1) * pageSize + 1 : 0;
-  const pageEnd = Math.min(currentPage * pageSize, visiblePeople.length);
+  const [faceImage, setFaceImage] = useState<string | null>(null);
+  const [faceError, setFaceError] = useState("");
+  const [mutationError, setMutationError] = useState("");
+  const faceReaderRef = useRef<FileReader | null>(null);
 
-  const updateSelected = (patch: Partial<Person>) => setPeople((items) => items.map((person) => person.id === selectedId ? { ...person, ...patch } : person));
-  const removeFace = (faceId: string) => selected && updateSelected({ faces: selected.faces.filter((face) => face.id !== faceId) });
-  const createPreview = () => setFacePreview({ quality: Math.round((.38 + Math.random() * .58) * 100) / 100 });
-  const saveFace = () => {
-    if (!selected || !facePreview) return;
-    updateSelected({ faces: [...selected.faces, { id: `face-${Date.now()}`, quality: facePreview.quality, angle: "Ảnh mới", model: "FaceNet 2.0", active: true }] });
-    setFacePreview(null); setFaceFlow(false);
+  const releaseFaceReader = (reader: FileReader) => {
+    if (faceReaderRef.current === reader) faceReaderRef.current = null;
+    reader.onload = null;
+    reader.onerror = null;
+    reader.onabort = null;
+  };
+  const abortCurrentFaceReader = () => {
+    const reader = faceReaderRef.current;
+    if (!reader) return;
+    releaseFaceReader(reader);
+    if (reader.readyState === FileReader.LOADING) reader.abort();
   };
 
+  const load = () => {
+    setLoading(true); setError(false);
+    getPeople().then((items) => setPeople(items.map(toPerson))).catch(() => setError(true)).finally(() => setLoading(false));
+  };
+  useEffect(load, []);
+  useEffect(() => () => {
+    abortCurrentFaceReader();
+  }, []);
+
+  const selected = people.find((person) => person.id === selectedId) ?? null;
+  const visible = useMemo(() => people.filter((person) => {
+    const matchesVisibility = showHidden || person.active;
+    const text = normalize(`${person.name} ${person.relationship}`);
+    return matchesVisibility && text.includes(normalize(search.trim()));
+  }), [people, search, showHidden]);
+
+  const replacePerson = (person: PersonDto) => setPeople((items) => items.map((item) => item.id === person.id ? toPerson(person) : item));
+  const editLocal = (patch: Partial<Person>) => setPeople((items) => items.map((item) => item.id === selectedId ? { ...item, ...patch } : item));
+  const saveSelected = () => {
+    if (!selected) return;
+    setMutationError("");
+    void updatePerson(selected.id, {
+      name: selected.name, relationship: selected.relationship, birth: selected.birth || null,
+      notes: selected.notes || null, active: selected.active,
+    }).then(replacePerson).catch((updateError: unknown) => {
+      console.error("Không thể cập nhật thông tin người thân", updateError);
+      setMutationError("Không thể lưu thay đổi. Dữ liệu trước đó đã được khôi phục.");
+      load();
+    });
+  };
+  const togglePerson = (person: Person) => {
+    const active = !person.active;
+    setMutationError("");
+    setPeople((items) => items.map((item) => item.id === person.id ? { ...item, active } : item));
+    void updatePerson(person.id, { active }).then(replacePerson).catch((updateError: unknown) => {
+      console.error("Không thể cập nhật trạng thái người thân", updateError);
+      setMutationError("Không thể thay đổi trạng thái. Dữ liệu trước đó đã được khôi phục.");
+      load();
+    });
+  };
+  const submitPerson = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    try {
+      const created = await createPerson({
+        name: String(data.get("name")), relationship: String(data.get("relationship")),
+        birth: String(data.get("birth")) || null, notes: String(data.get("notes")) || null, active: true,
+      });
+      setPeople((items) => [...items, toPerson(created)]); setAdding(false); setSelectedId(created.id);
+    } catch { setError(true); }
+  };
+  const removeFace = (faceId: string) => selected && void deleteFace(selected.id, faceId).then(replacePerson).catch(load);
+  const saveFace = async () => {
+    if (!selected || !faceImage) return;
+    try { replacePerson(await addFace(selected.id, faceImage)); setFaceFlow(false); setFaceImage(null); setFaceError(""); }
+    catch { setFaceError("Không thể trích xuất khuôn mặt. Hãy chọn ảnh rõ mặt và thử lại."); }
+  };
+  const closeFaceFlow = () => {
+    abortCurrentFaceReader();
+    setFaceFlow(false); setFaceImage(null); setFaceError("");
+  };
+  const chooseFace = (file?: File) => {
+    abortCurrentFaceReader();
+    setFaceError("");
+    if (!file) { setFaceImage(null); return; }
+    if (!supportedFaceTypes.has(file.type)) {
+      setFaceImage(null); setFaceError("Chỉ hỗ trợ ảnh JPEG, PNG hoặc WebP."); return;
+    }
+    if (file.size > maxFaceFileSize) {
+      setFaceImage(null); setFaceError("Ảnh không được vượt quá 10 MB."); return;
+    }
+    setFaceImage(null);
+    const reader = new FileReader();
+    faceReaderRef.current = reader;
+    reader.onload = () => {
+      if (faceReaderRef.current !== reader) { releaseFaceReader(reader); return; }
+      const result = reader.result;
+      releaseFaceReader(reader);
+      if (typeof result === "string" && faceDataUrlPattern.test(result)) {
+        setFaceImage(result); return;
+      }
+      setFaceImage(null); setFaceError("Dữ liệu ảnh đã chọn không hợp lệ.");
+    };
+    reader.onerror = () => {
+      if (faceReaderRef.current !== reader) { releaseFaceReader(reader); return; }
+      releaseFaceReader(reader);
+      setFaceError("Không thể đọc ảnh đã chọn.");
+    };
+    reader.onabort = () => releaseFaceReader(reader);
+    reader.readAsDataURL(file);
+  };
+
+  if (loading) return <section className="family-page page-wrap"><div className="family-empty"><RefreshCw /><h2>Đang tải người thân…</h2></div></section>;
+  if (error && !people.length) return <section className="family-page page-wrap"><div className="family-empty"><AlertTriangle /><h2>Không tải được dữ liệu người thân</h2><button onClick={load}>Thử lại</button></div></section>;
+
   return <section className="family-page page-wrap">
-    <header className="family-heading"><div><h1>Người thân</h1><p>Quản lý người quen để hệ thống nhận diện chính xác và giảm cảnh báo giả.</p></div><button onClick={() => setAddingPerson(true)}><Plus /> Thêm người thân</button></header>
-    <div className="family-toolbar"><label><Search /><input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="Tìm theo tên hoặc mối quan hệ..." /></label><div><span>Hiện cả người đã ẩn</span><button className={`family-switch ${showHidden ? "on" : ""}`} role="switch" aria-checked={showHidden} onClick={() => { setShowHidden((value) => !value); setPage(1); }}><i /></button></div><aside className="family-total"><UsersRound /><span><strong>{visiblePeople.length}</strong><small>người thân</small></span></aside></div>
-    {visiblePeople.length ? <>
-      <div className="family-table-wrap"><table className="family-table"><thead><tr><th>Ảnh</th><th>Tên</th><th>Mối quan hệ</th><th className="face-count-column">Số ảnh khuôn mặt</th><th>Chất lượng nhận diện</th><th>Trạng thái</th><th>Hành động</th></tr></thead><tbody>{pagePeople.map((person) => { const score = averageQuality(person); const quality = qualityInfo(score, person.faces.length); return <tr key={person.id} className={`${quality.tone === "poor" ? "needs-data" : ""} ${!person.active ? "hidden-person" : ""}`} onClick={() => setSelectedId(person.id)}><td><PersonAvatar person={person} /></td><td><strong>{person.name}</strong><small className="tablet-face-count">{person.faces.length} ảnh khuôn mặt</small></td><td><span className="relationship-badge">{person.relationship}</span></td><td className="face-count-column"><span className="face-count"><Image /> {person.faces.length} ảnh khuôn mặt</span></td><td><div className={`recognition-quality ${quality.tone}`}><i /><span>{quality.label}</span>{person.faces.length > 0 && <small>{Math.round(score * 100)}%</small>}</div></td><td><span className={`person-status ${person.active ? "active" : "hidden"}`}>{person.active ? "Đang hoạt động" : "Đã ẩn"}</span></td><td><div className="family-row-actions"><button className="family-profile-link" onClick={(event) => { event.stopPropagation(); setSelectedId(person.id); }}>Xem hồ sơ</button><button className="family-more" aria-label={`Tùy chọn ${person.name}`} onClick={(event) => { event.stopPropagation(); setMenuId((id) => id === person.id ? null : person.id); }}><MoreHorizontal /></button>{menuId === person.id && <div className="family-card-menu" onClick={(event) => event.stopPropagation()}><button onClick={() => { setSelectedId(person.id); setMenuId(null); }}><Pencil /> Sửa thông tin</button><button onClick={() => { setSelectedId(person.id); setFaceFlow(true); setMenuId(null); }}><Plus /> Thêm ảnh khuôn mặt</button><button onClick={() => { setPeople((items) => items.map((item) => item.id === person.id ? { ...item, active: !item.active } : item)); setMenuId(null); }}><UserRoundX /> {person.active ? "Vô hiệu hoá" : "Kích hoạt lại"}</button></div>}</div></td></tr>; })}</tbody></table></div>
-      <section className="family-mobile-list">{pagePeople.map((person) => { const score = averageQuality(person); const quality = qualityInfo(score, person.faces.length); return <button key={person.id} className={`family-mobile-card ${quality.tone === "poor" ? "needs-data" : ""} ${!person.active ? "hidden-person" : ""}`} onClick={() => setSelectedId(person.id)}><PersonAvatar person={person} /><span className="family-mobile-copy"><span><strong>{person.name}</strong><span className="relationship-badge">{person.relationship}</span></span><small>{person.faces.length} ảnh khuôn mặt</small><span className={`recognition-quality ${quality.tone}`}><i /><span>{quality.label}</span>{person.faces.length > 0 && <small>{Math.round(score * 100)}%</small>}</span></span><span className={`person-status ${person.active ? "active" : "hidden"}`}>{person.active ? "Hoạt động" : "Đã ẩn"}</span></button>; })}</section>
-      <div className="family-pagination"><div>Hiển thị <strong>{pageStart}-{pageEnd}</strong> trong tổng <strong>{visiblePeople.length}</strong> người thân</div><label>Số dòng<select value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setPage(1); }}><option value={10}>10</option><option value={20}>20</option><option value={50}>50</option></select></label><nav aria-label="Phân trang"><button disabled={currentPage === 1} onClick={() => setPage((value) => Math.max(1, value - 1))}><ChevronLeft /><span>Trước</span></button><span className="family-mobile-page">Trang {currentPage}/{totalPages}</span>{Array.from({ length: totalPages }, (_, index) => index + 1).map((number) => <button key={number} className={`page-number ${number === currentPage ? "active" : ""}`} onClick={() => setPage(number)} aria-current={number === currentPage ? "page" : undefined}>{number}</button>)}<button disabled={currentPage === totalPages} onClick={() => setPage((value) => Math.min(totalPages, value + 1))}><span>Sau</span><ChevronRight /></button></nav></div>
-    </> : <div className="family-empty"><UsersRound /><h2>{people.length ? "Không tìm thấy người thân" : "Chưa có người thân nào"}</h2><p>{people.length ? "Thử từ khóa khác hoặc bật hiển thị người đã ẩn." : "Thêm người thân đầu tiên để hệ thống bắt đầu nhận diện và giảm cảnh báo giả."}</p><button onClick={() => people.length ? setSearch("") : setAddingPerson(true)}>{people.length ? "Xóa tìm kiếm" : "+ Thêm người thân"}</button></div>}
+    <header className="family-heading"><div><h1>Người thân</h1><p>Quản lý người quen để hệ thống nhận diện chính xác và giảm cảnh báo giả.</p></div><button onClick={() => setAdding(true)}><Plus /> Thêm người thân</button></header>
+    {mutationError && <p className="family-mutation-error" role="alert"><AlertTriangle />{mutationError}</p>}
+    <div className="family-toolbar">
+      <label><Search /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Tìm theo tên hoặc mối quan hệ..." /></label>
+      <div><span>Hiện cả người đã ẩn</span><button className={`family-switch ${showHidden ? "on" : ""}`} role="switch" aria-checked={showHidden} onClick={() => setShowHidden((value) => !value)}><i /></button></div>
+      <aside className="family-total"><UsersRound /><span><strong>{visible.length}</strong><small>người thân</small></span></aside>
+    </div>
 
-    {selected && <div className="family-modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setSelectedId(null)}><article className="family-detail-modal"><header><div><PersonAvatar person={selected} large /><span><h2>{selected.name}</h2><p>{selected.relationship} · {selected.faces.length} ảnh khuôn mặt</p></span></div><button onClick={() => setSelectedId(null)}><X /></button></header><div className="family-detail-scroll"><section className="family-basic-form"><div className="family-section-title"><h3>Thông tin cơ bản</h3><small>Cập nhật trực tiếp hồ sơ người thân</small></div><div><label><span>Tên hiển thị</span><input value={selected.name} onChange={(event) => updateSelected({ name: event.target.value })} /></label><label><span>Mối quan hệ</span><input value={selected.relationship} onChange={(event) => updateSelected({ relationship: event.target.value })} /></label><label><span>Ngày sinh</span><input type="date" value={selected.birth ?? ""} onChange={(event) => updateSelected({ birth: event.target.value })} /></label><label className="notes"><span>Ghi chú</span><textarea value={selected.notes ?? ""} onChange={(event) => updateSelected({ notes: event.target.value })} /></label></div></section><section className="face-profiles-section"><div className="family-section-title row"><div><h3>Ảnh khuôn mặt đã đăng ký</h3><small>Embedding được xử lý cục bộ và không ghi vào log.</small></div><button onClick={() => setFaceFlow(true)}><Plus /> Thêm ảnh khuôn mặt</button></div>{selected.faces.length ? <div className="face-profile-grid">{selected.faces.map((face, index) => { const info = qualityInfo(face.quality, 1); return <div key={face.id} className="face-profile-card"><span className={`face-thumbnail ${selected.color}`}><span>{selected.name.split(" ").at(-1)?.[0]}</span><small>Góc {index + 1}</small></span><div><strong>{face.angle}</strong><small>{face.model}</small><div className={`face-quality-bar ${info.tone}`}><span><i style={{ width: `${face.quality * 100}%` }} /></span><b>{Math.round(face.quality * 100)}%</b></div></div><button title="Xóa ảnh" onClick={() => removeFace(face.id)}><Trash2 /></button></div>; })}</div> : <div className="no-face-state"><Image /><strong>Chưa có ảnh khuôn mặt</strong><p>Thêm ảnh rõ mặt để bắt đầu nhận diện.</p></div>}</section><section className={`person-active-setting ${!selected.active ? "warning" : ""}`}><div>{selected.active ? <ShieldCheck /> : <AlertTriangle />}<span><strong>Cho phép nhận diện người này</strong><small>{selected.active ? "Hệ thống đang nhận diện đây là người quen." : "Hệ thống sẽ không còn nhận diện người này là người quen; lượt xuất hiện có thể được đánh dấu là người lạ."}</small></span></div><button className={`family-switch ${selected.active ? "on" : ""}`} role="switch" aria-checked={selected.active} onClick={() => updateSelected({ active: !selected.active })}><i /></button></section></div><footer><span><Check /> Thay đổi được lưu tự động</span><button onClick={() => setSelectedId(null)}>Đóng</button></footer></article></div>}
+    {visible.length ? <>
+      <div className="family-table-wrap"><table className="family-table"><thead><tr><th>Ảnh</th><th>Tên</th><th>Mối quan hệ</th><th>Số ảnh khuôn mặt</th><th>Chất lượng nhận diện</th><th>Trạng thái</th><th>Hành động</th></tr></thead><tbody>
+        {visible.map((person) => { const score = averageQuality(person); const quality = qualityInfo(score, person.faces.length); return <tr key={person.id} className={!person.active ? "hidden-person" : ""} onClick={() => setSelectedId(person.id)}>
+          <td><PersonAvatar person={person} /></td><td><strong>{person.name}</strong></td><td><span className="relationship-badge">{person.relationship}</span></td>
+          <td><span className="face-count"><Image /> {person.faces.length} ảnh khuôn mặt</span></td><td><div className={`recognition-quality ${quality.tone}`}><i /><span>{quality.label}</span>{person.faces.length > 0 && <small>{Math.round(score * 100)}%</small>}</div></td>
+          <td><span className={`person-status ${person.active ? "active" : "hidden"}`}>{person.active ? "Đang hoạt động" : "Đã ẩn"}</span></td>
+          <td><div className="family-row-actions"><button className="family-profile-link" onClick={(event) => { event.stopPropagation(); setSelectedId(person.id); }}>Xem hồ sơ</button><button onClick={(event) => { event.stopPropagation(); togglePerson(person); }}>{person.active ? "Vô hiệu hoá" : "Kích hoạt"}</button></div></td>
+        </tr>; })}
+      </tbody></table></div>
+      <section className="family-mobile-list">{visible.map((person) => <button key={person.id} className={`family-mobile-card ${!person.active ? "hidden-person" : ""}`} onClick={() => setSelectedId(person.id)}><PersonAvatar person={person} /><span className="family-mobile-copy"><strong>{person.name}</strong><small>{person.relationship} · {person.faces.length} ảnh khuôn mặt</small></span><span className={`person-status ${person.active ? "active" : "hidden"}`}>{person.active ? "Hoạt động" : "Đã ẩn"}</span></button>)}</section>
+    </> : <div className="family-empty"><UsersRound /><h2>Chưa có người thân phù hợp</h2><p>Thêm hồ sơ đầu tiên hoặc thay đổi bộ lọc tìm kiếm.</p><button onClick={() => setAdding(true)}>+ Thêm người thân</button></div>}
 
-    {addingPerson && <div className="family-modal-backdrop"><form className="add-person-modal" onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); const person: Person = { id: `person-${Date.now()}`, name: String(data.get("name")), relationship: String(data.get("relationship")), birth: String(data.get("birth")), notes: String(data.get("notes")), active: true, color: "blue", faces: [] }; setPeople((items) => [...items, person]); setAddingPerson(false); setSelectedId(person.id); }}><header><div><h2>Thêm người thân</h2><p>Tạo hồ sơ người quen mới cho hệ thống AI.</p></div><button type="button" onClick={() => setAddingPerson(false)}><X /></button></header><label><span>Tên hiển thị</span><input name="name" required placeholder="Nguyễn Văn An" /></label><label><span>Mối quan hệ</span><input name="relationship" required placeholder="Bố, mẹ, con..." /></label><label><span>Ngày sinh (không bắt buộc)</span><input name="birth" type="date" /></label><label><span>Ghi chú</span><textarea name="notes" placeholder="Thông tin hỗ trợ chăm sóc" /></label><footer><button type="button" onClick={() => setAddingPerson(false)}>Huỷ</button><button type="submit">Thêm người thân</button></footer></form></div>}
+    {selected && <div className="family-modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setSelectedId(null)}><article className="family-detail-modal">
+      <header><div><PersonAvatar person={selected} large /><span><h2>{selected.name}</h2><p>{selected.relationship} · {selected.faces.length} ảnh khuôn mặt</p></span></div><button onClick={() => setSelectedId(null)}><X /></button></header>
+      <div className="family-detail-scroll"><section className="family-basic-form"><div className="family-section-title"><h3>Thông tin cơ bản</h3><small>Dữ liệu được lưu trong SQLite trên Local Hub</small></div><div>
+        <label><span>Tên hiển thị</span><input value={selected.name} onChange={(event) => editLocal({ name: event.target.value })} onBlur={saveSelected} /></label>
+        <label><span>Mối quan hệ</span><input value={selected.relationship} onChange={(event) => editLocal({ relationship: event.target.value })} onBlur={saveSelected} /></label>
+        <label><span>Ngày sinh</span><input type="date" value={selected.birth ?? ""} onChange={(event) => editLocal({ birth: event.target.value })} onBlur={saveSelected} /></label>
+        <label className="notes"><span>Ghi chú</span><textarea value={selected.notes ?? ""} onChange={(event) => editLocal({ notes: event.target.value })} onBlur={saveSelected} /></label>
+      </div></section>
+      <section className="face-profiles-section"><div className="family-section-title row"><div><h3>Ảnh khuôn mặt đã đăng ký</h3><small>Embedding chỉ nằm trên Local Hub.</small></div><button onClick={() => setFaceFlow(true)}><Plus /> Thêm ảnh khuôn mặt</button></div>
+        {selected.faces.length ? <div className="face-profile-grid">{selected.faces.map((face) => <div key={face.id} className="face-profile-card"><span className={`face-thumbnail ${selected.color}`}>{selected.name.split(" ").at(-1)?.[0]}</span><div><strong>{face.angle}</strong><small>{face.model}</small><div className="face-quality-bar good"><span><i style={{ width: `${face.quality * 100}%` }} /></span><b>{Math.round(face.quality * 100)}%</b></div></div><button title="Xóa ảnh" onClick={() => removeFace(face.id)}><Trash2 /></button></div>)}</div> : <div className="no-face-state"><Image /><strong>Chưa có ảnh khuôn mặt</strong><p>Thêm ảnh rõ mặt để bắt đầu nhận diện.</p></div>}
+      </section>
+      <section className={`person-active-setting ${!selected.active ? "warning" : ""}`}><div>{selected.active ? <ShieldCheck /> : <AlertTriangle />}<span><strong>Cho phép nhận diện người này</strong><small>{selected.active ? "Hệ thống đang coi đây là người quen." : "Người này có thể được đánh dấu là người lạ."}</small></span></div><button className={`family-switch ${selected.active ? "on" : ""}`} onClick={() => togglePerson(selected)}><i /></button></section>
+      </div><footer><span><Check /> Thay đổi được lưu vào Local Hub</span><button onClick={() => setSelectedId(null)}>Đóng</button></footer>
+    </article></div>}
 
-    {faceFlow && selected && <div className="face-flow-backdrop"><article className="face-flow"><header><div><h2>Thêm ảnh khuôn mặt</h2><p>{selected.name}</p></div><button onClick={() => { setFaceFlow(false); setFacePreview(null); }}><X /></button></header><div className="capture-guidance"><Camera /><div><strong>Chụp rõ mặt và đủ sáng</strong><p>Nhìn thẳng camera, không đeo khẩu trang hoặc kính tối. Dữ liệu chỉ được xử lý trên thiết bị.</p></div></div>{facePreview ? <div className="face-preview"><span className={selected.color}>{selected.name.split(" ").at(-1)?.[0]}</span><div className={facePreview.quality < .5 ? "low" : "good"}><strong>Chất lượng ảnh: {Math.round(facePreview.quality * 100)}%</strong><div><i style={{ width: `${facePreview.quality * 100}%` }} /></div>{facePreview.quality < .5 ? <p><AlertTriangle /> Chất lượng thấp, bạn nên chụp lại.</p> : <p><Check /> Ảnh phù hợp để nhận diện.</p>}</div></div> : <button className="capture-zone" onClick={createPreview}><Camera /><strong>Chụp ảnh mô phỏng</strong><small>Hoặc chọn ảnh từ thiết bị</small></button>}<footer>{facePreview && <button onClick={createPreview}><RefreshCw /> Chụp lại</button>}<button className="upload-button" onClick={() => facePreview ? saveFace() : createPreview()}>{facePreview ? "Lưu ảnh khuôn mặt" : <><Upload /> Chọn ảnh</>}</button></footer></article></div>}
+    {adding && <div className="family-modal-backdrop"><form className="add-person-modal" onSubmit={submitPerson}><header><div><h2>Thêm người thân</h2><p>Tạo hồ sơ người quen mới.</p></div><button type="button" onClick={() => setAdding(false)}><X /></button></header><label><span>Tên hiển thị</span><input name="name" required /></label><label><span>Mối quan hệ</span><input name="relationship" required /></label><label><span>Ngày sinh</span><input name="birth" type="date" /></label><label><span>Ghi chú</span><textarea name="notes" /></label><footer><button type="button" onClick={() => setAdding(false)}>Huỷ</button><button type="submit">Thêm người thân</button></footer></form></div>}
+
+    {faceFlow && selected && <div className="face-flow-backdrop"><article className="face-flow"><header><div><h2>Thêm ảnh khuôn mặt</h2><p>{selected.name}</p></div><button onClick={closeFaceFlow}><X /></button></header><div className="capture-guidance"><Camera /><div><strong>Chọn ảnh rõ mặt và đủ sáng</strong><p>InsightFace xử lý cục bộ, embedding được lưu trong SQLite và gallery cập nhật ngay.</p></div></div><label className="capture-zone"><Image /><strong>{faceImage ? "Chọn ảnh khác" : "Chọn ảnh khuôn mặt"}</strong><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => chooseFace(event.target.files?.[0])} hidden /></label>{faceImage && <div className="face-preview"><img src={faceImage} alt={`Ảnh khuôn mặt ${selected.name}`} /></div>}{faceError && <p className="family-form-error">{faceError}</p>}<footer><button onClick={() => setFaceImage(null)} disabled={!faceImage}><RefreshCw /> Chọn lại</button><button className="upload-button" disabled={!faceImage} onClick={() => void saveFace()}>Tạo embedding và lưu</button></footer></article></div>}
   </section>;
 }

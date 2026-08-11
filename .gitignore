@@ -1,60 +1,141 @@
+# -----------------------------------------------------------------------------
 # Python
+# -----------------------------------------------------------------------------
 __pycache__/
 *.py[cod]
+*$py.class
 *.so
 *.egg-info/
-dist/
-build/
 .eggs/
+build/
+dist/
+wheels/
+pip-wheel-metadata/
 
 # Virtual environments
-venv/
 .venv/
+.venv-*/
+venv/
 env/
+ENV/
 
-# Environment variables
-.env
-.env.local
-.env.production
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Data (never commit large data)
-data/
-*.db
-*.sqlite3
-
-# Logs
-logs/
-*.log
-
-# Test coverage
-htmlcov/
+# Python tools, tests and coverage
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+.tox/
+.nox/
 .coverage
+.coverage.*
 coverage.xml
+htmlcov/
+.hypothesis/
+.ipynb_checkpoints/
 
-# Docker
-docker-compose.override.yml
+# -----------------------------------------------------------------------------
+# Secrets and local environment
+# -----------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+!.env.docker.example
 
-# Node (frontend)
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+
+*.pem
+*.key
+*.p12
+*.pfx
+
+# -----------------------------------------------------------------------------
+# Runtime data (root paths are intentionally anchored)
+# -----------------------------------------------------------------------------
+/data/
+/snapshots/
+/logs/
+
+# SQLite databases and runtime sidecars anywhere else
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-shm
+*.sqlite3-wal
+
+# Temporary/runtime files
+*.log
+*.pid
+*.tmp
+*.temp
+.tmp_*
+tmp/
+temp/
+
+# -----------------------------------------------------------------------------
+# Frontend / Node
+# -----------------------------------------------------------------------------
 node_modules/
+frontend/dist/
+*.tsbuildinfo
+.vite/
 .next/
 out/
 .nuxt/
+.parcel-cache/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
-# Build
-*.pyc
-*.pyo
+# -----------------------------------------------------------------------------
+# Vision, ML and private biometric data
+# -----------------------------------------------------------------------------
+src/vision/register face/
+src/vision/demo/**/*.npy
 
-# AI logs — tracked structure, ignored content
+# Training runs and generated reports. Release checkpoints already tracked by
+# Git remain tracked; these rules prevent accidental addition of new artifacts.
+src/vision/work_dir/**/runs/
+src/vision/work_dir/**/*_matrix.csv
+src/vision/work_dir/**/log.txt
+
+# Generated/optimized model exports and framework caches
+src/vision/**/*.onnx
+src/vision/**/*.engine
+src/vision/**/*.tflite
+src/vision/**/*.mlpackage
+/.cache/
+/runs/
+/weights/
+
+# Local AI/Codex logs
 .ai-log/*.jsonl
 .ai-log/archive/
+
+# -----------------------------------------------------------------------------
+# Docker local overrides
+# -----------------------------------------------------------------------------
+docker-compose.override.yml
+compose.override.yml
+
+# -----------------------------------------------------------------------------
+# Editors and operating systems
+# -----------------------------------------------------------------------------
+.vscode/
+.idea/
+*.code-workspace
+*.swp
+*.swo
+*~
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+visionv2/
