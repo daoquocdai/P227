@@ -31,6 +31,7 @@ export default function FamilyPage() {
   const [faceFlow, setFaceFlow] = useState(false);
   const [faceImage, setFaceImage] = useState<string | null>(null);
   const [faceError, setFaceError] = useState("");
+  const [mutationError, setMutationError] = useState("");
   const faceReaderRef = useRef<FileReader | null>(null);
 
   const load = () => {
@@ -54,15 +55,25 @@ export default function FamilyPage() {
   const editLocal = (patch: Partial<Person>) => setPeople((items) => items.map((item) => item.id === selectedId ? { ...item, ...patch } : item));
   const saveSelected = () => {
     if (!selected) return;
+    setMutationError("");
     void updatePerson(selected.id, {
       name: selected.name, relationship: selected.relationship, birth: selected.birth || null,
       notes: selected.notes || null, active: selected.active,
-    }).then(replacePerson).catch(load);
+    }).then(replacePerson).catch((updateError: unknown) => {
+      console.error("Không thể cập nhật thông tin người thân", updateError);
+      setMutationError("Không thể lưu thay đổi. Dữ liệu trước đó đã được khôi phục.");
+      load();
+    });
   };
   const togglePerson = (person: Person) => {
     const active = !person.active;
+    setMutationError("");
     setPeople((items) => items.map((item) => item.id === person.id ? { ...item, active } : item));
-    void updatePerson(person.id, { active }).then(replacePerson).catch(load);
+    void updatePerson(person.id, { active }).then(replacePerson).catch((updateError: unknown) => {
+      console.error("Không thể cập nhật trạng thái người thân", updateError);
+      setMutationError("Không thể thay đổi trạng thái. Dữ liệu trước đó đã được khôi phục.");
+      load();
+    });
   };
   const submitPerson = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -121,6 +132,7 @@ export default function FamilyPage() {
 
   return <section className="family-page page-wrap">
     <header className="family-heading"><div><h1>Người thân</h1><p>Quản lý người quen để hệ thống nhận diện chính xác và giảm cảnh báo giả.</p></div><button onClick={() => setAdding(true)}><Plus /> Thêm người thân</button></header>
+    {mutationError && <p className="family-mutation-error" role="alert"><AlertTriangle />{mutationError}</p>}
     <div className="family-toolbar">
       <label><Search /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Tìm theo tên hoặc mối quan hệ..." /></label>
       <div><span>Hiện cả người đã ẩn</span><button className={`family-switch ${showHidden ? "on" : ""}`} role="switch" aria-checked={showHidden} onClick={() => setShowHidden((value) => !value)}><i /></button></div>

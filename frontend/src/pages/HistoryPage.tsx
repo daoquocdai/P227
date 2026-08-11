@@ -250,6 +250,15 @@ export default function HistoryPage() {
 
   const cameras = useMemo(() => Array.from(new Map(events.map((event) => [event.cameraId, { id: event.cameraId, name: event.cameraName }])).values()), [events]);
   const persons = useMemo(() => Array.from(new Map(events.flatMap((event) => event.person ? [[event.person.id, event.person] as const] : [])).values()), [events]);
+  const preparedEvents = useMemo(() => events.map((event) => ({
+    event,
+    occurredAt: Date.parse(event.occurredAt),
+    searchableText: normalizeSearchText([
+      event.person?.name ?? (event.unknown ? "Người lạ" : ""),
+      event.cameraName,
+      event.location,
+    ].join(" ")),
+  })), [events]);
 
   const filtered = useMemo(() => {
     const customStart = customFrom ? parseLocalDateBoundary(customFrom, false) : null;
@@ -258,26 +267,20 @@ export default function HistoryPage() {
     const keyword = normalizeSearchText(search);
     const now = Date.now();
 
-    return events.filter((event) => {
-      const occurredAt = Date.parse(event.occurredAt);
+    return preparedEvents.filter(({ event, occurredAt, searchableText }) => {
       if (!Number.isFinite(occurredAt)) return false;
 
       const age = now - occurredAt;
       const withinRange = range === "today" ? age >= 0 && age <= 86_400_000 : range === "7d" ? age >= 0 && age <= 7 * 86_400_000 : range === "30d" ? age >= 0 && age <= 30 * 86_400_000 : true;
       const withinCustom = range !== "custom" || (!invalidCustomRange && (customStart === null || occurredAt >= customStart) && (customEnd === null || occurredAt <= customEnd));
-      const searchableText = normalizeSearchText([
-        event.person?.name ?? (event.unknown ? "Người lạ" : ""),
-        event.cameraName,
-        event.location,
-      ].join(" "));
       const matchesSearch = !keyword || searchableText.includes(keyword);
       return withinRange && withinCustom && matchesSearch
         && (kind === "all" || event.kind === kind)
         && (cameraId === "all" || event.cameraId === cameraId)
         && (status === "all" || event.alert?.status === status)
         && (person === "all" || (person === "unknown" ? event.unknown : event.person?.id === person));
-    }).sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt));
-  }, [events, range, customFrom, customTo, kind, cameraId, status, person, search]);
+    }).sort((a, b) => b.occurredAt - a.occurredAt).map(({ event }) => event);
+  }, [preparedEvents, range, customFrom, customTo, kind, cameraId, status, person, search]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const currentPage = Math.min(page, totalPages);
