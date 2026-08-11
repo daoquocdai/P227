@@ -1,3 +1,0 @@
-# Compatibility entry point: common development/backend dependencies only.
-# Install one hardware profile as documented in README.md to run real Vision.
--r requirements/base.txt
