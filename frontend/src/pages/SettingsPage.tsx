@@ -35,12 +35,12 @@ export default function SettingsPage() {
   if(loading)return <section className="settings-page page-wrap"><div className="permission-empty"><RefreshCw/><h3>Đang tải cài đặt…</h3></div></section>;
   if(!data)return <section className="settings-page page-wrap"><div className="permission-empty"><Settings/><h3>{error||"Không có dữ liệu cài đặt"}</h3><button onClick={load}>Thử lại</button></div></section>;
   const selected=data.users.find((user)=>user.id===selectedUser);
-  const updateData=(next:SettingsData)=>setData(next);
+  const updateData=(next:SettingsData)=>{dirtyRef.current=false;setData(next)};
   const updateDraft=(next:SettingsData)=>{dirtyRef.current=true;setData(next)};
   const saveGeneralSettings=()=>void saveGeneral(data.general).then((general)=>{dirtyRef.current=false;setData({...data,general});flashSaved()}).catch(()=>setError("Không lưu được cài đặt chung"));
   const saveNotificationSettings=()=>void saveNotifications(data.notifications).then((notifications)=>{dirtyRef.current=false;setData({...data,notifications});flashSaved()}).catch(()=>setError("Không lưu được thông báo"));
-  const toggleCamera=(id:string,active:boolean)=>{setData({...data,cameras:data.cameras.map((camera)=>camera.id===id?{...camera,is_active:active}:camera)});void setSettingsCameraActive(id,active).then(updateData).catch(load)};
-  const toggleVision=(id:string,enabled:boolean)=>{setData({...data,cameras:data.cameras.map((camera)=>camera.id===id?{...camera,vision_enabled:enabled}:camera)});void setSettingsCameraVision(id,enabled).then(updateData).catch(load)};
+  const toggleCamera=(id:string,active:boolean)=>{updateDraft({...data,cameras:data.cameras.map((camera)=>camera.id===id?{...camera,is_active:active}:camera)});void setSettingsCameraActive(id,active).then(updateData).catch(load)};
+  const toggleVision=(id:string,enabled:boolean)=>{updateDraft({...data,cameras:data.cameras.map((camera)=>camera.id===id?{...camera,vision_enabled:enabled}:camera)});void setSettingsCameraVision(id,enabled).then(updateData).catch(load)};
   const toggleUser=(user:SettingsUser)=>{void setSettingsUserActive(user.id,!user.active).then((updated)=>setData({...data,users:data.users.map((item)=>item.id===updated.id?updated:item)})).catch(()=>setError("Không thể thay đổi tài khoản này"))};
   const togglePermission=(key:PermissionKey)=>{if(!selected||selected.role==="admin")return;const granted=!selected.permissions[key];void setUserPermission(selected.id,key,granted).then((updated)=>setData({...data,users:data.users.map((item)=>item.id===updated.id?updated:item)})).catch(()=>setError("Không lưu được quyền"))};
   const addUser=async(event:FormEvent<HTMLFormElement>)=>{event.preventDefault();const form=new FormData(event.currentTarget);try{const user=await createSettingsUser({name:String(form.get("name")),email:String(form.get("email")),role:String(form.get("role")) as "admin"|"caregiver"});setData({...data,users:[...data.users,user]});setInvite(false);setSelectedUser(user.id)}catch{setError("Email đã tồn tại hoặc dữ liệu không hợp lệ")}};
