@@ -12,20 +12,22 @@ export default function CameraPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [actionError, setActionError] = useState("");
   const [fullscreen, setFullscreen] = useState(false);
   const selectorRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<HTMLDivElement>(null);
   const camerasRequestInFlight = useRef(false);
 
-  const load = () => {
+  const load = async () => {
     if (camerasRequestInFlight.current) return;
     camerasRequestInFlight.current = true;
     setLoading(true); setError(false);
-    getCameras().then((items) => { setFeeds(items); setSelectedId((current) => items.some((item) => item.id === current) ? current : items[0]?.id || ""); })
-      .catch(() => setError(true)).finally(() => { camerasRequestInFlight.current = false; setLoading(false); });
+    try { const items=await getCameras(); setFeeds(items); setSelectedId((current) => items.some((item) => item.id === current) ? current : items[0]?.id || ""); }
+    catch { setError(true); }
+    finally { camerasRequestInFlight.current = false; setLoading(false); }
   };
-  useEffect(load, []);
+  useEffect(() => { void load(); }, []);
   useEffect(() => {
     const timer = window.setInterval(() => {
       if (document.visibilityState !== "visible" || camerasRequestInFlight.current) return;
@@ -47,12 +49,13 @@ export default function CameraPage() {
   const moveCarousel = (direction: -1 | 1) => selectorRef.current?.scrollBy({ left: direction * 220, behavior: "smooth" });
   const toggleFullscreen = () => void (document.fullscreenElement ? document.exitFullscreen() : viewerRef.current?.requestFullscreen());
   const saveCamera = async (event:FormEvent<HTMLFormElement>) => {
-    event.preventDefault(); if(!selected)return; setActionError("");
+    event.preventDefault(); if(!selected||saving)return; setActionError(""); setSaving(true);
     const form=new FormData(event.currentTarget); const source_kind=String(form.get("source_kind")) as CameraDto["source_kind"];
     const source_uri=String(form.get("source_uri")||"").trim();
     const playback_path=source_kind==="video_file"?source_uri:undefined;
-    try{await updateCamera(selected.id,{name:String(form.get("name")),location:String(form.get("location")),source_kind,source_uri,playback_path});setEditing(false);load();}
-    catch{setActionError("Không thể lưu camera. Kiểm tra tên và nguồn phát.")}
+    try{await updateCamera(selected.id,{name:String(form.get("name")),location:String(form.get("location")),source_kind,source_uri,playback_path});await load();setEditing(false);}
+    catch(saveError){console.error("Không thể lưu camera",saveError);setActionError("Không thể lưu camera. Kiểm tra tên và nguồn phát.")}
+    finally{setSaving(false)}
   };
   const removeCamera=async()=>{if(!selected||selected.active)return;setActionError("");try{await deleteCamera(selected.id);setEditing(false);setSelectedId("");load();}catch{setActionError("Không thể xóa camera. Camera phải được tắt trong Cài đặt và không còn lịch sử liên quan.")}};
 
@@ -79,7 +82,7 @@ export default function CameraPage() {
 
       <section className="viewer-recent-events"><header><div><h2>Sự kiện hôm nay</h2><p>Dữ liệu thật được lưu trong SQLite cho {selected.name.toLocaleLowerCase("vi")}.</p></div><button onClick={() => navigate("/history")}>Xem lịch sử <ChevronRight /></button></header><div>{todayEvents.length ? todayEvents.map((event) => <EventRow key={event.id} event={event} onOpen={() => navigate("/history")} />) : <p className="viewer-events-empty">Hôm nay camera này chưa ghi nhận sự kiện.</p>}</div></section>
     </div>
-    {editing&&<div className="camera-edit-backdrop"><form className="camera-edit-modal" onSubmit={saveCamera}><header><div><h2>Chi tiết camera</h2><p>Thay đổi được lưu trong SQLite.</p></div><button type="button" onClick={()=>setEditing(false)}><X/></button></header>{actionError&&<p className="camera-edit-error">{actionError}</p>}<label><span>Tên camera</span><input name="name" defaultValue={selected.name} required maxLength={255}/></label><label><span>Vị trí</span><input name="location" defaultValue={selected.location} required maxLength={255}/></label><label><span>Loại nguồn</span><select name="source_kind" defaultValue={selected.source_kind}><option value="video_file">Video file</option><option value="webcam">Webcam</option><option value="rtsp">RTSP</option></select></label><label><span>Nguồn phát</span><input name="source_uri" defaultValue={editableSource(selected)} placeholder={selected.source_kind==="rtsp"?"rtsp://…":"Đường dẫn video hoặc webcam index"} required/></label><footer><button type="button" className="camera-delete" disabled={selected.active} onClick={()=>void removeCamera()}><Trash2/> Xóa camera</button><button type="button" onClick={()=>setEditing(false)}>Hủy</button><button type="submit">Lưu thay đổi</button></footer>{selected.active&&<small className="camera-delete-note">Muốn xóa, hãy tắt camera trong Cài đặt trước.</small>}</form></div>}
+    {editing&&<div className="camera-edit-backdrop"><form className="camera-edit-modal" onSubmit={saveCamera}><header><div><h2>Chi tiết camera</h2><p>Thay đổi được lưu trong SQLite.</p></div><button type="button" disabled={saving} onClick={()=>setEditing(false)}><X/></button></header>{actionError&&<p className="camera-edit-error">{actionError}</p>}<label><span>Tên camera</span><input name="name" defaultValue={selected.name} required maxLength={255}/></label><label><span>Vị trí</span><input name="location" defaultValue={selected.location} required maxLength={255}/></label><label><span>Loại nguồn</span><select name="source_kind" defaultValue={selected.source_kind}><option value="video_file">Video file</option><option value="webcam">Webcam</option><option value="rtsp">RTSP</option></select></label><label><span>Nguồn phát</span><input name="source_uri" defaultValue={editableSource(selected)} placeholder={selected.source_kind==="rtsp"?"rtsp://…":"Đường dẫn video hoặc webcam index"} required/></label><footer><button type="button" className="camera-delete" disabled={selected.active||saving} onClick={()=>void removeCamera()}><Trash2/> Xóa camera</button><button type="button" disabled={saving} onClick={()=>setEditing(false)}>Hủy</button><button type="submit" disabled={saving}>{saving?"Đang lưu…":"Lưu thay đổi"}</button></footer>{selected.active&&<small className="camera-delete-note">Muốn xóa, hãy tắt camera trong Cài đặt trước.</small>}</form></div>}
   </section>;
 }
 

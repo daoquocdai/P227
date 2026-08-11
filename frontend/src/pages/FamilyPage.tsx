@@ -34,14 +34,26 @@ export default function FamilyPage() {
   const [mutationError, setMutationError] = useState("");
   const faceReaderRef = useRef<FileReader | null>(null);
 
+  const releaseFaceReader = (reader: FileReader) => {
+    if (faceReaderRef.current === reader) faceReaderRef.current = null;
+    reader.onload = null;
+    reader.onerror = null;
+    reader.onabort = null;
+  };
+  const abortCurrentFaceReader = () => {
+    const reader = faceReaderRef.current;
+    if (!reader) return;
+    releaseFaceReader(reader);
+    if (reader.readyState === FileReader.LOADING) reader.abort();
+  };
+
   const load = () => {
     setLoading(true); setError(false);
     getPeople().then((items) => setPeople(items.map(toPerson))).catch(() => setError(true)).finally(() => setLoading(false));
   };
   useEffect(load, []);
   useEffect(() => () => {
-    faceReaderRef.current?.abort();
-    faceReaderRef.current = null;
+    abortCurrentFaceReader();
   }, []);
 
   const selected = people.find((person) => person.id === selectedId) ?? null;
@@ -93,11 +105,11 @@ export default function FamilyPage() {
     catch { setFaceError("Không thể trích xuất khuôn mặt. Hãy chọn ảnh rõ mặt và thử lại."); }
   };
   const closeFaceFlow = () => {
-    faceReaderRef.current?.abort(); faceReaderRef.current = null;
+    abortCurrentFaceReader();
     setFaceFlow(false); setFaceImage(null); setFaceError("");
   };
   const chooseFace = (file?: File) => {
-    faceReaderRef.current?.abort(); faceReaderRef.current = null;
+    abortCurrentFaceReader();
     setFaceError("");
     if (!file) { setFaceImage(null); return; }
     if (!supportedFaceTypes.has(file.type)) {
@@ -110,20 +122,20 @@ export default function FamilyPage() {
     const reader = new FileReader();
     faceReaderRef.current = reader;
     reader.onload = () => {
-      if (faceReaderRef.current !== reader) return;
-      faceReaderRef.current = null;
-      if (typeof reader.result === "string" && faceDataUrlPattern.test(reader.result)) {
-        setFaceImage(reader.result); return;
+      if (faceReaderRef.current !== reader) { releaseFaceReader(reader); return; }
+      const result = reader.result;
+      releaseFaceReader(reader);
+      if (typeof result === "string" && faceDataUrlPattern.test(result)) {
+        setFaceImage(result); return;
       }
       setFaceImage(null); setFaceError("Dữ liệu ảnh đã chọn không hợp lệ.");
     };
     reader.onerror = () => {
-      if (faceReaderRef.current !== reader) return;
-      faceReaderRef.current = null; setFaceError("Không thể đọc ảnh đã chọn.");
+      if (faceReaderRef.current !== reader) { releaseFaceReader(reader); return; }
+      releaseFaceReader(reader);
+      setFaceError("Không thể đọc ảnh đã chọn.");
     };
-    reader.onabort = () => {
-      if (faceReaderRef.current === reader) faceReaderRef.current = null;
-    };
+    reader.onabort = () => releaseFaceReader(reader);
     reader.readAsDataURL(file);
   };
 
