@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import threading
+import uuid
 from datetime import UTC, datetime
 from uuid import NAMESPACE_URL, uuid5
 

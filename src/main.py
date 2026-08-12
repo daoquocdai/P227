@@ -23,6 +23,8 @@ from src.services.face_identity_service import face_gallery
 from src.services.vision_event_dispatcher import ThreadsafeVisionEventDispatcher
 
 
+import subprocess
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -43,9 +45,22 @@ async def lifespan(app: FastAPI):
     app.state.vision_event_dispatcher = dispatcher
     runtime.start()
     runtime.restore_persisted_state()
+    
+    import sys
+    print("Starting GuardianCam AI (realtime.py) automatically...")
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../SDA-GCN"))
+    realtime_process = subprocess.Popen([sys.executable, "realtime.py"], cwd=base_dir)
+    
     try:
         yield
     finally:
+        print("Stopping GuardianCam AI...")
+        realtime_process.terminate()
+        try:
+            realtime_process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            realtime_process.kill()
+            
         runtime.stop()
         dispatcher.stop()
         consumer.cancel()

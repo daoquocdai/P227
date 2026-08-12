@@ -76,7 +76,7 @@ class PersonService:
         return self.get_person(person_id)
 
     def add_face(self, person_id: str, image_bytes: bytes, angle: str) -> dict[str, Any]:
-        self.get_person(person_id)
+        person = self.get_person(person_id)
         face_id = str(uuid4())
         embedding, quality = self._identity.extract(image_bytes)
         with database_connection() as connection:
@@ -87,6 +87,58 @@ class PersonService:
                    VALUES (?, ?, 'buffalo_l', 'insightface-v1', ?, ?, ?, 1, ?)""",
                 (face_id, person_id, embedding.tobytes(), embedding.size, quality, angle),
             )
+            
+        import os
+        import time
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
+        register_dir = os.path.join(base_dir, "register face", person["name"])
+        os.makedirs(register_dir, exist_ok=True)
+        timestamp = int(time.time())
+        file_path = os.path.join(register_dir, f"static_{timestamp}_{face_id[:8]}.jpg")
+        with open(file_path, "wb") as f:
+            f.write(image_bytes)
+            
+        self._identity.gallery.reload()
+        return self.get_person(person_id)
+
+    def add_face_video(self, person_id: str, images_bytes: list[bytes]) -> dict[str, Any]:
+        person = self.get_person(person_id)
+        person_name = person["name"]
+        
+        successful_faces = 0
+        for i, image_bytes in enumerate(images_bytes):
+            try:
+                face_id = str(uuid4())
+                embedding, quality = self._identity.extract(image_bytes)
+                with database_connection() as connection:
+                    connection.execute(
+                        """INSERT INTO face_profiles
+                           (id, person_id, model_name, model_version, embedding,
+                            embedding_dimension, quality_score, is_active, angle_label)
+                           VALUES (?, ?, 'buffalo_l', 'insightface-v1', ?, ?, ?, 1, ?)""",
+                        (face_id, person_id, embedding.tobytes(), embedding.size, quality, f"Frame {i+1}"),
+                    )
+                successful_faces += 1
+            except Exception as e:
+                print(f"Bỏ qua frame {i+1} do lỗi trích xuất: {e}")
+                
+        if successful_faces == 0:
+            from src.services.face_identity_service import FaceEnrollmentError
+            raise FaceEnrollmentError("Không tìm thấy khuôn mặt rõ ràng trong video.")
+            
+        import os
+        import time
+        # Path to `register face` folder which is one level up from `P-227-visionv2_be_fe`
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
+        register_dir = os.path.join(base_dir, "register face", person_name)
+        os.makedirs(register_dir, exist_ok=True)
+        
+        timestamp = int(time.time())
+        for i, image_bytes in enumerate(images_bytes):
+            file_path = os.path.join(register_dir, f"frame_{timestamp}_{i:04d}.jpg")
+            with open(file_path, "wb") as f:
+                f.write(image_bytes)
+                
         self._identity.gallery.reload()
         return self.get_person(person_id)
 

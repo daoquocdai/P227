@@ -40,3 +40,10 @@ export function addFace(id: string, imageDataUrl: string, angle = "Face image"):
 export function deleteFace(id: string, faceId: string): Promise<PersonDto> {
   return apiClient(`/persons/${encodeURIComponent(id)}/faces/${encodeURIComponent(faceId)}`, { method: "DELETE" });
 }
+
+export function addFaceVideo(id: string, imageDataUrls: string[]): Promise<PersonDto> {
+  return apiClient(`/persons/${encodeURIComponent(id)}/faces/video`, {
+    method: "POST",
+    body: JSON.stringify({ images: imageDataUrls }),
+  });
+}

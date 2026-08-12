@@ -31,6 +31,9 @@ class FaceCreate(BaseModel):
     image_data_url: str = Field(min_length=10, max_length=14_000_000)
     angle: str = Field(default="Ảnh mới", max_length=100)
 
+class FaceVideoCreate(BaseModel):
+    images: list[str] = Field(min_length=1)
+
 
 @router.get("")
 async def list_people():
@@ -58,6 +61,26 @@ async def add_face(person_id: str, face: FaceCreate):
             raise FaceEnrollmentError("Face image must be a base64 image data URL")
         image_bytes = base64.b64decode(payload, validate=True)
         return person_service.add_face(person_id, image_bytes, face.angle)
+    except (binascii.Error, FaceEnrollmentError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except PersonNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Không tìm thấy người thân") from exc
+
+
+@router.post("/{person_id}/faces/video", status_code=201)
+async def add_face_video(person_id: str, video: FaceVideoCreate):
+    try:
+        image_bytes_list = []
+        for img in video.images:
+            header, separator, payload = img.partition(",")
+            if separator != "," or not header.startswith("data:image/") or ";base64" not in header:
+                continue
+            image_bytes_list.append(base64.b64decode(payload, validate=True))
+            
+        if not image_bytes_list:
+            raise FaceEnrollmentError("No valid face images provided")
+            
+        return person_service.add_face_video(person_id, image_bytes_list)
     except (binascii.Error, FaceEnrollmentError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except PersonNotFoundError as exc:
