@@ -1,0 +1,15 @@
+venv/
+data/
+models/
+register face/
+Videotrain/
+Videotrain_cut1/
+web_app/
+demo/
+Datast_Split/
+thi/
+fix_csv.py
+merge_features.py
+split_dataset.py
+update_labels.py
+shape.py
