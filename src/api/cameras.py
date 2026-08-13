@@ -1,6 +1,7 @@
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from src.api.auth import current_user, require_permission
 from pydantic import BaseModel, Field
 
 from src.services.camera_service import CameraConflictError, CameraNotFoundError, camera_service
@@ -20,14 +21,14 @@ class CameraUpdate(CameraSourceUpdate):
 
 
 @router.get("")
-async def list_cameras(request: Request):
+async def list_cameras(request: Request, _=Depends(current_user)):
     runtime = request.app.state.local_runtime
     cameras = camera_service.list_cameras(runtime.camera, runtime.vision, runtime.frame_hub)
     return {"items": cameras, "total": len(cameras)}
 
 
 @router.get("/{camera_id}")
-async def get_camera(camera_id: str, request: Request):
+async def get_camera(camera_id: str, request: Request, _=Depends(current_user)):
     try:
         runtime = request.app.state.local_runtime
         return camera_service.get_camera(camera_id, runtime.camera, runtime.vision, runtime.frame_hub)
@@ -36,7 +37,7 @@ async def get_camera(camera_id: str, request: Request):
 
 
 @router.patch("/{camera_id}/source")
-async def update_camera_source(camera_id: str, source: CameraSourceUpdate, request: Request):
+async def update_camera_source(camera_id: str, source: CameraSourceUpdate, request: Request, _=Depends(require_permission("manage_cameras"))):
     try:
         camera_service.update_source(camera_id, source.source_kind, source.source_uri, source.playback_path)
         request.app.state.local_runtime.restart_camera_if_enabled(camera_id)
@@ -49,7 +50,7 @@ async def update_camera_source(camera_id: str, source: CameraSourceUpdate, reque
 
 
 @router.patch("/{camera_id}")
-async def update_camera(camera_id: str, data: CameraUpdate, request: Request):
+async def update_camera(camera_id: str, data: CameraUpdate, request: Request, _=Depends(require_permission("manage_cameras"))):
     runtime = request.app.state.local_runtime
     try:
         old_public_id = camera_service.public_id(camera_id)
@@ -79,7 +80,7 @@ async def update_camera(camera_id: str, data: CameraUpdate, request: Request):
 
 
 @router.delete("/{camera_id}", status_code=204)
-async def delete_camera(camera_id: str, request: Request):
+async def delete_camera(camera_id: str, request: Request, _=Depends(require_permission("manage_cameras"))):
     runtime = request.app.state.local_runtime
     try:
         public_id = camera_service.public_id(camera_id)
@@ -98,7 +99,7 @@ async def delete_camera(camera_id: str, request: Request):
 
 
 @router.post("/{camera_id}/start", status_code=202)
-async def start_camera(camera_id: str, request: Request, loop_video: bool = True):
+async def start_camera(camera_id: str, request: Request, loop_video: bool = True, _=Depends(require_permission("manage_cameras"))):
     try:
         camera_service.set_camera_enabled(camera_id, True)
         return request.app.state.local_runtime.start_persisted_camera(camera_id, loop_video)
@@ -111,7 +112,7 @@ async def start_camera(camera_id: str, request: Request, loop_video: bool = True
 
 
 @router.post("/{camera_id}/stop")
-async def stop_camera(camera_id: str, request: Request):
+async def stop_camera(camera_id: str, request: Request, _=Depends(require_permission("manage_cameras"))):
     try:
         return request.app.state.local_runtime.set_camera_enabled(camera_id, False)
     except CameraNotFoundError as exc:
@@ -119,7 +120,7 @@ async def stop_camera(camera_id: str, request: Request):
 
 
 @router.post("/{camera_id}/vision/enable")
-async def enable_camera_vision(camera_id: str, request: Request):
+async def enable_camera_vision(camera_id: str, request: Request, _=Depends(require_permission("manage_cameras"))):
     try:
         public_id = camera_service.public_id(camera_id)
     except CameraNotFoundError as exc:
@@ -128,7 +129,7 @@ async def enable_camera_vision(camera_id: str, request: Request):
 
 
 @router.post("/{camera_id}/vision/disable")
-async def disable_camera_vision(camera_id: str, request: Request):
+async def disable_camera_vision(camera_id: str, request: Request, _=Depends(require_permission("manage_cameras"))):
     try:
         public_id = camera_service.public_id(camera_id)
     except CameraNotFoundError as exc:

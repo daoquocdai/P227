@@ -2,7 +2,8 @@ import base64
 import binascii
 from datetime import date
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from src.api.auth import current_user, require_permission
 from pydantic import BaseModel, Field
 
 from src.services.face_identity_service import FaceEnrollmentError
@@ -33,17 +34,19 @@ class FaceCreate(BaseModel):
 
 
 @router.get("")
-async def list_people():
+async def list_people(_=Depends(current_user)):
     return {"items": person_service.list_people()}
 
 
 @router.post("", status_code=201)
-async def create_person(person: PersonCreate):
+async def create_person(person: PersonCreate, _=Depends(require_permission("manage_persons"))):
     return person_service.create_person(person)
 
 
 @router.patch("/{person_id}")
-async def update_person(person_id: str, person: PersonUpdate):
+async def update_person(person_id: str, person: PersonUpdate, user=Depends(require_permission("manage_persons"))):
+    if person.active is False and user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Chỉ quản trị viên được vô hiệu hóa người thân")
     try:
         return person_service.update_person(person_id, person)
     except PersonNotFoundError as exc:
@@ -51,7 +54,7 @@ async def update_person(person_id: str, person: PersonUpdate):
 
 
 @router.post("/{person_id}/faces", status_code=201)
-async def add_face(person_id: str, face: FaceCreate):
+async def add_face(person_id: str, face: FaceCreate, _=Depends(require_permission("manage_persons"))):
     try:
         header, separator, payload = face.image_data_url.partition(",")
         if separator != "," or not header.startswith("data:image/") or ";base64" not in header:
@@ -65,7 +68,7 @@ async def add_face(person_id: str, face: FaceCreate):
 
 
 @router.delete("/{person_id}/faces/{face_id}", status_code=200)
-async def delete_face(person_id: str, face_id: str):
+async def delete_face(person_id: str, face_id: str, _=Depends(require_permission("manage_persons"))):
     try:
         return person_service.delete_face(person_id, face_id)
     except (PersonNotFoundError, FaceProfileNotFoundError) as exc:

@@ -8,6 +8,8 @@ CREATE TABLE users (
     display_name TEXT NOT NULL CHECK (length(trim(display_name)) > 0),
     role TEXT NOT NULL CHECK (role IN ('admin', 'caregiver')),
     is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+    password_hash TEXT,
+    force_password_change INTEGER NOT NULL DEFAULT 0 CHECK (force_password_change IN (0, 1)),
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );

@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from src.api.alerts import router as alerts_router
+from src.api.auth import router as auth_router
 from src.api.camera_stream import router as camera_stream_router
 from src.api.cameras import router as cameras_router
 from src.api.history import router as history_router
@@ -75,6 +76,7 @@ os.makedirs(SNAPSHOT_DIR, exist_ok=True)
 app.mount("/snapshots", StaticFiles(directory=SNAPSHOT_DIR), name="snapshots")
 
 app.include_router(api_router, prefix="/api/v1")
+app.include_router(auth_router, prefix="/api/v1")
 app.include_router(alerts_router, prefix="/api/v1")
 app.include_router(cameras_router, prefix="/api/v1")
 app.include_router(camera_stream_router, prefix="/api/v1")

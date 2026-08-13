@@ -1,10 +1,11 @@
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from src.services.camera_service import CameraNotFoundError
 from src.services.settings_service import SettingsConflictError, SettingsNotFoundError, settings_service
+from src.api.auth import current_user, require_admin, require_permission
 
 router = APIRouter(prefix="/settings", tags=["Settings"])
 
@@ -32,7 +33,8 @@ class NotificationUpdate(BaseModel):
 class UserCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255, pattern=r".*\S.*")
     email: str = Field(min_length=4, max_length=255)
-    role: Literal["admin", "caregiver"] = "caregiver"
+    password: str = Field(min_length=8, max_length=128)
+    role: Literal["caregiver"] = "caregiver"
 
 
 class UserStatusUpdate(BaseModel):
@@ -49,23 +51,23 @@ class CameraStatusUpdate(BaseModel):
 
 
 @router.get("")
-async def get_settings(request: Request):
+async def get_settings(request: Request, user: dict = Depends(current_user)):
     runtime = request.app.state.local_runtime
     return settings_service.get(runtime.camera, runtime.vision)
 
 
 @router.patch("/general")
-async def update_general(data: GeneralUpdate):
+async def update_general(data: GeneralUpdate, _=Depends(require_permission("manage_cameras"))):
     return settings_service.update_group("general", data.model_dump(exclude_none=True))
 
 
 @router.patch("/notifications")
-async def update_notifications(data: NotificationUpdate):
+async def update_notifications(data: NotificationUpdate, _=Depends(current_user)):
     return settings_service.update_group("notifications", data.model_dump(exclude_none=True))
 
 
 @router.post("/users", status_code=201)
-async def create_user(data: UserCreate):
+async def create_user(data: UserCreate, _=Depends(require_admin)):
     try:
         return settings_service.create_user(data)
     except SettingsConflictError as exc:
@@ -73,7 +75,7 @@ async def create_user(data: UserCreate):
 
 
 @router.patch("/users/{user_id}")
-async def update_user(user_id: str, data: UserStatusUpdate):
+async def update_user(user_id: str, data: UserStatusUpdate, _=Depends(require_admin)):
     try:
         return settings_service.update_user(user_id, data.active)
     except SettingsNotFoundError as exc:
@@ -83,7 +85,7 @@ async def update_user(user_id: str, data: UserStatusUpdate):
 
 
 @router.patch("/users/{user_id}/permissions/{permission}")
-async def update_permission(user_id: str, permission: str, data: PermissionUpdate):
+async def update_permission(user_id: str, permission: str, data: PermissionUpdate, _=Depends(require_admin)):
     try:
         return settings_service.update_permission(user_id, permission, data.granted)
     except SettingsNotFoundError as exc:
@@ -93,7 +95,7 @@ async def update_permission(user_id: str, permission: str, data: PermissionUpdat
 
 
 @router.patch("/cameras/{camera_id}")
-async def update_camera(camera_id: str, data: CameraStatusUpdate, request: Request):
+async def update_camera(camera_id: str, data: CameraStatusUpdate, request: Request, _=Depends(require_permission("manage_cameras"))):
     try:
         runtime = request.app.state.local_runtime
         if data.active is not None:

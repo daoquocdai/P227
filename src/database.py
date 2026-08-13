@@ -1,3 +1,5 @@
+import hashlib
+import os
 import sqlite3
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
@@ -64,6 +66,11 @@ def _apply_runtime_migrations(connection: sqlite3.Connection) -> None:
         connection.execute(
             "ALTER TABLE cameras ADD COLUMN vision_enabled INTEGER NOT NULL DEFAULT 1 CHECK (vision_enabled IN (0, 1))"
         )
+    user_columns = {row[1] for row in connection.execute("PRAGMA table_info(users)").fetchall()}
+    if "password_hash" not in user_columns:
+        connection.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
+    if "force_password_change" not in user_columns:
+        connection.execute("ALTER TABLE users ADD COLUMN force_password_change INTEGER NOT NULL DEFAULT 0")
     connection.execute(
         """INSERT OR IGNORE INTO system_settings (setting_key, value_json) VALUES
            ('general', '{"retention_days":30,"stranger_threshold":78,"fall_threshold":72,"sensitive_enabled":true,"sensitive_from":"22:00","sensitive_to":"06:00"}'),
@@ -73,6 +80,11 @@ def _apply_runtime_migrations(connection: sqlite3.Connection) -> None:
         """INSERT OR IGNORE INTO users (id, email, display_name, role, is_active)
            VALUES ('11111111-1111-4111-8111-111111111111', 'admin@example.local', 'Quản trị viên', 'admin', 1)"""
     )
+    admin_password = os.getenv("ANTAM_INITIAL_ADMIN_PASSWORD", "AnTam@123")
+    salt = os.urandom(16)
+    digest = hashlib.pbkdf2_hmac("sha256", admin_password.encode(), salt, 210_000)
+    encoded = f"pbkdf2_sha256$210000${salt.hex()}${digest.hex()}"
+    connection.execute("UPDATE users SET password_hash=? WHERE role='admin' AND password_hash IS NULL", (encoded,))
     demo_videos = ("videos/45353-448489443_medium.mp4", "videos/76621-559757958.mp4")
     cameras = connection.execute(
         "SELECT id, source_type, source_reference FROM cameras ORDER BY created_at, id"

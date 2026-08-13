@@ -107,6 +107,7 @@ Ghi chú:
 
 ## Tài nguyên model
 
+
 V1 yêu cầu:
 
 ```text
@@ -151,6 +152,31 @@ Truy cập:
 - Dashboard: <http://localhost:5173>
 - Swagger API: <http://127.0.0.1:8000/docs>
 - Health check: <http://127.0.0.1:8000/health>
+
+### Hướng dẫn đăng nhập
+
+Sau khi backend và frontend đã khởi động, mở <http://localhost:5173> và đăng nhập bằng tài khoản quản trị viên mặc định:
+
+| Thông tin | Giá trị |
+|---|---|
+| Tên tài khoản/Email | `admin@example.local` |
+| Mật khẩu mặc định | `AnTam@123` |
+| Vai trò | Admin |
+
+Các bước đăng nhập:
+
+1. Nhập `admin@example.local` vào ô **Tên đăng nhập hoặc Email**.
+2. Nhập mật khẩu `AnTam@123`.
+3. Nhấn **Đăng nhập**.
+4. Sau khi vào hệ thống, admin có thể mở **Cài đặt → Quản lý người dùng** để tạo tài khoản caregiver.
+
+Có thể thay mật khẩu admin khởi tạo bằng biến môi trường sau trước lần đầu tạo database:
+
+```dotenv
+ANTAM_INITIAL_ADMIN_PASSWORD=mat-khau-an-toan-cua-ban
+```
+
+> Không sử dụng mật khẩu mặc định khi triển khai thực tế. Nếu `data/app.db` đã được khởi tạo, việc đổi biến môi trường không tự thay đổi mật khẩu đang lưu trong database.
 
 Vite tự proxy `/api` và `/snapshots` sang backend port 8000. Nếu thấy `ECONNREFUSED`, backend chưa chạy hoặc đang chạy sai port. Nếu Uvicorn báo `Errno 10048`, port 8000 đã có tiến trình khác sử dụng.
 

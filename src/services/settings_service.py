@@ -76,18 +76,22 @@ class SettingsService:
         return self.get()[group]
 
     def create_user(self, data) -> dict[str, Any]:
+        from src.services.auth_service import hash_password
         user_id = str(uuid4())
+        temporary_password = data.password
         try:
             with database_connection() as connection:
                 connection.execute(
-                    "INSERT INTO users (id, email, display_name, role) VALUES (?, ?, ?, ?)",
-                    (user_id, data.email.strip(), data.name.strip(), data.role),
+                    "INSERT INTO users (id, email, display_name, role, password_hash, force_password_change) VALUES (?, ?, ?, 'caregiver', ?, 1)",
+                    (user_id, data.email.strip(), data.name.strip(), hash_password(temporary_password)),
                 )
         except Exception as exc:
             if "UNIQUE" in str(exc):
                 raise SettingsConflictError(data.email) from exc
             raise
-        return next(user for user in self.get()["users"] if user["id"] == user_id)
+        result = next(user for user in self.get()["users"] if user["id"] == user_id)
+        result["temporary_password"] = temporary_password
+        return result
 
     def update_user(self, user_id: str, active: bool) -> dict[str, Any]:
         with database_connection() as connection:

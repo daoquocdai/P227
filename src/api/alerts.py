@@ -1,6 +1,8 @@
 import json
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from src.api.auth import current_user
+from src.services.auth_service import auth_service
 from fastapi.responses import StreamingResponse
 
 from src.models.schemas import AlertResponse, AlertReviewRequest
@@ -11,7 +13,7 @@ router = APIRouter(prefix="/alerts", tags=["Alerts"])
 
 
 @router.get("", response_model=list[AlertResponse])
-async def get_alerts():
+async def get_alerts(_=Depends(current_user)):
     """Danh sách cảnh báo cho dashboard, mới nhất trước."""
     return await event_service.list_alerts()
 
@@ -34,7 +36,7 @@ async def stream_alerts():
 
 
 @router.get("/{alert_id}", response_model=AlertResponse)
-async def get_alert(alert_id: str):
+async def get_alert(alert_id: str, _=Depends(current_user)):
     try:
         return await event_service.get_alert(alert_id)
     except EventNotFoundError as exc:
@@ -42,8 +44,11 @@ async def get_alert(alert_id: str):
 
 
 @router.patch("/{alert_id}", response_model=AlertResponse)
-async def review_alert(alert_id: str, review: AlertReviewRequest):
+async def review_alert(alert_id: str, review: AlertReviewRequest, user=Depends(current_user)):
     """Cập nhật trạng thái Human-in-the-loop từ dashboard."""
+    required = "resolve_alert" if getattr(review, "status", None) in {"resolved", "dismissed"} else "acknowledge_alert"
+    if not auth_service.allowed(user, required):
+        raise HTTPException(403, "Bạn không có quyền thực hiện thao tác này")
     try:
         return await event_service.review(alert_id, review)
     except EventNotFoundError as exc:
@@ -51,7 +56,7 @@ async def review_alert(alert_id: str, review: AlertReviewRequest):
 
 
 @router.post("/{alert_id}/read", response_model=AlertResponse)
-async def mark_alert_read(alert_id: str):
+async def mark_alert_read(alert_id: str, _=Depends(current_user)):
     try:
         return await event_service.mark_read(alert_id)
     except EventNotFoundError as exc:
