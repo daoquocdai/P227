@@ -5,6 +5,10 @@ from pathlib import Path
 
 from src.config import get_settings
 
+BUILTIN_LAPTOP_CAMERA_ID = "8d691d84-8c3e-4b8f-96ee-2ef832c49e51"
+BUILTIN_VIDEO_CAMERA_ID = "73da9967-26fc-4ed0-b049-bbd901453c8a"
+DEFAULT_VIDEO_SOURCE = "videos/kich_ban3.mp4"
+
 
 def sqlite_path() -> Path:
     url = get_settings().database_url
@@ -28,8 +32,55 @@ def initialize_database() -> Path:
         if not exists:
             connection.executescript(schema_path.read_text(encoding="utf-8"))
         _apply_runtime_migrations(connection)
+        ensure_builtin_cameras(connection)
         connection.commit()
     return path
+
+
+def ensure_builtin_cameras(connection: sqlite3.Connection) -> None:
+    """Create missing built-in cameras without resetting existing records."""
+    defaults = (
+        (
+            BUILTIN_LAPTOP_CAMERA_ID,
+            "Laptop Camera",
+            "webcam",
+            "0",
+            "Laptop",
+            "webcam",
+            "0",
+            None,
+        ),
+        (
+            BUILTIN_VIDEO_CAMERA_ID,
+            "Video Camera",
+            "video_file",
+            DEFAULT_VIDEO_SOURCE,
+            "Video",
+            "video_file",
+            DEFAULT_VIDEO_SOURCE,
+            DEFAULT_VIDEO_SOURCE,
+        ),
+    )
+    for camera_id, name, source_type, source_reference, location, source_kind, source_uri, playback_path in defaults:
+        existing = connection.execute(
+            "SELECT id FROM cameras WHERE id = ? OR name = ? LIMIT 1",
+            (camera_id, name),
+        ).fetchone()
+        if existing is not None:
+            continue
+        connection.execute(
+            """INSERT INTO cameras
+               (id, name, source_type, source_reference, location_label,
+                operational_status, is_active, vision_enabled)
+               VALUES (?, ?, ?, ?, ?, 'offline', 0, 1)""",
+            (camera_id, name, source_type, source_reference, location),
+        )
+        connection.execute(
+            """INSERT INTO camera_sources
+               (camera_id, source_kind, source_uri, playback_path)
+               VALUES (?, ?, ?, ?)""",
+            (camera_id, source_kind, source_uri, playback_path),
+        )
 
 
 def _apply_runtime_migrations(connection: sqlite3.Connection) -> None:

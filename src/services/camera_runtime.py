@@ -27,6 +27,8 @@ class CameraRuntimeState:
 
     error: str | None = None
     capture_fps: float = 0.0
+    source_frames_read: int = 0
+    frames_published: int = 0
 
     def to_dict(self):
         state = asdict(self)
@@ -43,9 +45,11 @@ class CameraRuntime:
         frame_hub: FrameHub,
         reconnect_delay: float = 1.0,
         vision_sample_buffer=None,
+        vision_processor=None,
     ):
         self.frame_hub = frame_hub
         self.vision_sample_buffer = vision_sample_buffer
+        self.vision_processor = vision_processor
 
         self.reconnect_delay = reconnect_delay
 
@@ -223,6 +227,8 @@ class CameraRuntime:
 
         frame_id = -1
         source_epoch = -1
+        source_frames_read = 0
+        frames_published = 0
 
         is_file = self._is_file(source)
 
@@ -273,7 +279,7 @@ class CameraRuntime:
                 else 0
             )
 
-            next_frame_at = time.monotonic()
+            playback_start = time.monotonic()
 
             try:
 
@@ -292,9 +298,7 @@ class CameraRuntime:
                                     0
                                 )
 
-                                next_frame_at = (
-                                    time.monotonic()
-                                )
+                                playback_start = time.monotonic()
 
                                 source_epoch += 1
                                 frame_in_epoch = -1
@@ -316,25 +320,26 @@ class CameraRuntime:
 
                         break
 
+                    frame_id += 1
+                    frame_in_epoch += 1
+                    source_frames_read += 1
+
                     if is_file:
 
                         now = time.monotonic()
 
-                        wait_time = (
-                            next_frame_at - now
-                        )
+                        source_position = frame_in_epoch * frame_interval
+                        wait_time = playback_start + source_position - now
 
                         if wait_time > 0:
                             stop_event.wait(
                                 wait_time
                             )
 
-                        next_frame_at += (
-                            frame_interval
-                        )
-
-                    frame_id += 1
-                    frame_in_epoch += 1
+                        # Do not publish a stale decoded frame merely to catch
+                        # up; the next loop reads toward the current position.
+                        if wait_time < -frame_interval:
+                            continue
 
                     captured_at = time.time()
                     capture_times = self._capture_times.setdefault(camera_id, deque(maxlen=60))
@@ -355,10 +360,14 @@ class CameraRuntime:
                         source_timestamp=source_timestamp,
                         source_time_kind=("media_timeline" if is_file else "monotonic_arrival"),
                         source_epoch=source_epoch,
+                        source_frame_index=frame_in_epoch,
                         discontinuity=frame_in_epoch == 0,
                     )
 
                     self.frame_hub.publish(packet)
+                    frames_published += 1
+                    if self.vision_processor is not None:
+                        self.vision_processor(packet)
                     if self.vision_sample_buffer is not None:
                         self.vision_sample_buffer.offer(packet)
 
@@ -369,6 +378,8 @@ class CameraRuntime:
                         last_frame_at=captured_at,
                         error=None,
                         capture_fps=capture_fps,
+                        source_frames_read=source_frames_read,
+                        frames_published=frames_published,
                     )
 
             except Exception as exc:

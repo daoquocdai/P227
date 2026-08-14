@@ -1,16 +1,21 @@
 # GuardianCam Vision runtime
 
 Production enters this package through `src.runtime.LocalRuntime` and the
-single `CanonicalVisionPipeline` in `pipeline.py`. `mock` remains test-only.
+single `RuntimeV2VisionPipeline` in `pipeline.py`. `mock` remains test-only.
 
 `visionv2/` at repository root is the standalone oracle. Production never
 imports it; `tools/compare_vision_reference.py` is the explicit comparison
 boundary. Enabled cameras use ordered per-camera workers while immutable model
-state is shared.
+state is shared. The production pipeline is a local, integration-safe
+adaptation of that immutable runtime; it does not import either standalone
+reference tree at runtime.
 
 The canonical pipeline preserves verified VisionV2 behavior: YOLO person
-tracking, MediaPipe pose, a source-time two-second window resampled to 64 joint
-frames, five-class SDA-GCN inference, and class `1` as the fall candidate.
+tracking, MediaPipe pose, the runtimev2 wall-clock two-second window resampled
+to 64 joint frames, five-class SDA-GCN inference, and class `1` as the fall
+candidate. It runs synchronously in the sole camera capture loop, before the
+raw frame is published for streaming; no production sampler, worker queue, or
+frame-dropping layer sits in front of Vision.
 
 Required inference artifacts:
 

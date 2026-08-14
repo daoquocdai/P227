@@ -234,21 +234,28 @@ class SQLiteEventRepository:
         mime_type = mimetypes.types_map.get(suffix)
         if mime_type not in {"image/jpeg", "image/png", "image/webp"}:
             return
-        subject = "fall" if event.event_type.startswith("FALL_") else "scene"
+        unknown = event.event_type == "UNKNOWN_PERSON"
+        privacy_blurred = bool(event.metadata.get("snapshot_blurred", False))
+        subject = "fall" if event.event_type.startswith("FALL_") else "unknown_person" if unknown else "scene"
         captured = event.occurred_at.astimezone(UTC)
+        settings_row = connection.execute(
+            "SELECT value_json FROM system_settings WHERE setting_key = 'general'"
+        ).fetchone()
+        retention_days = int(json.loads(settings_row["value_json"]).get("retention_days", 30))
         connection.execute(
             """INSERT INTO media_assets
                (id, event_id, media_type, subject_type, relative_path, mime_type,
                 is_blurred, captured_at, retention_until)
-               VALUES (?, ?, 'snapshot', ?, ?, ?, 0, ?, ?)""",
+               VALUES (?, ?, 'snapshot', ?, ?, ?, ?, ?, ?)""",
             (
                 str(uuid4()),
                 event_id,
                 subject,
                 snapshot_name,
                 mime_type,
+                int(privacy_blurred),
                 captured.isoformat(),
-                (captured + timedelta(days=30)).isoformat(),
+                (captured + timedelta(days=retention_days)).isoformat(),
             ),
         )
 

@@ -177,6 +177,8 @@ def packet(camera_id, frame_id, *, source_timestamp=None, source_epoch=0, discon
 def process_range(engine, session, start, end):
     results = []
     for frame_id in range(start, end + 1):
+        if isinstance(engine._clock, FakeClock):
+            engine._clock.value = frame_id / 30.0
         results.append(engine.process(packet(session.camera_id, frame_id), session))
     return results
 
@@ -311,25 +313,27 @@ def test_confirmation_emits_exactly_one_stable_event_then_new_episode_after_reco
     assert session.state.get("vision_incident_id") is None
 
     skipped = engine.process(packet("cam01", 128, source_timestamp=6.3), session)
-    engine.process(packet("cam01", 129), session)
-    repeated = engine.process(packet("cam01", 130), session)
-    repeated = engine.process(packet("cam01", 131), session)
+    confirmed = engine.process(packet("cam01", 129, source_timestamp=6.4), session)
+    repeated = engine.process(packet("cam01", 130, source_timestamp=6.5), session)
+    repeated = engine.process(packet("cam01", 131, source_timestamp=6.6), session)
 
-    assert len(skipped.events) == 1
-    event = skipped.events[0]
+    assert skipped.events == []
+    assert len(confirmed.events) == 1
+    event = confirmed.events[0]
     assert event.type == "fall_confirmed"
     assert event.metadata["incident_id"] == "incident-1"
     assert event.metadata["event_id"] == "incident-1:fall_confirmed"
     assert repeated.events == []
 
     engine._contexts["cam01"].pose.keypoints = np.full((25, 3), 0.8, dtype=np.float32)
-    engine.process(packet("cam01", 132, source_timestamp=6.4), session)
-    engine.process(packet("cam01", 133, source_timestamp=6.5), session)
+    engine.process(packet("cam01", 132, source_timestamp=6.7), session)
+    engine.process(packet("cam01", 133, source_timestamp=6.8), session)
     assert session.state.get("vision_incident_id") is None
 
     engine._action_model.classes = [1] * 10
     second_events = []
     for frame_id in range(134, 301):
+        engine._clock.value = 8.0 + (frame_id - 134) / 30.0
         result = engine.process(
             packet(
                 "cam01",
@@ -345,31 +349,19 @@ def test_confirmation_emits_exactly_one_stable_event_then_new_episode_after_reco
 
 
 def test_fall_transition_depends_on_source_time_not_processing_clock(tmp_path):
-    transitions = []
-    for processing_clock in (FakeClock(), FakeClock()):
-        processing_clock.value = 0.0 if not transitions else 10_000.0
-        engine, _ = make_engine(tmp_path, classes=[1], clock=processing_clock)
-        session = VisionSession(f"cam-{len(transitions)}")
-        pending = process_range(engine, session, 1, 127)[-1]
-        processing_clock.value += 50_000.0
-        before = engine.process(packet(session.camera_id, 128, source_timestamp=5.0), session)
-        confirmed = engine.process(packet(session.camera_id, 129, source_timestamp=5.2), session)
-        transitions.append(
-            (
-                pending.metadata["fall_state"],
-                before.metadata["fall_state"],
-                confirmed.metadata["fall_state"],
-                [event.type for event in confirmed.events],
-            )
-        )
-
-    assert transitions == [
-            ("pending", "pending", "confirmed", ["fall_confirmed"]),
-            ("pending", "pending", "confirmed", ["fall_confirmed"]),
-    ]
+    clock = FakeClock()
+    engine, _ = make_engine(tmp_path, classes=[1], clock=clock)
+    session = VisionSession("cam")
+    process_range(engine, session, 1, 127)
+    clock.value = 50_000.0
+    skipped = engine.process(packet("cam", 128, source_timestamp=6.3), session)
+    clock.value = -50_000.0
+    confirmed = engine.process(packet("cam", 129, source_timestamp=6.4), session)
+    assert skipped.events == []
+    assert [event.type for event in confirmed.events] == ["fall_confirmed"]
 
 
-def test_source_discontinuity_clears_window_and_pending_incident(tmp_path):
+def test_source_discontinuity_resets_only_continuity_dependent_state(tmp_path):
     engine, _ = make_engine(tmp_path, classes=[1])
     session = VisionSession("cam01")
     pending = process_range(engine, session, 1, 127)[-1]
@@ -384,7 +376,9 @@ def test_source_discontinuity_clears_window_and_pending_incident(tmp_path):
     assert reset.metadata["source_epoch"] == 1
     assert reset.metadata["source_discontinuity"] is True
     assert reset.metadata["fall_state"] == "waiting"
-    assert reset.metadata["buffer_length"] == 1
+    assert reset.metadata["buffer_length"] == 0
+    assert session.state["vision_frame_count"] == 128
+    assert "vision_context_token" in session.state
     assert session.state.get("vision_incident_id") is None
 
 
@@ -437,13 +431,13 @@ def test_identity_disabled_does_not_emit_or_add_identity_metadata(tmp_path):
     assert engine._face_app is None
 
 
-def test_unknown_identity_emits_one_event_per_cooldown(tmp_path, monkeypatch):
+def test_unknown_identity_is_structured_metadata_not_an_extra_ai_event(tmp_path, monkeypatch):
     engine, _ = make_engine(tmp_path)
     engine.identity_enabled = True
     monkeypatch.setattr(
         engine,
         "_identity_metadata",
-        lambda _crop, _track_id, _state, _source_timestamp: {
+        lambda _crop, _track_id, _state, _source_timestamp, _frame_id: {
             "identity_status": "UNKNOWN",
             "identity_name": None,
             "identity_person_id": None,
@@ -458,10 +452,9 @@ def test_unknown_identity_emits_one_event_per_cooldown(tmp_path, monkeypatch):
     engine.process(packet("cam01", 4, source_timestamp=30.5), session)
     repeated = engine.process(packet("cam01", 5, source_timestamp=31.0), session)
 
-    assert [event.type for event in first.events] == ["unknown_person"]
-    assert first.events[0].confidence == pytest.approx(0.9)
+    assert first.events == []
     assert suppressed.events == []
-    assert [event.type for event in repeated.events] == ["unknown_person"]
+    assert repeated.events == []
 
 
 @pytest.mark.parametrize("missing_name", ["yolo.pt", "config.yaml", "checkpoint.pt"])
@@ -514,4 +507,25 @@ def test_release_camera_closes_only_requested_context(tmp_path):
     assert released_pose.closed is True
     assert retained_pose.closed is False
     assert set(engine._contexts) == {"cam02"}
+
+
+def test_source_discontinuity_preserves_identity_control_plane_and_resets_retry_state():
+    state = {
+        "vision_source_epoch": 4,
+        "vision_identity_enabled": True,
+        "vision_identity_generation": 9,
+        "vision_face_cache": {7: {"status": "PENDING"}},
+        "vision_pending_decisions": [{"is_fall": True}],
+    }
+    next_packet = packet("cam01", 1, source_timestamp=0.0)
+    next_packet.source_epoch = 5
+    next_packet.discontinuity = True
+
+    CanonicalVisionPipeline._prepare_source_epoch(state, next_packet)
+
+    assert state["vision_identity_enabled"] is True
+    assert state["vision_identity_generation"] == 9
+    assert state["vision_source_epoch"] == 5
+    assert "vision_face_cache" not in state
+    assert "vision_pending_decisions" not in state
 

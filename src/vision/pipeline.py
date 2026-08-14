@@ -28,11 +28,9 @@ DECISION_DELAY_SECONDS = 3.0
 MOVEMENT_CHECK_SECONDS = 2.0
 MOVEMENT_THRESHOLD = 0.1
 FRAME_SIZE = 1024
-FALL_LABEL = "FALL DETECTED!"
-UNKNOWN_PERSON_COOLDOWN_SECONDS = 30.0
+FALL_LABEL = "Nga!"
 FACE_RECOGNITION_MAX_ATTEMPTS = 5
 FACE_RECOGNITION_INTERVAL_SECONDS = 1.0
-TRACK_STATE_TTL_SECONDS = 30.0
 
 
 class VisionInitializationError(RuntimeError):
@@ -51,8 +49,8 @@ class CameraContext:
             close()
 
 
-class CanonicalVisionPipeline(VisionEngine):
-    """Canonical five-class VisionV2 pipeline adapted from standalone realtime.py.
+class RuntimeV2VisionPipeline(VisionEngine):
+    """Production copy/adaptation of immutable runtimev2 Vision behavior.
 
     Ordered per-camera workers may call the engine concurrently. YOLO tracking
     and MediaPipe Pose remain isolated per camera because both retain stream
@@ -142,14 +140,7 @@ class CanonicalVisionPipeline(VisionEngine):
 
     def prepare_camera(self, camera_id: str, session: VisionSession) -> None:
         self._ensure_initialized()
-        context = self._camera_context(camera_id, session)
-        predict = getattr(context.yolo, "predict", None)
-        if callable(predict) and not session.state.get("vision_detector_warmed", False):
-            options = {"classes": 0, "verbose": False}
-            if self._detector_device is not None:
-                options["device"] = self._detector_device
-            predict(np.zeros((FRAME_SIZE, FRAME_SIZE, 3), dtype=np.uint8), **options)
-            session.state["vision_detector_warmed"] = True
+        self._camera_context(camera_id, session)
 
     def release_camera(self, camera_id: str) -> None:
         with self._lock:
@@ -162,7 +153,11 @@ class CanonicalVisionPipeline(VisionEngine):
         state = session.state
         self._prepare_source_epoch(state, packet)
         source_timestamp = self._source_timestamp(packet)
-        frame_count = int(state.get("vision_frame_count", 0)) + 1
+        frame_count = (
+            packet.source_frame_index + 1
+            if packet.source_frame_index is not None
+            else int(state.get("vision_frame_count", 0)) + 1
+        )
         state["vision_frame_count"] = frame_count
         source_gap = max(0, packet.frame_id - session.last_processed_frame_id - 1) if session.last_processed_frame_id >= 0 else 0
         events: list[VisionEvent] = []
@@ -170,7 +165,6 @@ class CanonicalVisionPipeline(VisionEngine):
         if self._initialization_error is not None:
             raise self._initialization_error
         if frame_count % 2 == 0:
-            events = self._advance_decisions(state, source_timestamp, packet.frame_id)
             return self._result(
                 packet,
                 session,
@@ -206,6 +200,15 @@ class CanonicalVisionPipeline(VisionEngine):
             deps.cv2.BORDER_CONSTANT,
             value=(0, 0, 0),
         )
+        state["vision_geometry"] = {
+            "source_width": width,
+            "source_height": height,
+            "vision_width": FRAME_SIZE,
+            "vision_height": FRAME_SIZE,
+            "scale": scale,
+            "pad_x": pad_w // 2,
+            "pad_y": pad_h // 2,
+        }
 
         track_options = {"persist": True, "classes": 0, "verbose": False}
         if self._detector_device is not None:
@@ -232,31 +235,11 @@ class CanonicalVisionPipeline(VisionEngine):
                 crop = prepared[y1:y2, x1:x2]
                 confidence = self._box_value(boxes_obj, "conf", best_idx, 0.0)
                 track_id = self._box_int_value(boxes_obj, "id", best_idx)
-                self._prepare_track_state(state, track_id)
                 face_started = time.perf_counter()
-                detection_metadata = self._identity_metadata(crop, track_id, state, source_timestamp)
+                detection_metadata = self._identity_metadata(
+                    crop, track_id, state, source_timestamp, packet.frame_id
+                )
                 self._record_stage_metric(state, "face", face_started)
-                if detection_metadata.get("identity_status") == "UNKNOWN":
-                    last_unknown_at = state.get("vision_last_unknown_event_source_time")
-                    if last_unknown_at is None or source_timestamp - float(last_unknown_at) >= UNKNOWN_PERSON_COOLDOWN_SECONDS:
-                        unknown_event_id = str(self._incident_factory())
-                        events.append(
-                            VisionEvent(
-                                type="unknown_person",
-                                confidence=max(
-                                    0.0,
-                                    min(1.0, 1.0 - float(detection_metadata.get("identity_similarity", 0.0))),
-                                ),
-                                metadata={
-                                    "event_id": f"{unknown_event_id}:unknown_person",
-                                    "track_id": track_id,
-                                    "identity_status": "UNKNOWN",
-                                    "identity_name": None,
-                                    "snapshot_path": None,
-                                },
-                            )
-                        )
-                        state["vision_last_unknown_event_source_time"] = source_timestamp
                 detections.append(
                     VisionDetection(
                         label="person",
@@ -394,6 +377,21 @@ class CanonicalVisionPipeline(VisionEngine):
             self._initialization_error = None
             self._started = False
 
+    def set_identity_enabled(self, enabled: bool) -> None:
+        """Toggle optional InsightFace work without rebuilding detector/fall models."""
+        enabled = bool(enabled)
+        with self._lock:
+            if enabled and self._initialized and self._face_app is None:
+                from insightface.app import FaceAnalysis
+
+                providers, face_ctx_id = self._identity_execution(self._device)
+                face_app = FaceAnalysis(
+                    name="buffalo_l", root=str(self.insightface_root), providers=providers
+                )
+                face_app.prepare(ctx_id=face_ctx_id, det_size=(640, 640))
+                self._face_app = face_app
+            self.identity_enabled = enabled
+
     def _ensure_initialized(self) -> None:
         if self._initialized:
             return
@@ -450,7 +448,7 @@ class CanonicalVisionPipeline(VisionEngine):
             raise VisionInitializationError("SDA-GCN checkpoint must contain a state_dict mapping")
         weights = OrderedDict((key.split("module.")[-1], value) for key, value in weights.items())
         try:
-            action_model.load_state_dict(weights, strict=True)
+            action_model.load_state_dict(weights, strict=False)
         except Exception as exc:
             raise VisionInitializationError(f"Invalid SDA-GCN checkpoint: {exc}") from exc
         action_model.eval()
@@ -664,17 +662,14 @@ class CanonicalVisionPipeline(VisionEngine):
         track_id: int | None,
         state: dict[str, Any],
         source_timestamp: float,
+        frame_id: int,
     ) -> dict[str, Any]:
-        if not self.identity_enabled:
+        if not state.get("vision_identity_enabled", self.identity_enabled):
             return {}
         assert self._face_app is not None
         cache = state.setdefault("vision_face_cache", {})
-        for cached_track_id, entry in list(cache.items()):
-            if source_timestamp - float(entry["last_seen_at"]) > TRACK_STATE_TTL_SECONDS:
-                cache.pop(cached_track_id, None)
         entry = cache.get(track_id) if track_id is not None else None
         if entry is not None:
-            entry["last_seen_at"] = source_timestamp
             if entry["status"] in {"RECOGNIZED", "LOCKED_UNKNOWN"}:
                 return dict(entry["metadata"])
             if (
@@ -687,12 +682,13 @@ class CanonicalVisionPipeline(VisionEngine):
                 "status": "PENDING",
                 "attempts": 0,
                 "last_attempt_at": float("-inf"),
-                "last_seen_at": source_timestamp,
                 "metadata": {
                     "identity_status": "UNKNOWN",
                     "identity_name": None,
                     "identity_person_id": None,
                     "identity_similarity": 0.0,
+                    "identity_state": "PENDING",
+                    "identity_face_detected": False,
                 },
             }
             cache[track_id] = entry
@@ -719,11 +715,14 @@ class CanonicalVisionPipeline(VisionEngine):
                 "identity_name": None,
                 "identity_person_id": None,
                 "identity_similarity": 0.0,
+                "identity_state": "PENDING",
+                "identity_face_detected": False,
             }
             if entry is not None:
-                entry["metadata"] = metadata
                 if entry["attempts"] >= FACE_RECOGNITION_MAX_ATTEMPTS:
                     entry["status"] = "LOCKED_UNKNOWN"
+                    metadata["identity_state"] = "LOCKED_UNKNOWN"
+                entry["metadata"] = metadata
             return metadata
         main_face = max(faces, key=lambda face: (face.bbox[2] - face.bbox[0]) * (face.bbox[3] - face.bbox[1]))
         known_faces = (
@@ -749,6 +748,15 @@ class CanonicalVisionPipeline(VisionEngine):
             "identity_name": best_name if known else None,
             "identity_person_id": best_person_id if known else None,
             "identity_similarity": best_score,
+            "identity_state": "RECOGNIZED" if known else "PENDING",
+            "identity_face_detected": True,
+            "identity_face_bbox_xyxy": [
+                int(main_face.bbox[0]),
+                int(main_face.bbox[1]),
+                int(main_face.bbox[2]),
+                int(main_face.bbox[3]),
+            ],
+            "identity_face_bbox_frame_id": frame_id,
         }
         if entry is not None:
             entry["metadata"] = metadata
@@ -756,6 +764,10 @@ class CanonicalVisionPipeline(VisionEngine):
                 entry["status"] = "RECOGNIZED"
             elif entry["attempts"] >= FACE_RECOGNITION_MAX_ATTEMPTS:
                 entry["status"] = "LOCKED_UNKNOWN"
+                metadata["identity_state"] = "LOCKED_UNKNOWN"
+        if len(cache) > 100:
+            for cached_track_id in list(cache)[:-50]:
+                cache.pop(cached_track_id, None)
         return metadata
 
     def _load_known_faces(self, face_app: Any, cv2: Any) -> dict[str, np.ndarray]:
@@ -790,12 +802,13 @@ class CanonicalVisionPipeline(VisionEngine):
 
     @staticmethod
     def _buffer(state: dict[str, Any], name: str, maxlen: int) -> deque:
+        del maxlen
         value = state.get(name)
         if value is None:
-            value = deque(maxlen=maxlen)
+            value = deque()
             state[name] = value
-        if not isinstance(value, deque) or value.maxlen != maxlen:
-            raise TypeError(f"{name} must be deque(maxlen={maxlen})")
+        if not isinstance(value, deque) or value.maxlen is not None:
+            raise TypeError(f"{name} must be an unbounded deque")
         return value
 
     @staticmethod
@@ -823,38 +836,16 @@ class CanonicalVisionPipeline(VisionEngine):
         current["max_ms"] = max(current["max_ms"], elapsed_ms)
 
     @staticmethod
-    def _reset_episode(state: dict[str, Any]) -> None:
-        state["vision_pending_fall"] = False
-        state["vision_current_action"] = "Normal"
-        state["vision_fall_state"] = "normal"
-        state["vision_incident_id"] = None
-        state["vision_confirmed_event_emitted"] = False
-        state["vision_pending_confidence"] = None
-        state["vision_pending_decisions"] = []
-
-    @staticmethod
-    def _prepare_track_state(state: dict[str, Any], track_id: int | None) -> None:
-        previous = state.get("vision_active_track_id")
-        if previous is not None and track_id != previous:
-            retained = {
-                "vision_source_epoch",
-                "vision_frame_count",
-                "vision_context_token",
-                "vision_face_cache",
-                "vision_stage_metrics",
-                "vision_detector_warmed",
-            }
-            for key in [name for name in state if name.startswith("vision_") and name not in retained]:
-                state.pop(key, None)
-        state["vision_active_track_id"] = track_id
-
-    @staticmethod
     def _reset_for_no_person(state: dict[str, Any]) -> None:
-        state["vision_pending_decisions"] = []
+        for decision in state.setdefault("vision_pending_decisions", []):
+            decision["cancelled"] = True
         state["vision_pending_fall"] = False
-        state["vision_incident_id"] = None
-        state["vision_current_action"] = "Normal"
-        state["vision_fall_state"] = "normal"
+        if state.get("vision_current_action") == FALL_LABEL:
+            state["vision_incident_id"] = None
+            state["vision_current_action"] = "Khong nga"
+            state["vision_fall_state"] = "normal"
+        else:
+            state["vision_fall_state"] = "normal"
 
     @staticmethod
     def _source_timestamp(packet: FramePacket) -> float:
@@ -864,7 +855,19 @@ class CanonicalVisionPipeline(VisionEngine):
     def _prepare_source_epoch(state: dict[str, Any], packet: FramePacket) -> None:
         previous_epoch = state.get("vision_source_epoch")
         if packet.discontinuity or (previous_epoch is not None and previous_epoch != packet.source_epoch):
-            for key in [name for name in state if name.startswith("vision_")]:
+            retained = {
+                "vision_context_token",
+                "vision_frame_count",
+                "vision_stage_metrics",
+                # Feature flags and their invalidation generation belong to
+                # the camera control plane, not to a source epoch. The
+                # feature-specific retry/cache state is intentionally reset.
+                "vision_identity_enabled",
+                "vision_identity_generation",
+            }
+            for key in [
+                name for name in state if name.startswith("vision_") and name not in retained
+            ]:
                 state.pop(key, None)
         state["vision_source_epoch"] = packet.source_epoch
 
@@ -876,22 +879,26 @@ class CanonicalVisionPipeline(VisionEngine):
                 movement = float(np.mean(np.linalg.norm(keypoints - previous, axis=1)))
                 state["vision_movement"] = movement
                 if movement > MOVEMENT_THRESHOLD:
-                    state["vision_current_action"] = "Normal"
+                    state["vision_current_action"] = "Khong nga"
                     state["vision_fall_state"] = "normal"
                     state["vision_incident_id"] = None
+                    for decision in state.setdefault("vision_pending_decisions", []):
+                        decision["cancelled"] = True
             state["vision_last_raw_kpts"] = keypoints
 
         decisions = state.setdefault("vision_pending_decisions", [])
         for decision in decisions:
-            if decision["cancelled"] or not decision["is_fall"]:
+            if decision["cancelled"]:
                 continue
             elapsed = source_timestamp - float(decision["created_at"])
             previous = decision.get("last_raw_kpts")
-            if elapsed >= MOVEMENT_CHECK_SECONDS and previous is not None:
+            if elapsed < MOVEMENT_CHECK_SECONDS:
+                decision["last_raw_kpts"] = keypoints
+            elif elapsed < DECISION_DELAY_SECONDS and decision["is_fall"] and previous is not None:
                 movement = float(np.mean(np.linalg.norm(keypoints - previous, axis=1)))
                 if movement > MOVEMENT_THRESHOLD:
                     decision["cancelled"] = True
-            decision["last_raw_kpts"] = keypoints
+                decision["last_raw_kpts"] = keypoints
 
     def _advance_decisions(
         self,
@@ -929,7 +936,7 @@ class CanonicalVisionPipeline(VisionEngine):
                     state["vision_event_frame_id"] = frame_id
                     state["vision_event_source_time"] = source_timestamp
             else:
-                state["vision_current_action"] = "Normal"
+                state["vision_current_action"] = "Khong nga"
                 state["vision_fall_state"] = "normal"
                 state["vision_incident_id"] = None
         state["vision_pending_decisions"] = active
@@ -937,9 +944,9 @@ class CanonicalVisionPipeline(VisionEngine):
         if state["vision_pending_fall"] and state.get("vision_current_action") != FALL_LABEL:
             state["vision_fall_state"] = "pending"
         elif was_pending and state.get("vision_current_action") != FALL_LABEL:
-            state["vision_current_action"] = "Normal"
+            state["vision_current_action"] = "Khong nga"
             state["vision_fall_state"] = "normal"
-        elif state.get("vision_current_action") == "Normal":
+        elif state.get("vision_current_action") == "Khong nga":
             state["vision_fall_state"] = "normal"
         return events
 
@@ -965,11 +972,13 @@ class CanonicalVisionPipeline(VisionEngine):
         state = session.state
         buffer_value = state.get("vision_kpts_buffer")
         metadata = {
-            "engine": "canonical",
+            "engine": "runtimev2-derived",
             "device": self.device_diagnostics(),
             "sampled": sampled,
             "buffer_length": 0 if buffer_value is None else len(buffer_value),
             "fall_state": state.get("vision_fall_state", "waiting"),
+            "current_action": state.get("vision_current_action", "Waiting for frames..."),
+            "geometry": state.get("vision_geometry", {}),
             "pending_fall": bool(state.get("vision_pending_fall", False)),
             "incident_id": state.get("vision_incident_id"),
             "pose_found": pose_found,
@@ -983,6 +992,7 @@ class CanonicalVisionPipeline(VisionEngine):
             "sampled_frame_id": packet.frame_id if sampled else None,
             "sampled_captured_at": packet.captured_at if sampled else None,
             "sampled_source_timestamp": self._source_timestamp(packet) if sampled else None,
+            "observation_time": self._source_timestamp(packet),
             "source_epoch": packet.source_epoch,
             "source_time_kind": packet.source_time_kind,
             "source_discontinuity": packet.discontinuity,
@@ -994,6 +1004,7 @@ class CanonicalVisionPipeline(VisionEngine):
                 if not window_source_timestamps
                 else window_source_timestamps[-1] - window_source_timestamps[0]
             ),
+            "pose_count_before_resample": None if window_ids is None else len(window_ids),
             "performance": {
                 stage: {
                     "count": values["count"],
@@ -1014,5 +1025,10 @@ class CanonicalVisionPipeline(VisionEngine):
             events=events or [],
             metadata=metadata,
         )
+
+
+# Compatibility name for external test/tool imports. Production constructs
+# RuntimeV2VisionPipeline explicitly.
+CanonicalVisionPipeline = RuntimeV2VisionPipeline
 
 

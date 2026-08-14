@@ -5,6 +5,8 @@ import cv2
 
 from src.services.frame_hub import FrameHub
 
+VISION_OVERLAY_MAX_AGE_SECONDS = 0.75
+
 
 class StreamService:
 
@@ -12,6 +14,8 @@ class StreamService:
         self,
         frame_hub: FrameHub,
         jpeg_quality: int = 80,
+        vision=None,
+        processed_frame_hub: FrameHub | None = None,
     ):
 
         self.frame_hub = frame_hub
@@ -20,6 +24,8 @@ class StreamService:
             1,
             min(100, jpeg_quality)
         )
+        self.vision = vision
+        self.processed_frame_hub = processed_frame_hub
 
     def latest_jpeg(self, camera_id: str) -> tuple[bytes, int] | None:
         packet = self.frame_hub.get_latest(camera_id)
@@ -83,10 +89,13 @@ class StreamService:
         self,
         camera_id: str,
         is_disconnected: Callable[[], Awaitable[bool]],
+        *,
+        show_boxes: bool = True,
+        show_identity: bool = True,
+        show_fall: bool = True,
     ):
         """Stream MJPEG without keeping shutdown alive after client disconnect."""
         last_frame_id = -1
-
         while not await is_disconnected():
             packet = await asyncio.to_thread(
                 self.frame_hub.wait_for_next,
@@ -98,7 +107,23 @@ class StreamService:
                 continue
 
             last_frame_id = packet.frame_id
-            encoded = await asyncio.to_thread(self._encode_jpeg, packet.frame)
+            frame = packet.frame
+            if self.vision is not None:
+                from src.vision.renderer import render_vision
+
+                result = self._fresh_vision_result(packet)
+                identity_enabled = getattr(self.vision, "is_identity_enabled", None)
+                show_current_identity = show_identity and (
+                    identity_enabled(packet.camera_id) if identity_enabled is not None else True
+                )
+                frame = render_vision(
+                    frame,
+                    result,
+                    show_boxes=show_boxes,
+                    show_identity=show_current_identity,
+                    show_fall=show_fall,
+                )
+            encoded = await asyncio.to_thread(self._encode_jpeg, frame)
             if encoded is None:
                 continue
 
@@ -110,6 +135,24 @@ class StreamService:
                 + encoded
                 + b"\r\n"
             )
+
+    def _fresh_vision_result(self, packet):
+        latest_result = getattr(self.vision, "latest_result", None)
+        if latest_result is None:
+            return None
+        result = latest_result(packet.camera_id)
+        if result is None:
+            return None
+        metadata = result.metadata
+        if metadata.get("source_epoch") != packet.source_epoch:
+            return None
+        result_time = metadata.get("observation_time")
+        if packet.source_timestamp is None or result_time is None:
+            return None
+        age = packet.source_timestamp - float(result_time)
+        if age < 0 or age > VISION_OVERLAY_MAX_AGE_SECONDS:
+            return None
+        return result
 
     def _encode_jpeg(self, frame) -> bytes | None:
         ok, encoded = cv2.imencode(

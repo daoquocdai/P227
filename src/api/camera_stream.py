@@ -38,6 +38,8 @@ def get_runtime(request: Request):
 def stream_camera(
     camera_id: str,
     request: Request,
+    boxes: bool = True,
+    identity: bool = True,
 ):
 
     runtime = get_runtime(
@@ -54,7 +56,13 @@ def stream_camera(
         raise HTTPException(status_code=409, detail="Camera is not streaming; start it and wait for the first frame")
 
     return StreamingResponse(
-        runtime.stream.mjpeg_async(public_id, request.is_disconnected),
+        runtime.stream.mjpeg_async(
+            public_id,
+            request.is_disconnected,
+            show_boxes=boxes,
+            show_identity=identity,
+            show_fall=True,
+        ),
 
         media_type=(
             "multipart/x-mixed-replace; boundary=frame"

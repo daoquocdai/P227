@@ -13,7 +13,7 @@ from src.vision.adapters.mock import MockVisionEngine
 from src.vision.model.SDAGCN import Model
 from src.vision.pipeline import CanonicalVisionPipeline
 from src.vision.session import VisionSession
-from tests.test_vision.test_pipeline import FakeActionModel, make_dependencies, packet
+from tests.test_vision.test_pipeline import FakeActionModel, FakeClock, make_dependencies, packet
 
 FALL_CLASS_ID = CanonicalVisionPipeline.FALL_CLASS_ID
 
@@ -28,16 +28,19 @@ class FiveClassModel(FakeActionModel):
 
 
 def make_pipeline(tmp_path, predicted_class: int) -> CanonicalVisionPipeline:
+    clock = FakeClock()
     engine = CanonicalVisionPipeline(
         tmp_path / "yolo.pt",
         tmp_path / "config.yaml",
         tmp_path / "checkpoint.pt",
         identity_enabled=False,
+        clock=clock,
     )
     engine._dependencies = make_dependencies()
     engine._device = torch.device("cpu")
     engine._action_model = FiveClassModel([predicted_class])
     engine._initialized = True
+    engine.test_clock = clock
     return engine
 
 
@@ -87,6 +90,7 @@ def test_non_fall_classes_do_not_create_fall_event(tmp_path, predicted_class):
     session = VisionSession("cam-v2")
     results = []
     for frame_id in range(1, 128):
+        engine.test_clock.value = frame_id / 30
         results.append(engine.process(packet("cam-v2", frame_id, source_timestamp=frame_id / 30), session))
 
     observed = next(item for item in results if item.metadata["raw_class"] is not None)
@@ -100,6 +104,7 @@ def test_class_one_enters_temporal_fall_state(tmp_path):
     session = VisionSession("cam-v2")
     results = []
     for frame_id in range(1, 128):
+        engine.test_clock.value = frame_id / 30
         results.append(engine.process(packet("cam-v2", frame_id, source_timestamp=frame_id / 30), session))
 
     observed = next(item for item in results if item.metadata["raw_class"] is not None)
@@ -107,5 +112,6 @@ def test_class_one_enters_temporal_fall_state(tmp_path):
     assert session.state["vision_pending_fall"] is True
     assert all(not result.events for result in results)
 
-    confirmed = engine.process(packet("cam-v2", 132, source_timestamp=6.3), session)
+    engine.process(packet("cam-v2", 128, source_timestamp=6.3), session)
+    confirmed = engine.process(packet("cam-v2", 129, source_timestamp=6.4), session)
     assert [event.type for event in confirmed.events] == ["fall_confirmed"]
