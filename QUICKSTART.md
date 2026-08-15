@@ -16,11 +16,28 @@ node --version
 npm.cmd --version
 ```
 
-## 2. Clone và tạo môi trường
+## 2. Clone và tạo môi trường sạch
+
+Repo mới:
 
 ```cmd
 git clone https://github.com/AI20K-Build-Phase-Cohort-3/P-227.git
 cd P-227
+python -m venv .venv
+.venv\Scripts\activate
+python -m pip install --upgrade pip
+```
+
+Nếu đã cài nhầm profile hoặc từng cài nhiều biến thể Torch/ONNX Runtime/OpenCV,
+**không** sửa bằng cách uninstall từng package trong môi trường cũ. Các wheel
+`onnxruntime*` và `opencv*` dùng chung module nên uninstall có thể để lại hoặc
+xóa nhầm file của provider khác. Đóng backend/Python đang dùng `.venv`, rồi tạo
+lại toàn bộ môi trường; thao tác này không xóa `data`, model hay `.env`:
+
+```cmd
+cd /d <duong-dan-den-P-227>
+if defined VIRTUAL_ENV deactivate
+rmdir /S /Q .venv
 python -m venv .venv
 .venv\Scripts\activate
 python -m pip install --upgrade pip
@@ -60,6 +77,20 @@ DLL đi kèm PyTorch. Nếu thiếu một trong các kết quả này, không co
 ```cmd
 python -m pip install -r requirements/vision-cpu.txt
 ```
+
+Sau profile hardware, cài InsightFace riêng với `--no-deps`. Dependency cần
+thiết đã nằm trong profile; tùy chọn này ngăn InsightFace kéo thêm ORT CPU và
+`opencv-python` chồng lên provider đã chọn và `opencv-contrib-python`:
+
+```cmd
+python -m pip install --no-deps -r requirements/vision-identity.txt
+python -m pip check
+python -m pip list | findstr /I "insightface onnxruntime opencv torch torchvision"
+```
+
+Danh sách phải chỉ có **một** ORT (`onnxruntime-directml`, `onnxruntime-gpu` hoặc
+`onnxruntime`) và **một** OpenCV (`opencv-contrib-python`). Nếu thấy nhiều biến
+thể, xóa và tạo lại `.venv` bằng quy trình trên.
 
 Cài frontend và tạo `.env`:
 

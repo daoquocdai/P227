@@ -3,7 +3,6 @@
 --extra-index-url https://download.pytorch.org/whl/cu124
 -r base.txt
 
-insightface==1.0.1
 onnxruntime-gpu==1.26.0
 torch==2.5.1+cu124
 torchvision==0.20.1+cu124

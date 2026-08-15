@@ -20,6 +20,16 @@ python -m pip install -r requirements/vision-cuda.txt
 python -m pip install -r requirements/vision-cpu.txt
 ```
 
+Sau khi chọn đúng một profile:
+
+```cmd
+python -m pip install --no-deps -r requirements/vision-identity.txt
+```
+
+Không cài nhiều profile trong cùng `.venv`. Nếu cài nhầm, xóa toàn bộ `.venv`
+và tạo lại theo [Quickstart](../QUICKSTART.md); không uninstall riêng từng biến
+thể ONNX Runtime/OpenCV vì chúng dùng chung module Python.
+
 `requirements/base.txt` chỉ dành cho backend/test không chạy Real Vision.
 
 Frontend:

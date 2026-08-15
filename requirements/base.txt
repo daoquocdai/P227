@@ -21,9 +21,11 @@ opencv-contrib-python==5.0.0.93
 pillow==12.2.0
 protobuf==4.25.3
 PyYAML==6.0.3
+requests==2.34.2
 scikit-image==0.25.2
 scikit-learn==1.7.2
 scipy==1.15.3
+tqdm==4.70.0
 
 # Tests and quality gates
 httpx==0.28.1

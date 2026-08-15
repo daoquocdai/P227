@@ -3,7 +3,6 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
 -r base.txt
 
-insightface==1.0.1
 onnxruntime-directml==1.24.4; platform_system == "Windows"
 onnxruntime==1.26.0; platform_system != "Windows"
 openvino==2026.3.0

@@ -1,0 +1,4 @@
+# InsightFace declares CPU onnxruntime/opencv-python dependencies even when an
+# accelerator provider and opencv-contrib-python are already installed. Install
+# this file only with --no-deps after one vision hardware profile.
+insightface==1.0.1

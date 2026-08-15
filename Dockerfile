@@ -18,7 +18,8 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 COPY requirements ./requirements
 RUN python -m pip install --upgrade pip setuptools wheel \
-    && python -m pip install -r requirements/vision-cpu.txt
+    && python -m pip install -r requirements/vision-cpu.txt \
+    && python -m pip install --no-deps -r requirements/vision-identity.txt
 
 
 FROM python:3.11-slim AS runtime

@@ -57,6 +57,7 @@ python -m venv .venv
 .venv\Scripts\activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements/vision-intel.txt
+python -m pip install --no-deps -r requirements/vision-identity.txt
 cd frontend
 npm.cmd ci
 cd ..
@@ -70,11 +71,13 @@ Chọn đúng dependency profile:
 | Intel Iris Xe / Windows | `requirements/vision-intel.txt` |
 | NVIDIA CUDA 12.4 | `requirements/vision-cuda.txt` |
 | CPU/Docker | `requirements/vision-cpu.txt` |
+| Identity, cài sau profile với `--no-deps` | `requirements/vision-identity.txt` |
 | Backend/test không chạy Real Vision | `requirements/base.txt` |
 
-`requirements.txt` chỉ là compatibility alias cho base, không đủ để chạy Real
-Vision. `requirements-lock-cpu.txt` là lock file của môi trường Windows CPU đã
-được kiểm chứng.
+Repo không dùng `requirements.txt` chung vì Torch và ONNX Runtime phải khớp
+hardware. Luôn cài đúng một `vision-*.txt`, sau đó cài
+`vision-identity.txt` với `--no-deps` như Quickstart; `requirements/base.txt`
+không đủ để chạy Real Vision.
 
 ## Cấu hình
 

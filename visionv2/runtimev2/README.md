@@ -23,6 +23,7 @@ Install the matching dependency profile from the repository root:
 pip install -r requirements/vision-intel.txt
 pip install -r requirements/vision-cuda.txt
 pip install -r requirements/vision-cpu.txt
+pip install --no-deps -r requirements/vision-identity.txt
 ```
 
 Intel preview:
