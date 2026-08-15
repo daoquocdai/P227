@@ -457,6 +457,37 @@ def test_unknown_identity_is_structured_metadata_not_an_extra_ai_event(tmp_path,
     assert repeated.events == []
 
 
+def test_failed_face_scans_do_not_consume_unknown_confirmation_observations(tmp_path):
+    engine, _ = make_engine(tmp_path)
+    engine.identity_enabled = True
+
+    class FaceApp:
+        responses = [[], [], [], [], []] + [
+            [SimpleNamespace(bbox=np.array([1, 1, 8, 8]), embedding=np.ones(4))]
+            for _ in range(5)
+        ]
+
+        def get(self, _crop):
+            return self.responses.pop(0)
+
+    engine._face_app = FaceApp()
+    state = {"vision_identity_enabled": True}
+    crop = np.zeros((16, 16, 3), dtype=np.uint8)
+
+    for timestamp in range(5):
+        metadata = engine._identity_metadata(crop, 7, state, float(timestamp), timestamp)
+        assert metadata["identity_state"] == "PENDING"
+        assert state["vision_face_cache"][7]["attempts"] == 0
+
+    for timestamp in range(5, 9):
+        metadata = engine._identity_metadata(crop, 7, state, float(timestamp), timestamp)
+        assert metadata["identity_state"] == "PENDING"
+
+    metadata = engine._identity_metadata(crop, 7, state, 9.0, 9)
+    assert metadata["identity_state"] == "LOCKED_UNKNOWN"
+    assert state["vision_face_cache"][7]["attempts"] == 5
+
+
 @pytest.mark.parametrize("missing_name", ["yolo.pt", "config.yaml", "checkpoint.pt"])
 def test_missing_required_resource_fails_during_startup(tmp_path, missing_name):
     paths = {}

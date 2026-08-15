@@ -1,7 +1,7 @@
 import logging
 import threading
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 from src.services.event_snapshot import attach_event_snapshots
 from src.services.frame_hub import FrameHub
@@ -25,6 +25,10 @@ class LatestFrameSlot:
         with self._condition:
             if self._closed:
                 return False
+            if self._packet is not None and self._packet.discontinuity:
+                # A latest-wins overwrite must not erase the source boundary.
+                # Carry it to the newest packet until the worker consumes it.
+                packet = replace(packet, discontinuity=True)
             overwritten = self._packet is not None
             if overwritten:
                 self.overwritten += 1
@@ -306,7 +310,13 @@ class SynchronousVisionManager:
                     self.product_policy.apply(result)
                     if not bool(session.state.get("vision_identity_enabled", False)):
                         self._strip_identity(result)
-                    attach_event_snapshots(packet, result)
+                    attach_event_snapshots(
+                        packet,
+                        result,
+                        privacy_face_detector=getattr(
+                            self.engine, "detect_faces_for_privacy", None
+                        ),
+                    )
                     packet.vision_result = result
                     self.processed_frame_hub.publish(packet)
                     if result.events and self.event_dispatcher is not None:

@@ -35,6 +35,10 @@ class SQLiteEventRepository:
             else None
         )
         valid_snapshot = valid_snapshot_name(event.snapshot_path)
+        if event.event_type.startswith("FALL_") and not event.metadata.get(
+            "snapshot_blurred", False
+        ):
+            valid_snapshot = None
         metadata = dict(event.metadata)
         metadata.update(
             {

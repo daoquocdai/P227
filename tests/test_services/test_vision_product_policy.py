@@ -200,7 +200,7 @@ def test_blur_faces_changes_only_clipped_valid_face_rois():
     assert np.array_equal(frame[10:, 10:], np.indices((20, 20)).sum(axis=0).astype(np.uint8)[10:, 10:, None].repeat(3, axis=2) * 8)
 
 
-def test_snapshot_ignores_face_bbox_from_a_different_frame(tmp_path, monkeypatch):
+def test_fall_snapshot_uses_one_shot_privacy_detector_for_stale_face_bbox(tmp_path, monkeypatch):
     monkeypatch.setattr(event_snapshot, "SNAPSHOT_ROOT", tmp_path)
     vision_result = result()
     vision_result.events = [VisionEvent("fall_confirmed", 0.9, {})]
@@ -214,8 +214,123 @@ def test_snapshot_ignores_face_bbox_from_a_different_frame(tmp_path, monkeypatch
         vision_result.captured_at,
         np.zeros((16, 16, 3), dtype=np.uint8),
     )
-    event_snapshot.attach_event_snapshots(packet, vision_result)
-    assert vision_result.events[0].metadata["snapshot_blurred"] is False
+    calls = []
+
+    def privacy_detector(frame):
+        calls.append(frame)
+        return [(1, 1, 8, 8)]
+
+    event_snapshot.attach_event_snapshots(packet, vision_result, privacy_detector)
+    event = vision_result.events[0]
+    assert len(calls) == 1
+    assert calls[0] is packet.frame
+    assert event.metadata["snapshot_blurred"] is True
+    assert event.metadata["snapshot_blurred_faces"] == 1
+    assert event.metadata["snapshot_privacy_method"] == "full_frame_detector"
+    assert (tmp_path / event.metadata["snapshot_path"]).is_file()
+
+
+def test_person_crop_detector_maps_box_to_exact_full_frame(tmp_path, monkeypatch):
+    monkeypatch.setattr(event_snapshot, "SNAPSHOT_ROOT", tmp_path)
+    vision_result = result()
+    vision_result.events = [VisionEvent("fall_confirmed", 0.9, {})]
+    vision_result.metadata["geometry"] = {"scale": 1.0, "pad_x": 0, "pad_y": 0}
+    vision_result.detections[0].bbox_xyxy = (10, 20, 50, 60)
+    vision_result.detections[0].metadata = {}
+    packet = FramePacket(
+        vision_result.camera_id,
+        vision_result.frame_id,
+        vision_result.captured_at,
+        np.indices((80, 80)).sum(axis=0).astype(np.uint8)[..., None].repeat(3, axis=2) * 3,
+    )
+    calls = 0
+
+    def detector(frame):
+        nonlocal calls
+        calls += 1
+        if calls == 1:  # full frame
+            return []
+        assert frame.shape[:2] == (80, 80)  # 40x40 person crop upscaled 2x
+        return [(20, 20, 40, 40)]
+
+    event_snapshot.attach_event_snapshots(packet, vision_result, detector)
+
+    event = vision_result.events[0]
+    assert calls == 2
+    assert event.metadata["snapshot_privacy_method"] == "person_crop_detector"
+    assert event.metadata["snapshot_blurred"] is True
+
+
+def test_fall_event_without_a_safe_face_omits_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setattr(event_snapshot, "SNAPSHOT_ROOT", tmp_path)
+    vision_result = result()
+    vision_result.events = [VisionEvent("fall_confirmed", 0.9, {})]
+    packet = FramePacket(
+        vision_result.camera_id,
+        vision_result.frame_id,
+        vision_result.captured_at,
+        np.zeros((16, 16, 3), dtype=np.uint8),
+    )
+
+    event_snapshot.attach_event_snapshots(packet, vision_result, lambda _frame: [])
+
+    assert "snapshot_path" not in vision_result.events[0].metadata
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_rotated_crop_boxes_map_back_to_original_frame_coordinates():
+    clockwise = event_snapshot._map_detected_boxes(
+        [(30, 10, 45, 30)],
+        origin_x=100,
+        origin_y=200,
+        scale=1.0,
+        rotation=90,
+        crop_width=100,
+        crop_height=50,
+    )
+    counterclockwise = event_snapshot._map_detected_boxes(
+        [(5, 70, 20, 90)],
+        origin_x=100,
+        origin_y=200,
+        scale=1.0,
+        rotation=-90,
+        crop_width=100,
+        crop_height=50,
+    )
+    assert clockwise == [(110, 205, 130, 220)]
+    assert counterclockwise == [(110, 205, 130, 220)]
+
+
+def test_pose_head_fallback_uses_exact_frame_geometry_for_horizontal_subject():
+    vision_result = result()
+    vision_result.events = [VisionEvent("fall_confirmed", 0.9, {})]
+    vision_result.metadata["geometry"] = {
+        "scale": 1.0,
+        "pad_x": 0,
+        "pad_y": 0,
+        "vision_width": 100,
+        "vision_height": 100,
+    }
+    detection = vision_result.detections[0]
+    detection.bbox_xyxy = (5, 30, 95, 70)
+    detection.metadata = {}
+    vision_result.metadata.update(
+        privacy_pose_frame_id=vision_result.frame_id,
+        privacy_head_shoulders={
+            "head": [0.85, 0.50],
+            "left_shoulder": [0.60, 0.42],
+            "right_shoulder": [0.60, 0.58],
+        },
+    )
+
+    boxes, method = event_snapshot._privacy_boxes(
+        np.zeros((100, 100, 3), dtype=np.uint8), vision_result, [], None
+    )
+
+    assert method == "pose_head_roi"
+    x1, _y1, x2, _y2 = boxes[0]
+    assert x1 > 70
+    assert x2 == 97
 
 
 def test_event_service_rechecks_persisted_identity_gate_before_db_and_notification():

@@ -99,6 +99,7 @@ class RuntimeV2VisionPipeline(VisionEngine):
         self._detector_device: str | None = None
         self._action_model: Any = None
         self._face_app: Any = None
+        self._privacy_face_app: Any = None
         self._known_faces: dict[str, np.ndarray] = {}
         self._initialized = False
         self._initialization_error: VisionInitializationError | None = None
@@ -152,6 +153,8 @@ class RuntimeV2VisionPipeline(VisionEngine):
         started = time.perf_counter()
         state = session.state
         self._prepare_source_epoch(state, packet)
+        state.pop("vision_privacy_pose_frame_id", None)
+        state.pop("vision_privacy_head_shoulders", None)
         source_timestamp = self._source_timestamp(packet)
         frame_count = (
             packet.source_frame_index + 1
@@ -263,6 +266,13 @@ class RuntimeV2VisionPipeline(VisionEngine):
                 )
                 self._record_stage_metric(state, "pose", pose_started)
                 pose_found = bool(np.any(keypoints))
+                if pose_found:
+                    state["vision_privacy_pose_frame_id"] = packet.frame_id
+                    state["vision_privacy_head_shoulders"] = {
+                        "head": keypoints[3, :2].tolist(),
+                        "left_shoulder": keypoints[4, :2].tolist(),
+                        "right_shoulder": keypoints[8, :2].tolist(),
+                    }
 
                 self._observe_movement(state, keypoints, source_timestamp)
 
@@ -370,6 +380,7 @@ class RuntimeV2VisionPipeline(VisionEngine):
             self._contexts.clear()
             self._action_model = None
             self._face_app = None
+            self._privacy_face_app = None
             self._known_faces.clear()
             self._dependencies = None
             self._device = None
@@ -391,6 +402,29 @@ class RuntimeV2VisionPipeline(VisionEngine):
                 face_app.prepare(ctx_id=face_ctx_id, det_size=(640, 640))
                 self._face_app = face_app
             self.identity_enabled = enabled
+
+    def detect_faces_for_privacy(self, frame: np.ndarray) -> list[tuple[int, int, int, int]]:
+        """Detect face boxes only, without recognition or identity state changes."""
+        self._ensure_initialized()
+        with self._lock:
+            face_app = self._privacy_face_app
+            if face_app is None:
+                from insightface.app import FaceAnalysis
+
+                face_app = FaceAnalysis(
+                    name="buffalo_l",
+                    root=str(self.insightface_root),
+                    # DirectML's SCRFD detector can terminate the process with
+                    # an access violation in this one-shot path. Privacy evidence
+                    # must fail closed, so isolate it on the stable CPU provider.
+                    providers=["CPUExecutionProvider"],
+                    allowed_modules=["detection"],
+                )
+                face_app.prepare(ctx_id=-1, det_size=(640, 640))
+                self._privacy_face_app = face_app
+        with self._face_lock:
+            bboxes, _ = face_app.det_model.detect(frame, max_num=0, metric="default")
+        return [tuple(int(value) for value in bbox[:4]) for bbox in bboxes]
 
     def _ensure_initialized(self) -> None:
         if self._initialized:
@@ -705,7 +739,6 @@ class RuntimeV2VisionPipeline(VisionEngine):
                 "identity_error": str(exc),
             }
         if entry is not None:
-            entry["attempts"] += 1
             entry["last_attempt_at"] = source_timestamp
         best_name: str | None = None
         best_score = 0.0
@@ -719,11 +752,13 @@ class RuntimeV2VisionPipeline(VisionEngine):
                 "identity_face_detected": False,
             }
             if entry is not None:
-                if entry["attempts"] >= FACE_RECOGNITION_MAX_ATTEMPTS:
-                    entry["status"] = "LOCKED_UNKNOWN"
-                    metadata["identity_state"] = "LOCKED_UNKNOWN"
                 entry["metadata"] = metadata
             return metadata
+        if entry is not None:
+            # Confirmation counts qualifying identity observations, not failed
+            # face-detector scans. A missed face remains retryable on the same
+            # track instead of permanently poisoning its five-attempt budget.
+            entry["attempts"] += 1
         main_face = max(faces, key=lambda face: (face.bbox[2] - face.bbox[0]) * (face.bbox[3] - face.bbox[1]))
         known_faces = (
             self._face_gallery.snapshot()
@@ -982,6 +1017,8 @@ class RuntimeV2VisionPipeline(VisionEngine):
             "pending_fall": bool(state.get("vision_pending_fall", False)),
             "incident_id": state.get("vision_incident_id"),
             "pose_found": pose_found,
+            "privacy_pose_frame_id": state.get("vision_privacy_pose_frame_id"),
+            "privacy_head_shoulders": state.get("vision_privacy_head_shoulders"),
             "raw_class": raw_class,
             "probabilities": probabilities,
             "logits": logits,

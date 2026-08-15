@@ -376,6 +376,20 @@ def test_latest_slot_is_capacity_one_and_overwrites_pending_frames():
     assert slot.take().frame_id == 6
 
 
+def test_latest_slot_keeps_discontinuity_sticky_when_boundary_packet_is_overwritten():
+    from dataclasses import replace
+
+    from src.services.synchronous_vision_manager import LatestFrameSlot
+
+    slot = LatestFrameSlot()
+    assert slot.offer(replace(packet(2), discontinuity=True)) is False
+    assert slot.offer(replace(packet(4), discontinuity=False)) is True
+
+    latest = slot.take()
+    assert latest.frame_id == 4
+    assert latest.discontinuity is True
+
+
 def test_blocked_vision_keeps_latest_source_frame_without_backlog():
     class BlockingEngine(FakeEngine):
         def __init__(self):
@@ -529,7 +543,9 @@ def test_turning_identity_off_during_inference_blocks_unknown_commit_and_preserv
     assert [event.type for event in result.events] == ["fall_confirmed"]
     assert result.detections[0].metadata == {}
     assert manager.get_status("cam")["identity_enabled"] is False
-    assert len(list(tmp_path.glob("*.jpg"))) == 1
+    # The fake engine has no privacy detector, so the Fall event is preserved
+    # while unsafe visual evidence is deliberately omitted.
+    assert len(list(tmp_path.glob("*.jpg"))) == 0
     manager.stop()
 
 

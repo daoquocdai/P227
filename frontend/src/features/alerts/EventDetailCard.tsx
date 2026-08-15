@@ -34,7 +34,7 @@ export function EventDetailCard({ alert, onExpand, onSafe, onFalseAlarm }: {
     <button className={`analysis-toggle ${detailsOpen ? "is-open" : ""}`} onClick={() => setDetailsOpen((value) => !value)} aria-expanded={detailsOpen}>Xem chi tiết phân tích <ChevronDown /></button>
     {detailsOpen && <section className="analysis-collapsible">
       <p>Hãy đối chiếu ảnh bằng chứng và tình trạng thực tế trước khi xử lý cảnh báo. Kết quả AI chỉ đóng vai trò hỗ trợ caregiver.</p>
-      <div className="event-inline-insights"><span><small>Khả năng</small><strong>{alert.confidence ?? 91}%</strong></span><span><small>Người</small><strong>{alert.subject}</strong></span><span><small>Camera</small><strong>{alert.location}</strong></span><span><small>Thời gian</small><strong>{formatAlertDateTime(alert.occurredAt)}</strong></span></div>
+      <div className="event-inline-insights"><span><small>{alert.type === "stranger" ? "Mức độ không khớp" : "Khả năng"}</small><strong>{alert.confidence ?? 91}%</strong></span><span><small>Người</small><strong>{alert.subject}</strong></span><span><small>Camera</small><strong>{alert.location}</strong></span><span><small>Thời gian</small><strong>{formatAlertDateTime(alert.occurredAt)}</strong></span></div>
     </section>}
   </article>;
 }
