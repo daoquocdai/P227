@@ -4,8 +4,10 @@ from uuid import uuid4
 
 import pytest
 
+from src.database import database_connection
 from src.models.schemas import AlertReviewRequest, VisionEventRequest
 from src.services.event_service import EventService
+from src.services.sqlite_event_repository import SQLiteEventRepository, stable_uuid
 
 
 def event(event_id: str | None = None) -> VisionEventRequest:
@@ -104,3 +106,32 @@ async def test_unknown_uses_persisted_identity_gate(
 
     assert result.accepted is accepted
     assert publish.await_count == broadcasts
+
+
+@pytest.mark.asyncio
+async def test_optional_media_insert_failure_preserves_event_alert_and_broadcast(
+    monkeypatch, tmp_path
+):
+    repository = SQLiteEventRepository()
+    fall = event()
+    fall.snapshot_path = "safe-fall.jpg"
+    fall.metadata["snapshot_blurred"] = True
+    (tmp_path / fall.snapshot_path).write_bytes(b"snapshot")
+    monkeypatch.setattr("src.services.media_paths.SNAPSHOT_ROOT", tmp_path)
+
+    def fail_media_insert(*_args):
+        raise RuntimeError("optional media unavailable")
+
+    publish = AsyncMock()
+    monkeypatch.setattr(repository, "_insert_media", fail_media_insert)
+    monkeypatch.setattr("src.services.event_service.alert_broadcaster.publish", publish)
+
+    accepted = await EventService(repository).create(fall)
+
+    event_id = stable_uuid(fall.event_id, "event")
+    with database_connection() as connection:
+        assert connection.execute("SELECT 1 FROM events WHERE id = ?", (event_id,)).fetchone()
+        assert connection.execute("SELECT 1 FROM alerts WHERE event_id = ?", (event_id,)).fetchone()
+        assert connection.execute("SELECT 1 FROM media_assets WHERE event_id = ?", (event_id,)).fetchone() is None
+    assert accepted.accepted is True
+    publish.assert_awaited_once()

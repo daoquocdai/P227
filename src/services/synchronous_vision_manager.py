@@ -62,7 +62,7 @@ class LatestFrameSlot:
 
 
 class SynchronousVisionManager:
-    """Compatibility facade for asynchronous, per-camera latest-frame Vision."""
+    """Own per-camera Vision sessions and capacity-one inference handoffs."""
 
     def __init__(self, engine, event_dispatcher=None, product_policy=None, processed_frame_hub=None):
         self.engine = engine

@@ -1,4 +1,5 @@
 import json
+import logging
 import mimetypes
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -8,6 +9,8 @@ from src.database import database_connection
 from src.models.schemas import AlertReviewRequest, VisionEventAccepted, VisionEventRequest
 from src.services.event_presentation import event_description
 from src.services.media_paths import snapshot_url, valid_snapshot_name
+
+logger = logging.getLogger(__name__)
 
 
 class EventNotFoundError(Exception):
@@ -139,7 +142,7 @@ class SQLiteEventRepository:
                     ),
                 )
 
-            self._insert_media(connection, event_id, event, valid_snapshot)
+            self._insert_optional_media(connection, event_id, event, valid_snapshot)
             if alert_type is None:
                 return VisionEventAccepted(id=event_id, event_id=event.event_id, status="resolved")
 
@@ -224,6 +227,27 @@ class SQLiteEventRepository:
             (person_id, event.identity_name or "Người thân"),
         )
         return person_id
+
+    def _insert_optional_media(
+        self,
+        connection,
+        event_id: str,
+        event: VisionEventRequest,
+        snapshot_name: str | None,
+    ) -> None:
+        """Keep optional visual evidence outside the event/alert failure boundary."""
+        if not snapshot_name:
+            return
+        connection.execute("SAVEPOINT optional_event_media")
+        try:
+            self._insert_media(connection, event_id, event, snapshot_name)
+        except Exception:  # noqa: BLE001 - event delivery must survive evidence failure
+            connection.execute("ROLLBACK TO SAVEPOINT optional_event_media")
+            logger.exception(
+                "Could not persist optional event media event=%s", event.event_id
+            )
+        finally:
+            connection.execute("RELEASE SAVEPOINT optional_event_media")
 
     @staticmethod
     def _insert_media(

@@ -1,30 +1,64 @@
-# GuardianCam Vision runtime
+# Canonical production Vision
 
-Production enters this package through `src.runtime.LocalRuntime` and the
-single `RuntimeV2VisionPipeline` in `pipeline.py`. `mock` remains test-only.
+Production enters this package through `src.runtime.LocalRuntime` and
+`RuntimeV2VisionPipeline` in `pipeline.py`. `visionv2/runtimev2` and
+`visionv2/P-227-thi` remain standalone reference/oracle trees; production does
+not import them.
 
-`visionv2/` at repository root is the standalone oracle. Production never
-imports it; `tools/compare_vision_reference.py` is the explicit comparison
-boundary. Enabled cameras use ordered per-camera workers while immutable model
-state is shared. The production pipeline is a local, integration-safe
-adaptation of that immutable runtime; it does not import either standalone
-reference tree at runtime.
+## Runtime contract
 
-The canonical pipeline preserves verified VisionV2 behavior: YOLO person
-tracking, MediaPipe pose, the runtimev2 wall-clock two-second window resampled
-to 64 joint frames, five-class SDA-GCN inference, and class `1` as the fall
-candidate. It runs synchronously in the sole camera capture loop, before the
-raw frame is published for streaming; no production sampler, worker queue, or
-frame-dropping layer sits in front of Vision.
+```text
+CameraRuntime capture
+  ├── raw FrameHub → realtime MJPEG/preview
+  └── even source frame → LatestFrameSlot(capacity=1)
+                         → per-camera Vision worker
+                         → RuntimeV2VisionPipeline
+```
 
-Required inference artifacts:
+Vision therefore does not run synchronously inside the capture loop. Slow
+inference overwrites one pending packet instead of creating a queue, while raw
+streaming continues at source cadence.
 
-- `yolov8n.pt`
-- `work_dir/fall_detection/joint/config.yaml`
-- `work_dir/fall_detection/joint/runs-best_val.pt`
+Temporal semantics use `FramePacket.source_timestamp`:
 
-On supported Intel Windows systems, `VISION_DEVICE=auto` exports fingerprinted
-OpenVINO artifacts into `VISION_MODEL_CACHE_DIR`, validates SDA-GCN FP32 parity,
-and runs YOLO/SDA-GCN on Intel GPU. CUDA-capable hosts keep native PyTorch/YOLO
-CUDA ahead of the Intel path. CPU fallback is explicit in startup logs.
-Face identity is supplied by the database-backed `FaceGallery`.
+- video: media/source timeline;
+- live camera: monotonic capture time;
+- `source_epoch`/sticky discontinuity prevents windows crossing loops/reconnects.
+
+## Model semantics
+
+The canonical pipeline preserves:
+
+- YOLO person tracking/crop behavior;
+- MediaPipe Pose extraction;
+- existing preprocessing and 64-frame resampling;
+- five-class SDA-GCN output;
+- class `1` as fall candidate;
+- existing confirmation/recovery/movement rules;
+- known-face cosine threshold `>0.45`;
+- five qualifying Unknown observations at one-second source-time intervals.
+
+Required artifacts:
+
+- `yolov8n.pt`;
+- `work_dir/fall_detection/joint/config.yaml`;
+- `work_dir/fall_detection/joint/runs-best_val.pt`.
+
+## Hardware
+
+`VISION_DEVICE=auto` selects CUDA first, then Intel OpenVINO GPU, then CPU.
+MediaPipe Pose runs on CPU. Identity uses configured ONNX Runtime providers;
+DirectML is supported on Windows with CPU fallback. The one-shot privacy face
+detector intentionally uses CPU provider for native stability.
+
+Known identities come from the database-backed `FaceGallery`. InsightFace
+`buffalo_l` is required only when Identity is enabled.
+
+## Product boundaries
+
+- Fall is always enabled whenever Vision is enabled.
+- Identity OFF disables continuous recognition/Unknown events but not Fall.
+- Product thresholds are applied by `VisionProductPolicy`, not model math.
+- Snapshot privacy is handled at the manager commit boundary using the exact
+  event packet.
+- Viewer count and presentation flags never create inference.

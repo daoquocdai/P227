@@ -488,6 +488,29 @@ def test_failed_face_scans_do_not_consume_unknown_confirmation_observations(tmp_
     assert state["vision_face_cache"][7]["attempts"] == 5
 
 
+def test_new_track_has_an_independent_unknown_confirmation_workflow(tmp_path):
+    engine, _ = make_engine(tmp_path)
+    engine.identity_enabled = True
+
+    class FaceApp:
+        def get(self, _crop):
+            return [SimpleNamespace(bbox=np.array([1, 1, 8, 8]), embedding=np.ones(4))]
+
+    engine._face_app = FaceApp()
+    state = {"vision_identity_enabled": True}
+    crop = np.zeros((16, 16, 3), dtype=np.uint8)
+
+    for timestamp in range(5):
+        first_track = engine._identity_metadata(crop, 7, state, float(timestamp), timestamp)
+
+    second_track = engine._identity_metadata(crop, 8, state, 5.0, 5)
+
+    assert first_track["identity_state"] == "LOCKED_UNKNOWN"
+    assert second_track["identity_state"] == "PENDING"
+    assert state["vision_face_cache"][7]["attempts"] == 5
+    assert state["vision_face_cache"][8]["attempts"] == 1
+
+
 @pytest.mark.parametrize("missing_name", ["yolo.pt", "config.yaml", "checkpoint.pt"])
 def test_missing_required_resource_fails_during_startup(tmp_path, missing_name):
     paths = {}

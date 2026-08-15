@@ -1,47 +1,54 @@
 # GuardianCam Local Hub
 
-GuardianCam là hệ thống giám sát an toàn chạy tại nhà: tiếp nhận webcam, video hoặc RTSP; phát hiện té ngã và người chưa được nhận diện; sau đó lưu và gửi cảnh báo theo thời gian thực tới giao diện web. Video thô và ảnh sự kiện được xử lý cục bộ trên Local Hub.
+GuardianCam là hệ thống giám sát an toàn local-first cho gia đình. Backend nhận
+webcam, video file hoặc RTSP, phát video realtime cho frontend, đồng thời chạy
+Vision để phát hiện té ngã và người chưa được nhận diện. Event, alert và ảnh
+bằng chứng được lưu cục bộ trong SQLite/snapshot storage.
 
-> Đây là công cụ hỗ trợ cảnh báo, không thay thế thiết bị y tế hoặc dịch vụ khẩn cấp.
+> GuardianCam là công cụ hỗ trợ cảnh báo, không thay thế thiết bị y tế, người
+> chăm sóc hoặc dịch vụ khẩn cấp.
 
-## Chức năng hiện có
+## Chức năng hiện tại
 
-- Quản lý nhiều camera từ một SQLite database: tên, vị trí, nguồn phát và trạng thái bật/tắt.
-- Phát MJPEG liên tục ở trang Camera; tổng quan dùng ảnh preview gần nhất.
-- Một canonical VisionV2 pipeline dùng chung Local Hub: YOLO, MediaPipe và SDA-GCN năm lớp/joint.
-- InsightFace nhận diện người thân và phát hiện người chưa có trong danh sách.
-- Tự động dùng OpenVINO trên Intel GPU khi khả dụng; CPU fallback và DirectML identity đều được báo rõ.
-- Lấy mẫu theo source timeline, bounded buffer và bỏ frame khi quá tải để không chặn camera.
-- Chuyển event từ Vision thread sang asyncio bằng bounded, non-blocking dispatcher.
-- Chống ghi trùng, lưu SQLite, tạo snapshot từ đúng frame phát hiện và phát cảnh báo qua SSE.
-- Dashboard cho phép xem cảnh báo, xác nhận an toàn, báo sai và quản lý người thân.
+- Camera và trạng thái Camera/Vision/Identity được lưu trong SQLite và tự khôi
+  phục khi backend khởi động.
+- Raw MJPEG chạy theo source cadence, độc lập với tốc độ Vision.
+- Production dùng canonical VisionV2 tích hợp trong `src/vision`: YOLO,
+  MediaPipe Pose, SDA-GCN năm lớp và InsightFace tùy chọn.
+- Một capacity-one latest-frame slot cho mỗi camera giữ latency bounded khi
+  inference chậm; không có queue/backlog trước Vision.
+- Video file dùng media/source timestamp; camera live dùng monotonic capture
+  timestamp. Temporal decisions không phụ thuộc tốc độ máy xử lý.
+- Fall Detection luôn hoạt động khi Vision ON. `Hiện khung` chỉ điều khiển
+  presentation. `Phát hiện người lạ` điều khiển toàn bộ identity workflow.
+- Event snapshot lấy đúng event frame và chỉ được lưu khi privacy blur an toàn.
+- Event/alert vẫn được lưu và phát SSE nếu snapshot hoặc media metadata lỗi.
+- CUDA được ưu tiên khi có; tiếp theo là OpenVINO Intel GPU; cuối cùng CPU.
+  InsightFace dùng DirectML hoặc CPU theo provider thực tế.
 
-## Công nghệ
+## Stack
 
 | Thành phần | Công nghệ |
 |---|---|
 | Vision | Ultralytics YOLO, MediaPipe, SDA-GCN, InsightFace |
-| Inference | OpenVINO Intel GPU, PyTorch fallback, ONNX Runtime DirectML cho identity |
+| Accelerator | CUDA, OpenVINO Intel GPU, ONNX Runtime DirectML, CPU fallback |
 | Backend | Python 3.11, FastAPI, Uvicorn, SSE |
 | Frontend | React, TypeScript, Vite |
-| Dữ liệu | SQLite và snapshot lưu cục bộ |
-| Agent tùy chọn | LangGraph, LangChain, OpenAI |
+| Persistence | SQLite, local snapshot files |
 | Kiểm thử | pytest, Ruff, TypeScript/Vite build |
 
 ## Yêu cầu
 
 - Python 3.11 64-bit.
-- Node.js 20 trở lên.
+- Node.js 20+.
 - Windows 10/11 hoặc Linux 64-bit.
-- Webcam, video local hoặc URL RTSP nếu chạy camera thật.
-- Model local tương ứng với `VISION_ENGINE`; tài nguyên InsightFace nếu bật identity.
+- Webcam, video local hoặc RTSP nếu dùng source thật.
+- Các model canonical trong `src/vision`.
+- InsightFace `buffalo_l` chỉ khi bật Identity.
 
-Máy không có CUDA vẫn chạy được. Cấu hình Windows đã kiểm chứng dùng OpenVINO cho YOLO/SDA-GCN trên Intel Iris Xe và DirectML cho InsightFace nếu provider có sẵn.
+## Cài nhanh trên Windows
 
-## Chạy nhanh trên Windows
-
-Hướng dẫn đầy đủ từ lúc clone nằm tại [QUICKSTART.md](QUICKSTART.md). Tóm tắt
-trong CMD:
+Chi tiết đầy đủ nằm tại [QUICKSTART.md](QUICKSTART.md).
 
 ```cmd
 git clone https://github.com/AI20K-Build-Phase-Cohort-3/P-227.git
@@ -56,31 +63,24 @@ cd ..
 copy /Y .env.example .env
 ```
 
-Dependency được tách theo runtime để developer không phải cài mọi accelerator:
+Chọn đúng dependency profile:
 
-- `requirements/base.txt`: backend, preprocessing và test dùng chung.
-- `requirements/vision-intel.txt`: Intel Iris Xe/OpenVINO/DirectML.
-- `requirements/vision-cuda.txt`: NVIDIA CUDA 12.4.
-- `requirements/vision-cpu.txt`: CPU/Docker portable fallback.
-- `requirements.txt`: compatibility alias chỉ tới base; chưa đủ cho Real Vision.
-- `requirements-lock-cpu.txt`: bản khóa chính xác của môi trường Windows, Torch CPU và DirectML đã kiểm chứng.
+| Profile | File |
+|---|---|
+| Intel Iris Xe / Windows | `requirements/vision-intel.txt` |
+| NVIDIA CUDA 12.4 | `requirements/vision-cuda.txt` |
+| CPU/Docker | `requirements/vision-cpu.txt` |
+| Backend/test không chạy Real Vision | `requirements/base.txt` |
 
-Muốn tái tạo đúng môi trường đã kiểm chứng:
+`requirements.txt` chỉ là compatibility alias cho base, không đủ để chạy Real
+Vision. `requirements-lock-cpu.txt` là lock file của môi trường Windows CPU đã
+được kiểm chứng.
 
-```cmd
-python -m pip install -r requirements-lock-cpu.txt
-```
+## Cấu hình
 
-## Cấu hình `.env`
-
-Tạo `.env` tại root. Cấu hình tối thiểu để chạy Vision thực:
+Copy `.env.example` thành `.env`. Cấu hình Vision chính:
 
 ```dotenv
-APP_ENV=development
-APP_HOST=127.0.0.1
-APP_PORT=8000
-LOG_LEVEL=INFO
-CORS_ORIGINS=http://localhost:5173
 DATABASE_URL=sqlite:///./data/app.db
 
 VISION_ENGINE=canonical
@@ -89,48 +89,31 @@ VISION_YOLO_PATH=yolov8n.pt
 VISION_CONFIG_PATH=work_dir/fall_detection/joint/config.yaml
 VISION_CHECKPOINT_PATH=work_dir/fall_detection/joint/runs-best_val.pt
 VISION_MODEL_CACHE_DIR=data/vision-cache
+
 VISION_IDENTITY_ENABLED=false
 VISION_IDENTITY_PROVIDER=auto
-VISION_INSIGHTFACE_ROOT=C:/Users/<user>/.insightface
-VISION_KNOWN_FACES_DIR=register face
-VISION_TEMPORAL_TARGET_SAMPLE_RATE=5
-VISION_TEMPORAL_BUFFER_CAPACITY=8
-
-OPENAI_API_KEY=
-MODEL_NAME=gpt-4o-mini
+VISION_INSIGHTFACE_ROOT=~/.insightface
 ```
 
-Ghi chú:
+- `VISION_ENGINE=canonical` là production path; `mock` chỉ dùng cho test/smoke.
+- `VISION_DEVICE=auto` chọn CUDA → OpenVINO Intel GPU → CPU và log runtime thật.
+- Giữ `VISION_IDENTITY_ENABLED=false` nếu chưa có
+  `<VISION_INSIGHTFACE_ROOT>/models/buffalo_l/`.
+- Known-person production lấy từ `persons`/`face_profiles` trong database qua
+  `FaceGallery`, không cần cấu hình thư mục ảnh thủ công.
+- Các biến temporal target-rate/buffer cũ không điều khiển canonical production
+  path hiện tại.
+- Không commit `.env`, credential, database, snapshots hoặc dữ liệu sinh trắc.
 
-- `VISION_ENGINE=canonical` là production path duy nhất; `mock` chỉ dùng cho test.
-- `VISION_DEVICE=auto` ưu tiên native CUDA nếu có, sau đó OpenVINO Intel GPU,
-  cuối cùng CPU; mọi fallback đều được log.
-- `VISION_IDENTITY_PROVIDER=auto` ưu tiên CUDA provider trên NVIDIA, DirectML
-  trên Intel/Windows, sau đó CPU.
-- Target 5 Hz là kết quả acceptance trên Iris Xe: 1–2 cameras giữ đúng fall
-  semantics và zero drops; 6–10 Hz không giữ đủ hai fall của fixed video.
-- Chỉ bật identity sau khi đã cài đủ InsightFace `buffalo_l`; fall detection không phụ thuộc identity.
-- Các đường dẫn Vision tương đối được tính từ `src/vision`; cũng có thể dùng đường dẫn tuyệt đối.
-- Không đưa API key, RTSP credentials, database, snapshot hoặc dữ liệu khuôn mặt vào Git.
-
-## Tài nguyên model
-
-Canonical production yêu cầu:
+Model bắt buộc:
 
 ```text
 src/vision/yolov8n.pt
 src/vision/work_dir/fall_detection/joint/config.yaml
 src/vision/work_dir/fall_detection/joint/runs-best_val.pt
-<VISION_INSIGHTFACE_ROOT>/models/buffalo_l/
 ```
 
-`buffalo_l` chỉ bắt buộc khi `VISION_IDENTITY_ENABLED=true`.
-
-Checkpoint SDA-GCN được load strict. Không tự đổi graph, tensor shape, window, stride, preprocessing hoặc class mapping để né lỗi checkpoint.
-
 ## Chạy ứng dụng
-
-Mở hai cửa sổ CMD.
 
 Backend:
 
@@ -140,128 +123,142 @@ cd /d D:\VinAI\Project\P-227
 python -m uvicorn src.main:app --host 127.0.0.1 --port 8000
 ```
 
-Frontend:
+Frontend ở terminal khác:
 
 ```cmd
 cd /d D:\VinAI\Project\P-227\frontend
 npm.cmd run dev
 ```
 
-Truy cập:
+- Web: <http://localhost:5173>
+- Swagger: <http://127.0.0.1:8000/docs>
+- Health: <http://127.0.0.1:8000/health>
 
-- Dashboard: <http://localhost:5173>
-- Swagger API: <http://127.0.0.1:8000/docs>
-- Health check: <http://127.0.0.1:8000/health>
+Vite proxy `/api` và `/snapshots` sang backend. `ECONNREFUSED` đồng thời ở nhiều
+endpoint nghĩa là backend không listen, không phải một API riêng trả lỗi.
 
-Vite tự proxy `/api` và `/snapshots` sang backend port 8000. Nếu thấy `ECONNREFUSED`, backend chưa chạy hoặc đang chạy sai port. Nếu Uvicorn báo `Errno 10048`, port 8000 đã có tiến trình khác sử dụng.
-
-## Luồng xử lý
+## Kiến trúc runtime
 
 ```mermaid
 flowchart LR
-    CAMERA[Webcam / Video / RTSP] --> CAPTURE[CameraRuntime]
-    CAPTURE --> HUB[FrameHub]
-    HUB --> STREAM[MJPEG / Preview]
-    HUB --> SAMPLE[Temporal Sample Buffer]
-    SAMPLE --> WORKER[VisionWorker thread]
-    WORKER --> REAL[YOLO + Pose + SDA-GCN + InsightFace]
-    REAL --> SNAP[Snapshot đúng frame sự kiện]
-    SNAP --> BRIDGE[Thread-safe bounded dispatcher]
-    BRIDGE --> SINK[Async event sink]
-    SINK --> DB[(SQLite)]
-    SINK --> SSE[SSE alert_created]
-    STREAM --> UI[React Dashboard]
+    SOURCE[Webcam / Video / RTSP] --> CAPTURE[CameraRuntime]
+    CAPTURE --> RAW[Raw FrameHub]
+    RAW --> STREAM[MJPEG / Preview]
+    CAPTURE --> SLOT[LatestFrameSlot capacity 1]
+    SLOT --> VISION[SynchronousVisionManager worker]
+    VISION --> PIPE[YOLO + Pose + SDA-GCN + Identity]
+    PIPE --> POLICY[VisionProductPolicy]
+    POLICY --> SNAP[Exact-frame privacy snapshot]
+    SNAP --> PROCESSED[Processed FrameHub]
+    POLICY --> DISPATCH[Thread-safe dispatcher]
+    DISPATCH --> EVENT[EventService]
+    EVENT --> DB[(SQLite)]
+    EVENT --> SSE[SSE]
+    STREAM --> UI[React]
     DB --> UI
     SSE --> UI
 ```
 
-Khi Vision chậm hơn camera, hệ thống giữ frame mới nhất và ghi nhận `dropped_frames` thay vì để camera hoặc frontend bị block. Có thể xem trạng thái bằng endpoint Vision status của từng camera.
+Renderer kết hợp raw frame hiện tại với latest VisionResult chỉ khi cùng
+`source_epoch` và không stale quá `0.75s`. Viewer không tạo model, capture hoặc
+inference riêng.
+
+## Controls và semantics
+
+| Control | Behavior |
+|---|---|
+| Vision OFF | Không xử lý Vision |
+| Vision ON | Fall Detection luôn ON |
+| Hiện khung OFF | Chỉ ẩn bbox/overlay; inference và event vẫn chạy |
+| Phát hiện người lạ OFF | Tắt identity inference/retry/event/overlay; Fall không đổi |
+
+Unknown cần 5 face+embedding observations hợp lệ, cách nhau tối thiểu 1 giây
+source time. Face miss không tăng confirmation count. Unknown score trên UI là:
+
+```text
+Mức độ không khớp = 1 - clamp(closest known cosine similarity, 0, 1)
+```
+
+Đây không phải calibrated probability. `general.stranger_threshold` được đọc
+từ database và áp dụng live, không cần restart.
 
 ## API chính
 
 | Method | Endpoint | Chức năng |
 |---|---|---|
-| `GET` | `/health` | Kiểm tra backend |
-| `GET` | `/api/v1/cameras` | Danh sách và trạng thái camera |
-| `GET/PATCH/DELETE` | `/api/v1/cameras/{id}` | Xem, sửa hoặc xoá camera đã tắt |
+| `GET` | `/health` | Process health |
+| `GET` | `/api/v1/cameras` | Camera desired/observed state |
 | `POST` | `/api/v1/cameras/{id}/start` | Bật camera |
 | `POST` | `/api/v1/cameras/{id}/stop` | Tắt camera |
-| `GET` | `/api/v1/cameras/{id}/stream` | Luồng MJPEG |
-| `GET` | `/api/v1/cameras/{id}/preview` | Ảnh gần nhất |
+| `GET` | `/api/v1/cameras/{id}/stream` | MJPEG |
+| `GET` | `/api/v1/cameras/{id}/preview` | Latest raw JPEG |
 | `POST` | `/api/v1/cameras/{id}/vision/enable` | Bật Vision |
 | `POST` | `/api/v1/cameras/{id}/vision/disable` | Tắt Vision |
-| `GET` | `/api/v1/cameras/{id}/vision/status` | Metrics, device và temporal status |
-| `GET` | `/api/v1/alerts` | Danh sách cảnh báo |
-| `GET` | `/api/v1/alerts/stream` | Cảnh báo realtime qua SSE |
-| `PATCH` | `/api/v1/alerts/{id}` | Human-in-the-loop review |
-| `GET/POST` | `/api/v1/persons` | Danh sách hoặc thêm người thân |
-| `GET` | `/api/v1/history` | Lịch sử sự kiện |
-| `GET` | `/api/v1/overview` | Dữ liệu tổng quan |
+| `PATCH` | `/api/v1/cameras/{id}/vision/identity` | Bật/tắt Unknown workflow |
+| `GET` | `/api/v1/cameras/{id}/vision/status` | Vision/device/realtime metrics |
+| `GET` | `/api/v1/alerts` | Alerts persisted |
+| `GET` | `/api/v1/alerts/stream` | Realtime SSE |
+| `GET` | `/api/v1/settings` | Settings persisted |
+| `PATCH` | `/api/v1/settings/general` | Threshold/general settings áp dụng live |
+
+Xem contract đầy đủ tại [docs/api.md](docs/api.md).
 
 ## Kiểm thử
 
-Backend regression nên chạy bằng Mock engine để độc lập với model và phần cứng:
-
 ```cmd
-set VISION_ENGINE=mock
-set VISION_IDENTITY_ENABLED=false
-python -m pytest -q
-python -m pip check
-```
-
-Frontend:
-
-```cmd
+.venv\Scripts\python.exe -m pytest -q
+.venv\Scripts\python.exe -m ruff check src tests
 cd frontend
 npm.cmd run build
+cd ..
+git diff --check
 ```
 
-Smoke dependency và provider:
+API tests cô lập native AI ở application boundary. Các pipeline/service tests
+vẫn kiểm tra temporal state, latest-frame race, privacy, DB và event contracts.
+Mock tests không thay thế native runtime smoke.
 
-```cmd
-python -c "import torch, onnxruntime as ort; print(torch.__version__, torch.cuda.is_available()); print(ort.get_available_providers())"
-```
-
-## Cấu trúc repository
+## Repository
 
 ```text
 P-227/
-├── visionv2/               # Standalone oracle/reference, không được production import
-├── src/
-│   ├── api/                 # FastAPI routes
-│   ├── services/            # Camera, event, database và runtime services
-│   └── vision/              # Canonical integrated Vision
-├── frontend/                # React/Vite dashboard
-├── database/schema.sql      # SQLite schema và triggers
-├── data/app.db              # Database local, sinh khi chạy
-├── snapshots/               # Ảnh bằng chứng local
-├── tests/                   # Backend, API, Vision và regression tests
-├── docs/                    # Tài liệu kỹ thuật
-├── tools/                   # Parity và hardware benchmark runners
-├── requirements/            # Base/Intel/CUDA/CPU profiles
-├── requirements.txt
-└── requirements-lock-cpu.txt
+├── src/                    # Production backend và canonical Vision
+├── frontend/               # React/Vite UI
+├── database/schema.sql     # SQLite schema
+├── tests/                  # API/service/Vision regressions
+├── docs/                   # Tài liệu kỹ thuật
+├── tools/                  # Benchmark/parity utilities
+├── visionv2/               # Standalone reference/oracle; production không import
+├── data/app.db             # Runtime data, không commit
+└── snapshots/              # Event evidence, không commit
 ```
 
-## Dữ liệu và quyền riêng tư
+`visionv2/runtimev2` và `visionv2/P-227-thi` là reference/oracle, không phải
+production import path và không được dùng để thay thế `src/vision`.
 
-- Video thô không được gửi lên cloud bởi pipeline Vision.
-- Snapshot chỉ được tạo khi có event và được phục vụ qua `/snapshots`.
-- SQLite, snapshot, model riêng và embedding khuôn mặt phải được bảo vệ như dữ liệu nhạy cảm.
-- Chỉ camera đã tắt và không còn lịch sử ràng buộc mới được xoá.
-- `alert_actions` là lịch sử append-only theo thiết kế database.
+## Privacy và persistence
 
-## Tài liệu liên quan
+- Raw video không được gửi cloud bởi Vision pipeline.
+- Snapshot chỉ dùng đúng event frame.
+- Privacy fallback: exact face bbox → CPU full-frame face detector → person crop
+  → rotated crops → pose/head ROI → omit snapshot nếu vẫn không an toàn.
+- Không blur toàn frame và không lưu khuôn mặt visible để “có ảnh”.
+- Snapshot/media lỗi không rollback event/alert hoặc chặn SSE.
+- SQLite, snapshot và face embedding là dữ liệu nhạy cảm; backup database và
+  snapshot cùng nhau.
 
-- [Quickstart Windows CMD](QUICKSTART.md)
-- [Cài đặt và troubleshooting](docs/setup.md)
-- [Kiến trúc](docs/architecture.md)
-- [Sơ đồ kiến trúc](docs/architecture_diagram.md)
+## Tài liệu
+
+- [Quickstart](QUICKSTART.md)
+- [Setup và troubleshooting](docs/setup.md)
+- [Architecture](docs/architecture.md)
+- [Architecture diagrams](docs/architecture_diagram.md)
 - [API](docs/api.md)
-- [Kiểm thử](docs/testing.md)
-- [Vision benchmark và architecture decision](docs/vision-benchmark.md)
-- [Gate 1](docs/Gate1.md)
+- [Testing](docs/testing.md)
+- [Current implementation verification](docs/current-verification.md)
+- [Historical Intel benchmark](docs/vision-benchmark.md)
+- [Gate 1 report](docs/Gate1.md)
 
 ## License
 
-Phần Vision tích hợp sử dụng giấy phép tại [src/vision/LICENSE](src/vision/LICENSE). Xem lịch sử repository để biết thông tin đóng góp của nhóm AI20K Build Phase Cohort 3.
+Phần Vision tích hợp sử dụng giấy phép tại [src/vision/LICENSE](src/vision/LICENSE).

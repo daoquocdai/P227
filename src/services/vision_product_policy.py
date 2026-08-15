@@ -6,6 +6,12 @@ from src.database import database_connection
 from src.models.vision import VisionEvent, VisionResult
 
 
+def unknown_identity_scores(value: object) -> tuple[float, float]:
+    """Return clamped cosine similarity and its UI mismatch score."""
+    similarity = max(0.0, min(1.0, float(value)))
+    return similarity, 1.0 - similarity
+
+
 class VisionProductPolicy:
     """Turns structured AI output into rate-limited product events."""
 
@@ -43,9 +49,10 @@ class VisionProductPolicy:
             metadata = detection.metadata
             track_id = detection.track_id
             assert track_id is not None
-            similarity = max(0.0, min(1.0, float(metadata.get("identity_similarity", 0.0))))
-            confidence = 1.0 - similarity
-            if confidence < stranger_threshold:
+            similarity, mismatch_score = unknown_identity_scores(
+                metadata.get("identity_similarity", 0.0)
+            )
+            if mismatch_score < stranger_threshold:
                 continue
             key = (result.camera_id, int(result.metadata.get("source_epoch", 0)), track_id)
             with self._lock:
@@ -57,13 +64,13 @@ class VisionProductPolicy:
             result.events.append(
                 VisionEvent(
                     type="unknown_person",
-                    confidence=confidence,
+                    confidence=mismatch_score,
                     metadata={
                         "event_id": f"{event_id}:unknown_person",
                         "track_id": track_id,
                         "identity_status": "UNKNOWN",
                         "identity_similarity": similarity,
-                        "stranger_confidence": confidence,
+                        "stranger_confidence": mismatch_score,
                     },
                 )
             )

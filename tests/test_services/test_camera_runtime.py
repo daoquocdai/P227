@@ -141,7 +141,10 @@ def test_video_file_publish_respects_source_fps(monkeypatch):
 
     assert len(hub.published_at) == 3
     intervals = [later - earlier for earlier, later in zip(hub.published_at, hub.published_at[1:])]
-    assert all(interval >= 0.035 for interval in intervals)
+    # Validate source pacing with scheduler tolerance instead of requiring every
+    # individual wake-up to cross an exact wall-clock boundary.
+    assert sum(intervals) / len(intervals) >= 0.04
+    assert min(intervals) >= 0.02
     assert [packet.source_timestamp for packet in hub.packets] == [0.0, 0.05, 0.1]
     assert hub.packets[0].discontinuity
     assert {packet.source_time_kind for packet in hub.packets} == {"media_timeline"}

@@ -712,19 +712,7 @@ class RuntimeV2VisionPipeline(VisionEngine):
             ):
                 return dict(entry["metadata"])
         if entry is None and track_id is not None:
-            entry = {
-                "status": "PENDING",
-                "attempts": 0,
-                "last_attempt_at": float("-inf"),
-                "metadata": {
-                    "identity_status": "UNKNOWN",
-                    "identity_name": None,
-                    "identity_person_id": None,
-                    "identity_similarity": 0.0,
-                    "identity_state": "PENDING",
-                    "identity_face_detected": False,
-                },
-            }
+            entry = self._new_identity_cache_entry()
             cache[track_id] = entry
         try:
             with self._face_lock:
@@ -740,17 +728,8 @@ class RuntimeV2VisionPipeline(VisionEngine):
             }
         if entry is not None:
             entry["last_attempt_at"] = source_timestamp
-        best_name: str | None = None
-        best_score = 0.0
         if not faces:
-            metadata = {
-                "identity_status": "UNKNOWN",
-                "identity_name": None,
-                "identity_person_id": None,
-                "identity_similarity": 0.0,
-                "identity_state": "PENDING",
-                "identity_face_detected": False,
-            }
+            metadata = self._pending_identity_metadata()
             if entry is not None:
                 entry["metadata"] = metadata
             return metadata
@@ -760,23 +739,9 @@ class RuntimeV2VisionPipeline(VisionEngine):
             # track instead of permanently poisoning its five-attempt budget.
             entry["attempts"] += 1
         main_face = max(faces, key=lambda face: (face.bbox[2] - face.bbox[0]) * (face.bbox[3] - face.bbox[1]))
-        known_faces = (
-            self._face_gallery.snapshot()
-            if self._face_gallery is not None
-            else tuple(
-                SimpleNamespace(person_id=None, name=name, embedding=embedding)
-                for name, embedding in self._known_faces.items()
-            )
+        best_name, best_person_id, best_score = self._closest_known_identity(
+            main_face.embedding
         )
-        best_person_id: str | None = None
-        for known_face in known_faces:
-            name = known_face.name
-            known_embedding = known_face.embedding
-            score = self._cosine_similarity(known_embedding, main_face.embedding)
-            if score > best_score:
-                best_score = score
-                best_name = name
-                best_person_id = known_face.person_id
         known = best_score > 0.45
         metadata = {
             "identity_status": "KNOWN" if known else "UNKNOWN",
@@ -804,6 +769,48 @@ class RuntimeV2VisionPipeline(VisionEngine):
             for cached_track_id in list(cache)[:-50]:
                 cache.pop(cached_track_id, None)
         return metadata
+
+    @classmethod
+    def _new_identity_cache_entry(cls) -> dict[str, Any]:
+        return {
+            "status": "PENDING",
+            "attempts": 0,
+            "last_attempt_at": float("-inf"),
+            "metadata": cls._pending_identity_metadata(),
+        }
+
+    @staticmethod
+    def _pending_identity_metadata() -> dict[str, Any]:
+        return {
+            "identity_status": "UNKNOWN",
+            "identity_name": None,
+            "identity_person_id": None,
+            "identity_similarity": 0.0,
+            "identity_state": "PENDING",
+            "identity_face_detected": False,
+        }
+
+    def _closest_known_identity(
+        self, embedding: np.ndarray
+    ) -> tuple[str | None, str | None, float]:
+        known_faces = (
+            self._face_gallery.snapshot()
+            if self._face_gallery is not None
+            else tuple(
+                SimpleNamespace(person_id=None, name=name, embedding=embedding)
+                for name, embedding in self._known_faces.items()
+            )
+        )
+        best_name: str | None = None
+        best_person_id: str | None = None
+        best_score = 0.0
+        for known_face in known_faces:
+            score = self._cosine_similarity(known_face.embedding, embedding)
+            if score > best_score:
+                best_score = score
+                best_name = known_face.name
+                best_person_id = known_face.person_id
+        return best_name, best_person_id, best_score
 
     def _load_known_faces(self, face_app: Any, cv2: Any) -> dict[str, np.ndarray]:
         known_faces: dict[str, np.ndarray] = {}

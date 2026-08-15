@@ -1,18 +1,13 @@
 # GuardianCam Quickstart — Windows CMD
 
-Hướng dẫn này bắt đầu từ máy Windows chưa có source code và dùng **Command
-Prompt (CMD)**. Cách chạy native được ưu tiên vì hỗ trợ webcam USB; Docker phù
-hợp hơn với video file và RTSP.
+Luồng ngắn nhất để chạy backend, frontend và canonical Vision trên Windows.
+Chạy native nếu dùng webcam USB; Docker phù hợp hơn với video file/RTSP.
 
 ## 1. Chuẩn bị
 
-Cài trước:
-
 - Git
 - Python 3.11 64-bit
-- Node.js 20 trở lên
-
-Kiểm tra trong CMD:
+- Node.js 20+
 
 ```cmd
 git --version
@@ -21,7 +16,9 @@ node --version
 npm.cmd --version
 ```
 
-## 2. Clone và cài dependency
+## 2. Clone và tạo môi trường
+
+### Intel Iris Xe
 
 ```cmd
 git clone https://github.com/AI20K-Build-Phase-Cohort-3/P-227.git
@@ -30,60 +27,65 @@ python -m venv .venv
 .venv\Scripts\activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements/vision-intel.txt
+```
+
+### NVIDIA CUDA 12.4
+
+```cmd
+python -m pip install -r requirements/vision-cuda.txt
+```
+
+### CPU fallback
+
+```cmd
+python -m pip install -r requirements/vision-cpu.txt
+```
+
+Cài frontend và tạo `.env`:
+
+```cmd
 cd frontend
 npm.cmd ci
 cd ..
 copy /Y .env.example .env
 ```
 
-Máy NVIDIA CUDA 12.4 dùng profile sau thay cho Intel:
+## 3. Kiểm tra model và Identity
 
-```cmd
-python -m pip install -r requirements/vision-cuda.txt
+Canonical Fall Vision cần:
+
+```text
+src\vision\yolov8n.pt
+src\vision\work_dir\fall_detection\joint\config.yaml
+src\vision\work_dir\fall_detection\joint\runs-best_val.pt
 ```
 
-CPU/Docker portable dùng `requirements/vision-cpu.txt`. Nếu cần tái tạo đúng
-môi trường Windows/Torch CPU cũ đã khóa:
-
-```cmd
-python -m pip install -r requirements-lock-cpu.txt
-```
-
-## 3. Chọn Vision engine
-
-File `.env.example` mặc định dùng canonical VisionV2:
+Giữ cấu hình sau nếu chưa cài InsightFace `buffalo_l`:
 
 ```dotenv
 VISION_ENGINE=canonical
 VISION_DEVICE=auto
-```
-
-Các lựa chọn hợp lệ:
-
-| Giá trị | Ý nghĩa |
-|---|---|
-| `mock` | Chạy sản phẩm không cần model; không tự sinh cảnh báo giả |
-| `canonical` | Production VisionV2 năm lớp/joint; raw class `1` là fall candidate |
-
-Model canonical đi cùng repository tại `src\vision`. Nếu bật nhận diện
-người lạ, InsightFace còn cần bộ `buffalo_l` trong thư mục được trỏ bởi
-`VISION_INSIGHTFACE_ROOT`. Có thể chạy smoke không cần model nhận diện
-bằng cách đặt:
-
-```dotenv
 VISION_IDENTITY_ENABLED=false
 ```
 
-Muốn xác nhận riêng backend/frontend trước khi chạy AI thật, đặt:
+Muốn bật `Phát hiện người lạ`, đảm bảo thư mục sau tồn tại rồi đổi thành
+`VISION_IDENTITY_ENABLED=true`:
+
+```text
+<VISION_INSIGHTFACE_ROOT>\models\buffalo_l\
+```
+
+Known-person profiles được đăng ký từ UI/API và lưu trong SQLite. Không cần copy
+ảnh vào `register face`.
+
+Nếu chỉ muốn kiểm tra backend/frontend không cần AI thật:
 
 ```dotenv
 VISION_ENGINE=mock
 VISION_IDENTITY_ENABLED=false
 ```
 
-## 4. Chạy dự án
-
-Mở **hai cửa sổ CMD** tại thư mục `P-227`.
+## 4. Chạy
 
 CMD 1 — backend:
 
@@ -91,6 +93,13 @@ CMD 1 — backend:
 cd /d <duong-dan-den-P-227>
 .venv\Scripts\activate
 python -m uvicorn src.main:app --host 127.0.0.1 --port 8000
+```
+
+Chờ log:
+
+```text
+Application startup complete.
+Uvicorn running on http://127.0.0.1:8000
 ```
 
 CMD 2 — frontend:
@@ -102,30 +111,46 @@ npm.cmd run dev
 
 Mở:
 
-- Giao diện: <http://localhost:5173>
-- Swagger: <http://127.0.0.1:8000/docs>
-- Health check: <http://127.0.0.1:8000/health>
+- <http://localhost:5173>
+- <http://127.0.0.1:8000/docs>
+- <http://127.0.0.1:8000/health>
 
-Không đóng CMD backend khi frontend đang chạy. Dừng từng process bằng
-`Ctrl+C` và chờ shutdown hoàn tất.
+## 5. Smoke check
 
-## 5. Kiểm tra sau khi chạy
-
-Trong CMD thứ ba:
+CMD 3:
 
 ```cmd
 curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/api/v1/status
 curl http://127.0.0.1:8000/api/v1/cameras
 curl http://127.0.0.1:8000/api/v1/alerts
 ```
 
-Backend tự khôi phục trạng thái bật/tắt camera và Vision từ SQLite. Không cần
-gọi Swagger để bật lại sau mỗi lần restart. Camera page dùng MJPEG live;
-Dashboard dùng preview tĩnh gần nhất.
+Backend tự restore desired state từ SQLite. Trên Camera page:
 
-## 6. Chạy bằng Docker (tùy chọn)
+- Vision ON đồng nghĩa Fall Detection luôn ON.
+- `Hiện khung` chỉ ẩn/hiện overlay.
+- `Phát hiện người lạ` bật/tắt identity inference và Unknown alerts.
+- Video vẫn phải realtime khi Vision chậm; overlay có thể hơi stale nhưng chỉ
+  được dùng trong giới hạn `0.75s` và cùng source epoch.
 
-Cài Docker Desktop, rồi chạy từ root repository:
+Dừng frontend/backend bằng `Ctrl+C`. Chờ terminal backend hoàn tất shutdown;
+nếu port vẫn bị giữ, xác định đúng PID trước khi dừng process.
+
+## 6. Chạy test
+
+Từ root:
+
+```cmd
+.venv\Scripts\python.exe -m pytest -q
+.venv\Scripts\python.exe -m ruff check src tests
+cd frontend
+npm.cmd run build
+cd ..
+git diff --check
+```
+
+## 7. Docker tùy chọn
 
 ```cmd
 docker compose config --quiet
@@ -134,35 +159,42 @@ docker compose ps
 docker compose logs --follow --tail=200
 ```
 
-Docker image hiện tại là CPU-only. SQLite nằm trong `data`, snapshot nằm trong
-`snapshots`, còn InsightFace dùng volume `insightface_models`. Webcam theo index
-như `0` thường không hoạt động qua Docker Desktop trên Windows; dùng video file
-hoặc RTSP, hoặc chạy native như phần trên.
-
-Dừng Docker:
+Docker profile là CPU-only. Dừng mà vẫn giữ data/model:
 
 ```cmd
 docker compose down
 ```
 
-Không thêm `--volumes` nếu muốn giữ model InsightFace đã tải.
+Không thêm `--volumes` nếu muốn giữ InsightFace model volume.
 
-## 7. Lỗi thường gặp
+## 8. Lỗi nhanh
 
-Backend báo `Errno 10048`:
+### Frontend báo `ECONNREFUSED`
+
+```cmd
+curl http://127.0.0.1:8000/health
+netstat -ano | findstr :8000
+```
+
+Nếu alerts, cameras và overview cùng `ECONNREFUSED`, backend không còn listen.
+
+### Port 8000 đã dùng
 
 ```cmd
 netstat -ano | findstr :8000
 tasklist /FI "PID eq <PID>"
 ```
 
-Frontend báo `ECONNREFUSED`: backend chưa chạy tại port 8000. Kiểm tra bằng:
+### Camera đen
 
-```cmd
-curl http://127.0.0.1:8000/health
+Kiểm tra camera `status=online`, `stream_ready=true`, preview trả JPEG và Browser
+Network có MJPEG response. Vision status không quyết định Camera online/offline.
+
+### Vision lỗi
+
+```text
+GET /api/v1/cameras/{id}/vision/status
 ```
 
-Camera video báo `moov atom not found`: file MP4 bị thiếu, hỏng hoặc chưa ghi
-xong; kiểm tra lại đường dẫn và thay bằng file video hợp lệ.
-
-Chi tiết cấu hình và xử lý lỗi nằm tại [docs/setup.md](docs/setup.md).
+Kiểm tra `current_error`, device diagnostics, model paths và InsightFace root.
+Chi tiết tại [docs/setup.md](docs/setup.md).

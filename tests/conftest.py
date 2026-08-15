@@ -7,6 +7,8 @@ from httpx import ASGITransport, AsyncClient
 
 from src.database import initialize_database
 from src.main import app
+from src.runtime import LocalRuntime
+from src.vision.adapters.mock import MockVisionEngine
 
 
 @pytest.fixture(autouse=True)
@@ -27,8 +29,15 @@ def preserve_application_database():
 
 
 @pytest_asyncio.fixture
-async def client(preserve_application_database):
-    """Async HTTP client for testing API endpoints."""
+async def client(preserve_application_database, monkeypatch):
+    """Async API client with native AI isolated at the application boundary."""
+    monkeypatch.setattr(
+        "src.main.LocalRuntime",
+        lambda event_dispatcher, mock_event_frame_ids: LocalRuntime(
+            vision_engine=MockVisionEngine(),
+            event_dispatcher=event_dispatcher,
+        ),
+    )
     transport = ASGITransport(app=app)
     async with app.router.lifespan_context(app):
         async with AsyncClient(transport=transport, base_url="http://test") as ac:

@@ -2,6 +2,7 @@ import json
 import time
 
 import numpy as np
+import pytest
 
 from src.database import database_connection
 from src.models.frame import FramePacket
@@ -60,6 +61,29 @@ def test_product_thresholds_gate_below_and_accept_equal_confidence():
 
     equal = VisionProductPolicy().apply(result(confidence=0.80, similarity=0.20))
     assert {event.type for event in equal.events} == {"fall_confirmed", "unknown_person"}
+
+
+@pytest.mark.parametrize(
+    ("similarity", "expected_mismatch"),
+    [
+        (0.0, 1.0),
+        (0.45, 0.55),
+        (1.0, 0.0),
+        (-0.25, 1.0),
+        (1.25, 0.0),
+    ],
+)
+def test_unknown_mismatch_score_is_one_minus_clamped_cosine_similarity(
+    similarity, expected_mismatch
+):
+    set_thresholds(stranger=0, fall=100)
+    vision_result = result(confidence=0.0, similarity=similarity)
+
+    VisionProductPolicy().apply(vision_result)
+
+    unknown = next(event for event in vision_result.events if event.type == "unknown_person")
+    assert unknown.confidence == pytest.approx(expected_mismatch)
+    assert unknown.metadata["stranger_confidence"] == pytest.approx(expected_mismatch)
 
 
 def test_unknown_requires_final_retry_state_and_has_cooldown():

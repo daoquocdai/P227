@@ -389,6 +389,9 @@ def test_latest_slot_keeps_discontinuity_sticky_when_boundary_packet_is_overwrit
     assert latest.frame_id == 4
     assert latest.discontinuity is True
 
+    assert slot.offer(replace(packet(6), discontinuity=False)) is False
+    assert slot.take().discontinuity is False
+
 
 def test_blocked_vision_keeps_latest_source_frame_without_backlog():
     class BlockingEngine(FakeEngine):
