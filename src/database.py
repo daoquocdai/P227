@@ -48,6 +48,22 @@ def _apply_runtime_migrations(connection: sqlite3.Connection) -> None:
             CHECK (source_kind = 'webcam' OR length(trim(source_uri)) > 0)
         );
         CREATE INDEX IF NOT EXISTS idx_camera_sources_kind ON camera_sources(source_kind);
+        CREATE TABLE IF NOT EXISTS device_metrics (
+            id TEXT PRIMARY KEY NOT NULL CHECK (length(id) = 36),
+            camera_id TEXT REFERENCES cameras(id) ON UPDATE CASCADE ON DELETE CASCADE,
+            measured_at TEXT NOT NULL,
+            ram_usage_mb REAL CHECK (ram_usage_mb >= 0),
+            ram_total_mb REAL CHECK (ram_total_mb >= 0),
+            cpu_usage_percent REAL CHECK (cpu_usage_percent BETWEEN 0.0 AND 100.0),
+            ping_ms REAL CHECK (ping_ms >= 0),
+            disk_usage_percent REAL CHECK (disk_usage_percent BETWEEN 0.0 AND 100.0),
+            CHECK (
+                ram_usage_mb IS NOT NULL OR cpu_usage_percent IS NOT NULL OR
+                ping_ms IS NOT NULL OR disk_usage_percent IS NOT NULL
+            )
+        );
+        CREATE INDEX IF NOT EXISTS idx_device_metrics_camera_measured
+            ON device_metrics(camera_id, measured_at DESC);
         CREATE TABLE IF NOT EXISTS system_settings (
             setting_key TEXT PRIMARY KEY NOT NULL,
             value_json TEXT NOT NULL CHECK (json_valid(value_json)),

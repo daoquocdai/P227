@@ -15,12 +15,14 @@ from src.api.overview import router as overview_router
 from src.api.persons import router as persons_router
 from src.api.routes import router as api_router
 from src.api.settings import router as settings_router
+from src.api.statistics import router as statistics_router
 from src.api.vision import router as vision_router
 from src.config import get_settings
 from src.database import initialize_database
 from src.runtime import LocalRuntime
 from src.services.event_service import vision_event_sink
 from src.services.face_identity_service import face_gallery
+from src.services.operational_metrics_collector import OperationalMetricsCollector
 from src.services.vision_event_dispatcher import ThreadsafeVisionEventDispatcher
 
 
@@ -44,9 +46,18 @@ async def lifespan(app: FastAPI):
     app.state.vision_event_dispatcher = dispatcher
     runtime.start()
     runtime.restore_persisted_state()
+    metrics_collector = OperationalMetricsCollector(
+        runtime,
+        interval_seconds=settings.metrics_collection_interval_seconds,
+        ping_url=settings.api_base_url,
+    )
+    if settings.metrics_collection_enabled:
+        metrics_collector.start()
+    app.state.metrics_collector = metrics_collector
     try:
         yield
     finally:
+        metrics_collector.stop()
         runtime.stop()
         dispatcher.stop()
         consumer.cancel()
@@ -84,6 +95,7 @@ app.include_router(history_router, prefix="/api/v1")
 app.include_router(overview_router, prefix="/api/v1")
 app.include_router(persons_router, prefix="/api/v1")
 app.include_router(settings_router, prefix="/api/v1")
+app.include_router(statistics_router, prefix="/api/v1")
 app.include_router(vision_router, prefix="/api/v1")
 
 

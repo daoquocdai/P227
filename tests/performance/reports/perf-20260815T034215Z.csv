@@ -1,0 +1,2 @@
+﻿scenario,load,sent,success,failed,error_rate,throughput,p50,p95,p99,min,max,stdev,cpu_p95,ram_max_mb,stored,lost,duplicates,result
+api_latency,1 events/s,10,10,0,0.0,1.0596587898723286,359.0562,457.35294500000003,458.583389,314.141,458.891,51.96974639346338,15.720000000000011,38.65234375,12,0,0,FAIL

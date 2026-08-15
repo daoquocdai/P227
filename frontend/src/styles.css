@@ -54,6 +54,7 @@ nav { display: grid; gap: 6px; }
 .access-notice{position:sticky;z-index:10;top:12px;width:calc(100% - 40px);margin:12px 20px 0;padding:12px;border:1px solid #fde68a;border-radius:10px;background:#fffbeb;color:#92400e;text-align:left;cursor:pointer}
 .no-resolve-alert .hero-safe,.no-resolve-alert .hero-false,.no-resolve-alert .quick-action-list,.no-resolve-alert .alert-product-actions button:nth-child(n+2){display:none}
 .role-caregiver .family-deactivate-control{display:none!important}
+.role-caregiver .nav-item[href="/statistics"]{display:none!important}
 .settings-password-field{position:relative}.settings-password-field input{padding-right:44px}.settings-password-field button{position:absolute;right:3px;top:3px;width:32px;height:32px;padding:0;border:0;border-radius:7px;background:transparent;color:#64748b;display:grid;place-items:center;cursor:pointer}.settings-password-field button:hover{background:#eaf3ff;color:#2563eb}.settings-password-field button svg{width:16px;height:16px}
 .topbar-protection { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 0 11px; border: 1px solid #ccebd6; border-radius: 999px; background: #effaf3; color: #17813d; font-size: 12px; font-weight: 750; white-space: nowrap; }
 .topbar-protection svg { width: 16px; height: 16px; }

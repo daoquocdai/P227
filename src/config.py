@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"
 
     api_base_url: str = "http://localhost:8000"
+    metrics_collection_enabled: bool = True
+    metrics_collection_interval_seconds: int = Field(default=30, ge=5, le=3600)
 
     # Explicit test/demo control. Empty means the production mock emits no events.
     mock_vision_event_frame_ids: str = ""

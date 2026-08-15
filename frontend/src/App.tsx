@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { Bell, Camera, HeartHandshake, History, Home, LogOut, Menu, Settings, ShieldCheck, UsersRound } from "lucide-react";
+import { BarChart3, Bell, Camera, HeartHandshake, History, Home, LogOut, Menu, Settings, ShieldCheck, UsersRound } from "lucide-react";
 import AlertsPage from "./features/alerts/AlertsPage";
 import CameraPage from "./pages/CameraPage";
 import FamilyPage from "./pages/FamilyPage";
 import HistoryPage from "./pages/HistoryPage";
 import OverviewPage from "./pages/OverviewPage";
 import SettingsPage from "./pages/SettingsPage";
+import StatisticsPage from "./pages/StatisticsPage";
 import { fetchAlerts } from "./features/alerts/alertService";
 import { API_BASE_URL } from "./api/client";
 import { logout, me, type AuthUser } from "./api/auth";
@@ -17,6 +18,7 @@ const navItems = [
   { label: "Cảnh báo", path: "/alerts", icon: Bell, badge: undefined },
   { label: "Người thân", path: "/family", icon: UsersRound, badge: undefined },
   { label: "Lịch sử", path: "/history", icon: History, badge: undefined },
+  { label: "Thống kê", path: "/statistics", icon: BarChart3, badge: undefined },
   { label: "Cài đặt", path: "/settings", icon: Settings, badge: undefined },
 ] as const;
 
@@ -69,7 +71,7 @@ function DashboardApp({user,onLogout}:{user:AuthUser;onLogout:()=>void}) {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
   };
   const canManageSettings=user.role==="admin"||user.permissions.manage_cameras||user.permissions.manage_persons||user.permissions.manage_users;
-  const canOpen=(path:RoutePath)=>(path!=="/history"||user.role==="admin"||user.permissions.view_history)&&(path!=="/settings"||canManageSettings);
+  const canOpen=(path:RoutePath)=>(path!=="/history"||user.role==="admin"||user.permissions.view_history)&&(path!=="/statistics"||user.role==="admin")&&(path!=="/settings"||canManageSettings);
   useEffect(()=>{if(!canOpen(activePath)){setAccessNotice("Bạn không có quyền truy cập mục này. Liên hệ quản trị viên để được cấp quyền.");window.history.replaceState({},"","/");setActivePath("/")}},[activePath,user]);
   const activeNav = navItems.find((item) => item.path === activePath)?.label ?? "Tổng quan";
 
@@ -94,6 +96,7 @@ function RouteContent({ path }: { path: RoutePath }) {
   if (path === "/alerts") return <AlertsPage />;
   if (path === "/family") return <FamilyPage />;
   if (path === "/history") return <HistoryPage />;
+  if (path === "/statistics") return <StatisticsPage />;
   if (path === "/settings") return <SettingsPage />;
   return <OverviewPage />;
 }

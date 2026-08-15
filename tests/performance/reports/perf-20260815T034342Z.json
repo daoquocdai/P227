@@ -1,0 +1,45 @@
+{
+  "metadata": {
+    "os": "Windows-10-10.0.26200-SP0",
+    "python": "3.11.9",
+    "cpu_model": "Intel64 Family 6 Model 151 Stepping 5, GenuineIntel",
+    "logical_cpus": 8,
+    "physical_cpus": 4,
+    "total_ram_gb": 15.747482299804688,
+    "gpu": "NOT MEASURED",
+    "backend_mode": "tiến trình ngoài; cần ghi lệnh khởi chạy backend trong ghi chú báo cáo",
+    "base_url": "http://127.0.0.1:18765",
+    "event_endpoint": "/api/v1/vision/events",
+    "clock": "perf_counter_ns/monotonic"
+  },
+  "results": [
+    {
+      "scenario": "api_latency",
+      "load": "10 events/s",
+      "sent": 100,
+      "success": 18,
+      "failed": 82,
+      "duration_seconds": 19.90600000001723,
+      "stored": 32,
+      "lost": 0,
+      "duplicates": 0,
+      "request_bytes": null,
+      "response_bytes": null,
+      "cpu_p95": 6.2,
+      "ram_max_mb": 46.78515625,
+      "notes": [
+        "Đếm sự kiện đã lưu, bị mất hoặc trùng yêu cầu PERF_DATABASE_PATH trỏ đến database test riêng."
+      ],
+      "min": 517.6999,
+      "p50": 5615.3184,
+      "p95": 9977.680279999999,
+      "p99": 10337.927415999999,
+      "max": 10427.9892,
+      "mean": 5695.298944444444,
+      "stdev": 2851.8332969995895,
+      "error_rate": 0.82,
+      "throughput": 0.9042499748811624,
+      "result": "FAIL"
+    }
+  ]
+}

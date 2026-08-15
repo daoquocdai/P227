@@ -1,0 +1,42 @@
+{
+  "metadata": {
+    "os": "Windows-10-10.0.26200-SP0",
+    "python": "3.11.9",
+    "cpu_model": "Intel64 Family 6 Model 151 Stepping 5, GenuineIntel",
+    "logical_cpus": 8,
+    "physical_cpus": 4,
+    "total_ram_gb": 15.747482299804688,
+    "gpu": "NOT MEASURED",
+    "backend_mode": "tiến trình ngoài; cần ghi lệnh khởi chạy backend trong ghi chú báo cáo",
+    "mode": "ASGI in-process with full lifespan",
+    "database": "D:\\DuAnCAm\\.tmp\\pytest\\pytest-of-Admin\\pytest-6\\test_isolated_smoke_and_write_0\\smoke.db"
+  },
+  "results": [
+    {
+      "scenario": "isolated_smoke",
+      "load": "sequential low load",
+      "sent": 3,
+      "success": 3,
+      "failed": 0,
+      "duration_seconds": 5.219000000040978,
+      "stored": 3,
+      "lost": 0,
+      "duplicates": 0,
+      "request_bytes": null,
+      "response_bytes": null,
+      "cpu_p95": 73.12999999999992,
+      "ram_max_mb": 96.3359375,
+      "notes": [],
+      "min": 1712.0714,
+      "p50": 1714.4188,
+      "p95": 1786.72129,
+      "p99": 1793.148178,
+      "max": 1794.7549,
+      "mean": 1740.4150333333334,
+      "stdev": 38.436036941940564,
+      "error_rate": 0.0,
+      "throughput": 0.5748227629769007,
+      "result": "FAIL"
+    }
+  ]
+}

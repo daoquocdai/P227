@@ -310,6 +310,24 @@ CREATE INDEX idx_metrics_evaluation_run
     ON inference_metrics(evaluation_run_id)
     WHERE evaluation_run_id IS NOT NULL;
 
+CREATE TABLE device_metrics (
+    id TEXT PRIMARY KEY NOT NULL CHECK (length(id) = 36),
+    camera_id TEXT REFERENCES cameras(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    measured_at TEXT NOT NULL,
+    ram_usage_mb REAL CHECK (ram_usage_mb >= 0),
+    ram_total_mb REAL CHECK (ram_total_mb >= 0),
+    cpu_usage_percent REAL CHECK (cpu_usage_percent BETWEEN 0.0 AND 100.0),
+    ping_ms REAL CHECK (ping_ms >= 0),
+    disk_usage_percent REAL CHECK (disk_usage_percent BETWEEN 0.0 AND 100.0),
+    CHECK (
+        ram_usage_mb IS NOT NULL OR cpu_usage_percent IS NOT NULL OR
+        ping_ms IS NOT NULL OR disk_usage_percent IS NOT NULL
+    )
+);
+
+CREATE INDEX idx_device_metrics_camera_measured
+    ON device_metrics(camera_id, measured_at DESC);
+
 -- Enforce subtype integrity that cannot be expressed by a CHECK constraint.
 CREATE TRIGGER trg_fall_details_event_type_insert
 BEFORE INSERT ON fall_event_details

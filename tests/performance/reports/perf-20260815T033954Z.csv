@@ -1,0 +1,2 @@
+﻿scenario,load,sent,success,failed,error_rate,throughput,p50,p95,p99,min,max,stdev,cpu_p95,ram_max_mb,stored,lost,duplicates,result
+isolated_smoke,sequential low load,3,3,0,0.0,0.7006071928994472,1573.5497,1603.66109,1606.3376580000001,1100.3996,1607.0068,231.3345940797202,71.7,96.21875,3,0,0,FAIL
