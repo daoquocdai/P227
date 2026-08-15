@@ -84,7 +84,10 @@ class VisionProductPolicy:
 
     @staticmethod
     def _general_settings() -> dict:
-        with database_connection() as connection:
+        # Application startup owns schema/bootstrap. ProductPolicy may execute
+        # on every locked-unknown observation, so it must use the lightweight
+        # connection path while still reading thresholds live on every decision.
+        with database_connection(initialize=False) as connection:
             row = connection.execute(
                 "SELECT value_json FROM system_settings WHERE setting_key = 'general'"
             ).fetchone()

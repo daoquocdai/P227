@@ -8,6 +8,8 @@ CREATE TABLE users (
     display_name TEXT NOT NULL CHECK (length(trim(display_name)) > 0),
     role TEXT NOT NULL CHECK (role IN ('admin', 'caregiver')),
     is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+    password_hash TEXT,
+    force_password_change INTEGER NOT NULL DEFAULT 0 CHECK (force_password_change IN (0, 1)),
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
@@ -127,6 +129,17 @@ CREATE TABLE camera_sources (
 
 CREATE INDEX idx_camera_sources_kind ON camera_sources(source_kind);
 
+CREATE TABLE frame_metrics (
+    camera_id TEXT NOT NULL REFERENCES cameras(id) ON UPDATE CASCADE ON DELETE RESTRICT,
+    frame_id INTEGER NOT NULL,
+    timestamp TEXT NOT NULL,
+    fps REAL,
+    latency_ms REAL,
+    dropped INTEGER NOT NULL DEFAULT 0 CHECK (dropped IN (0, 1)),
+    source_type TEXT,
+    PRIMARY KEY (camera_id, frame_id)
+);
+
 CREATE TABLE events (
     id TEXT PRIMARY KEY NOT NULL CHECK (length(id) = 36),
     camera_id TEXT NOT NULL REFERENCES cameras(id) ON UPDATE CASCADE ON DELETE RESTRICT,
@@ -144,6 +157,8 @@ CREATE INDEX idx_events_camera_occurred
     ON events(camera_id, occurred_at DESC);
 CREATE INDEX idx_events_type_occurred
     ON events(event_type, occurred_at DESC);
+CREATE INDEX idx_events_occurred
+    ON events(occurred_at DESC);
 
 CREATE TABLE event_persons (
     id TEXT PRIMARY KEY NOT NULL CHECK (length(id) = 36),
@@ -307,6 +322,43 @@ CREATE INDEX idx_metrics_camera_measured
 CREATE INDEX idx_metrics_evaluation_run
     ON inference_metrics(evaluation_run_id)
     WHERE evaluation_run_id IS NOT NULL;
+
+-- Periodic observations from the running Local Hub. These tables are kept
+-- separate from inference_metrics, whose rows describe offline evaluation.
+CREATE TABLE hub_metrics (
+    id TEXT PRIMARY KEY NOT NULL CHECK (length(id) = 36),
+    measured_at TEXT NOT NULL,
+    process_cpu_percent REAL CHECK (process_cpu_percent BETWEEN 0.0 AND 100.0),
+    process_rss_mb REAL CHECK (process_rss_mb >= 0.0),
+    host_memory_total_mb REAL CHECK (host_memory_total_mb >= 0.0),
+    host_memory_used_percent REAL CHECK (host_memory_used_percent BETWEEN 0.0 AND 100.0),
+    disk_used_percent REAL CHECK (disk_used_percent BETWEEN 0.0 AND 100.0)
+);
+
+CREATE INDEX idx_hub_metrics_measured
+    ON hub_metrics(measured_at DESC);
+
+CREATE TABLE operational_camera_metrics (
+    id TEXT PRIMARY KEY NOT NULL CHECK (length(id) = 36),
+    camera_id TEXT NOT NULL REFERENCES cameras(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    measured_at TEXT NOT NULL,
+    camera_status TEXT NOT NULL CHECK (camera_status IN ('connecting', 'online', 'offline', 'error')),
+    last_seen_at TEXT,
+    raw_fps REAL CHECK (raw_fps >= 0.0),
+    vision_status TEXT NOT NULL CHECK (vision_status IN ('disabled', 'error', 'running', 'waiting_for_source')),
+    vision_fps REAL CHECK (vision_fps >= 0.0),
+    vision_processing_latency_ms REAL CHECK (vision_processing_latency_ms >= 0.0),
+    vision_drop_ratio REAL CHECK (vision_drop_ratio BETWEEN 0.0 AND 1.0),
+    pending INTEGER CHECK (pending >= 0),
+    max_pending INTEGER CHECK (max_pending >= 0),
+    vision_frames_offered INTEGER CHECK (vision_frames_offered >= 0),
+    vision_frames_overwritten INTEGER CHECK (vision_frames_overwritten >= 0)
+);
+
+CREATE INDEX idx_operational_camera_metrics_camera_measured
+    ON operational_camera_metrics(camera_id, measured_at DESC);
+CREATE INDEX idx_operational_camera_metrics_measured
+    ON operational_camera_metrics(measured_at DESC);
 
 -- Enforce subtype integrity that cannot be expressed by a CHECK constraint.
 CREATE TRIGGER trg_fall_details_event_type_insert

@@ -32,6 +32,7 @@ class NotificationUpdate(BaseModel):
 class UserCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255, pattern=r".*\S.*")
     email: str = Field(min_length=4, max_length=255)
+    password: str = Field(min_length=8, max_length=128)
     role: Literal["admin", "caregiver"] = "caregiver"
 
 

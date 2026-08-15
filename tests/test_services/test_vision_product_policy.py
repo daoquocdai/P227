@@ -385,3 +385,11 @@ def test_event_service_rechecks_persisted_identity_gate_before_db_and_notificati
             "SELECT 1 FROM events WHERE id = ?",
             (stable_uuid(unknown.metadata["event_id"], "event"),),
         ).fetchone() is None
+
+
+def test_product_policy_live_settings_read_skips_database_bootstrap(monkeypatch):
+    def forbidden():
+        raise AssertionError("product hot path invoked database bootstrap")
+
+    monkeypatch.setattr("src.database.initialize_database", forbidden)
+    assert VisionProductPolicy._general_settings()["fall_threshold"] >= 70

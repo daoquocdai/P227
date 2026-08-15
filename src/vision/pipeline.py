@@ -191,6 +191,7 @@ class RuntimeV2VisionPipeline(VisionEngine):
         if height <= 0 or width <= 0:
             raise ValueError("canonical Vision received an empty frame")
 
+        frame_preprocess_started = time.perf_counter()
         scale = FRAME_SIZE / max(height, width)
         new_w, new_h = int(width * scale), int(height * scale)
         prepared = deps.cv2.resize(frame, (new_w, new_h))
@@ -204,6 +205,7 @@ class RuntimeV2VisionPipeline(VisionEngine):
             deps.cv2.BORDER_CONSTANT,
             value=(0, 0, 0),
         )
+        self._record_stage_metric(state, "frame_preprocess", frame_preprocess_started)
         state["vision_geometry"] = {
             "source_width": width,
             "source_height": height,
@@ -225,6 +227,7 @@ class RuntimeV2VisionPipeline(VisionEngine):
         detections: list[VisionDetection] = []
         keypoints = np.zeros((25, 3), dtype=np.float32)
 
+        detector_postprocess_started = time.perf_counter()
         boxes_obj = results[0].boxes if results else None
         if boxes_obj is not None and len(boxes_obj) > 0:
             boxes = boxes_obj.xyxy.cpu().numpy()
@@ -239,6 +242,9 @@ class RuntimeV2VisionPipeline(VisionEngine):
                 crop = prepared[y1:y2, x1:x2]
                 confidence = self._box_value(boxes_obj, "conf", best_idx, 0.0)
                 track_id = self._box_int_value(boxes_obj, "id", best_idx)
+                self._record_stage_metric(
+                    state, "detector_postprocess", detector_postprocess_started
+                )
                 face_started = time.perf_counter()
                 detection_metadata = self._identity_metadata(
                     crop, track_id, state, source_timestamp, packet.frame_id
@@ -276,6 +282,8 @@ class RuntimeV2VisionPipeline(VisionEngine):
                     }
 
                 self._observe_movement(state, keypoints, source_timestamp)
+        else:
+            self._record_stage_metric(state, "detector_postprocess", detector_postprocess_started)
 
         kpts_buffer = self._buffer(state, "vision_kpts_buffer", WINDOW_SIZE)
         frame_ids = self._buffer(state, "vision_sampled_frame_ids", WINDOW_SIZE)
@@ -299,6 +307,7 @@ class RuntimeV2VisionPipeline(VisionEngine):
 
         if source_timestamps and source_timestamp - source_timestamps[0] >= WINDOW_SECONDS:
             fall_started = time.perf_counter()
+            fall_preprocess_started = time.perf_counter()
             raw_array = self._resample_frames(np.asarray(kpts_buffer, dtype=np.float32), WINDOW_SIZE, deps)
             cleaned = deps.clean_out_of_bounds_data(raw_array)
             normalized = deps.normalize_skeleton_dynamic(cleaned)
@@ -312,8 +321,12 @@ class RuntimeV2VisionPipeline(VisionEngine):
             data_tensor = deps.torch.FloatTensor(model_data).unsqueeze(0).to(self._device)
             if tuple(data_tensor.shape) != (1, 3, WINDOW_SIZE, 25, 1):
                 raise RuntimeError(f"Invalid SDA-GCN input shape: {tuple(data_tensor.shape)}")
+            self._record_stage_metric(state, "fall_preprocess", fall_preprocess_started)
+            fall_inference_started = time.perf_counter()
             with deps.torch.inference_mode():
                 output = self._action_model(data_tensor)
+                self._record_stage_metric(state, "fall_inference", fall_inference_started)
+                fall_postprocess_started = time.perf_counter()
                 expected_output = (1, self.OUTPUT_CLASSES)
                 if tuple(output.shape) != expected_output:
                     raise RuntimeError(f"SDA-GCN must return shape {expected_output}, got {tuple(output.shape)}")
@@ -323,6 +336,7 @@ class RuntimeV2VisionPipeline(VisionEngine):
                 raw_class = int(deps.torch.argmax(probability_tensor).item())
                 probabilities = [float(value) for value in probability_tensor.detach().cpu().tolist()]
                 logits = [float(value) for value in output.squeeze(0).detach().cpu().tolist()]
+                self._record_stage_metric(state, "fall_postprocess", fall_postprocess_started)
             self._record_stage_metric(state, "fall", fall_started)
 
             model_window_index = int(state.get("vision_model_window_index", 0)) + 1
@@ -406,6 +420,12 @@ class RuntimeV2VisionPipeline(VisionEngine):
 
     def detect_faces_for_privacy(self, frame: np.ndarray) -> list[tuple[int, int, int, int]]:
         """Detect face boxes only, without recognition or identity state changes."""
+        face_app = self._privacy_detector()
+        with self._face_lock:
+            bboxes, _ = face_app.det_model.detect(frame, max_num=0, metric="default")
+        return [tuple(int(value) for value in bbox[:4]) for bbox in bboxes]
+
+    def _privacy_detector(self):
         self._ensure_initialized()
         with self._lock:
             face_app = self._privacy_face_app
@@ -423,9 +443,7 @@ class RuntimeV2VisionPipeline(VisionEngine):
                 )
                 face_app.prepare(ctx_id=-1, det_size=(640, 640))
                 self._privacy_face_app = face_app
-        with self._face_lock:
-            bboxes, _ = face_app.det_model.detect(frame, max_num=0, metric="default")
-        return [tuple(int(value) for value in bbox[:4]) for bbox in bboxes]
+        return face_app
 
     def _ensure_initialized(self) -> None:
         if self._initialized:
@@ -723,7 +741,9 @@ class RuntimeV2VisionPipeline(VisionEngine):
             cache[track_id] = entry
         try:
             with self._face_lock:
+                identity_inference_started = time.perf_counter()
                 faces = self._face_app.get(crop)
+                self._record_stage_metric(state, "identity_inference", identity_inference_started)
         except Exception as exc:  # Face failure must not stop fall detection.
             logger.warning("Face recognition failed camera track=%s: %s", track_id, exc)
             return {
@@ -878,11 +898,23 @@ class RuntimeV2VisionPipeline(VisionEngine):
     def _record_stage_metric(state: dict[str, Any], stage: str, started: float) -> None:
         elapsed_ms = (time.perf_counter() - started) * 1000
         metrics = state.setdefault("vision_stage_metrics", {})
-        current = metrics.setdefault(stage, {"count": 0, "total_ms": 0.0, "last_ms": 0.0, "max_ms": 0.0})
+        current = metrics.setdefault(
+            stage,
+            {
+                "count": 0,
+                "total_ms": 0.0,
+                "last_ms": 0.0,
+                "max_ms": 0.0,
+                "samples_ms": deque(maxlen=2048),
+                "sample_times": deque(maxlen=2048),
+            },
+        )
         current["count"] += 1
         current["total_ms"] += elapsed_ms
         current["last_ms"] = elapsed_ms
         current["max_ms"] = max(current["max_ms"], elapsed_ms)
+        current["samples_ms"].append(elapsed_ms)
+        current["sample_times"].append(time.monotonic())
 
     @staticmethod
     def _reset_for_no_person(state: dict[str, Any]) -> None:
