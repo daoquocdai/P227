@@ -15,11 +15,19 @@ def unknown_identity_scores(value: object) -> tuple[float, float]:
 class VisionProductPolicy:
     """Turns structured AI output into rate-limited product events."""
 
-    def __init__(self, unknown_cooldown_seconds: float = 30.0, clock=None):
+    def __init__(
+        self,
+        unknown_cooldown_seconds: float = 60.0,
+        clock=None,
+        *,
+        fall_cooldown_seconds: float = 60.0,
+    ):
         self._unknown_cooldown_seconds = unknown_cooldown_seconds
+        self._fall_cooldown_seconds = fall_cooldown_seconds
         self._clock = clock
         self._lock = threading.RLock()
         self._last_unknown: dict[tuple[str, int, int], float] = {}
+        self._last_fall: dict[tuple[str, int], float] = {}
 
     def apply(self, result: VisionResult) -> VisionResult:
         unknown_candidates = [
@@ -33,18 +41,29 @@ class VisionProductPolicy:
             return result
         general = self._general_settings()
         fall_threshold = float(general.get("fall_threshold", 72)) / 100.0
-        result.events[:] = [
-            event
-            for event in result.events
-            if event.type != "fall_confirmed" or event.confidence >= fall_threshold
-        ]
-
-        stranger_threshold = float(general.get("stranger_threshold", 78)) / 100.0
         now = (
             self._clock()
             if self._clock is not None
             else float(result.metadata.get("observation_time", result.captured_at))
         )
+        source_epoch = int(result.metadata.get("source_epoch", 0))
+        fall_key = (result.camera_id, source_epoch)
+        accepted_events = []
+        for event in result.events:
+            if event.type != "fall_confirmed":
+                accepted_events.append(event)
+                continue
+            if event.confidence < fall_threshold:
+                continue
+            with self._lock:
+                last_emitted = self._last_fall.get(fall_key)
+                if last_emitted is not None and now - last_emitted < self._fall_cooldown_seconds:
+                    continue
+                self._last_fall[fall_key] = now
+            accepted_events.append(event)
+        result.events[:] = accepted_events
+
+        stranger_threshold = float(general.get("stranger_threshold", 78)) / 100.0
         for detection in unknown_candidates:
             metadata = detection.metadata
             track_id = detection.track_id
@@ -54,7 +73,7 @@ class VisionProductPolicy:
             )
             if mismatch_score < stranger_threshold:
                 continue
-            key = (result.camera_id, int(result.metadata.get("source_epoch", 0)), track_id)
+            key = (result.camera_id, source_epoch, track_id)
             with self._lock:
                 last_emitted = self._last_unknown.get(key)
                 if last_emitted is not None and now - last_emitted < self._unknown_cooldown_seconds:

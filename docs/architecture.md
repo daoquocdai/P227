@@ -153,7 +153,9 @@ Identity behavior:
 - minimum interval 1 giây observation time;
 - face miss update cadence timestamp nhưng không tăng confirmation count;
 - cache/retry độc lập theo track;
-- Unknown cooldown 30 giây observation time theo camera/epoch/track.
+- Unknown cooldown 60 giây observation time theo camera/epoch/track.
+- Fall cooldown 60 giây observation time theo camera/epoch, ngoài cơ chế chỉ
+  phát một cảnh báo trong cùng một fall incident của pipeline.
 
 Product mismatch score:
 

@@ -43,6 +43,7 @@ htmlcov/
 
 frontend/.env
 frontend/.env.*
+frontend/public/videos/
 !frontend/.env.example
 
 *.pem

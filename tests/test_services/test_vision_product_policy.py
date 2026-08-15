@@ -89,11 +89,13 @@ def test_unknown_mismatch_score_is_one_minus_clamped_cosine_similarity(
 def test_unknown_requires_final_retry_state_and_has_cooldown():
     set_thresholds(stranger=78, fall=72)
     now = [100.0]
-    policy = VisionProductPolicy(unknown_cooldown_seconds=30, clock=lambda: now[0])
+    policy = VisionProductPolicy(unknown_cooldown_seconds=60, clock=lambda: now[0])
     assert not any(event.type == "unknown_person" for event in policy.apply(result(state="PENDING")).events)
     assert sum(event.type == "unknown_person" for event in policy.apply(result()).events) == 1
     assert not any(event.type == "unknown_person" for event in policy.apply(result()).events)
-    now[0] += 30
+    now[0] += 59.9
+    assert not any(event.type == "unknown_person" for event in policy.apply(result()).events)
+    now[0] += 0.1
     assert sum(event.type == "unknown_person" for event in policy.apply(result()).events) == 1
 
     different_track = result()
@@ -119,20 +121,41 @@ def test_feature_boundary_clears_unknown_cooldown_for_a_fresh_workflow():
 
 def test_default_cooldown_uses_observation_time_not_processing_wall_clock():
     set_thresholds(stranger=78, fall=72)
-    policy = VisionProductPolicy(unknown_cooldown_seconds=30)
+    policy = VisionProductPolicy()
     first = result()
     first.metadata.update(observation_time=10.0, source_epoch=2)
     policy.apply(first)
     within = result()
-    within.metadata.update(observation_time=39.9, source_epoch=2)
+    within.metadata.update(observation_time=69.9, source_epoch=2)
     policy.apply(within)
     after = result()
-    after.metadata.update(observation_time=40.0, source_epoch=2)
+    after.metadata.update(observation_time=70.0, source_epoch=2)
     policy.apply(after)
 
     assert sum(event.type == "unknown_person" for event in first.events) == 1
     assert not any(event.type == "unknown_person" for event in within.events)
     assert sum(event.type == "unknown_person" for event in after.events) == 1
+
+
+def test_fall_has_one_minute_cooldown_per_camera_and_source_epoch():
+    set_thresholds(stranger=99, fall=72)
+    now = [100.0]
+    policy = VisionProductPolicy(clock=lambda: now[0])
+
+    first = result(similarity=1.0)
+    assert sum(event.type == "fall_confirmed" for event in policy.apply(first).events) == 1
+
+    now[0] += 59.9
+    within = result(similarity=1.0)
+    assert not any(event.type == "fall_confirmed" for event in policy.apply(within).events)
+
+    now[0] += 0.1
+    after = result(similarity=1.0)
+    assert sum(event.type == "fall_confirmed" for event in policy.apply(after).events) == 1
+
+    new_epoch = result(similarity=1.0)
+    new_epoch.metadata["source_epoch"] = 1
+    assert sum(event.type == "fall_confirmed" for event in policy.apply(new_epoch).events) == 1
 
 
 def test_known_identity_never_creates_unknown_person_event():
