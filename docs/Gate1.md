@@ -2,10 +2,16 @@
 
 > Đây là artifact yêu cầu/scope của Gate 1 nên các cụm “V1” trong tài liệu này
 > chỉ phiên bản sản phẩm tại thời điểm Gate 1. Trạng thái runtime hiện hành,
-> bao gồm Vision V1/V2, được mô tả tại [architecture.md](architecture.md),
+> với canonical Vision, được mô tả tại [architecture.md](architecture.md),
 > [setup.md](setup.md) và [testing.md](testing.md).
 
 > **Gate 1 submission:** Brief + PRD + Wireframe/UI Flow + GitHub Repo & AI Log Setup.
+
+> **Current implementation update:** raw frames được publish theo source cadence;
+> canonical Vision nhận even source frames qua `LatestFrameSlot` capacity 1.
+> Temporal AI dùng source/capture timestamps, Fall luôn ON khi Vision ON, và
+> Identity là camera-level Unknown workflow. Chi tiết hiện hành nằm trong các
+> tài liệu kỹ thuật được link phía trên.
 
 GuardianCam là một Local Hub giám sát an toàn cho gia đình, nhận webcam/video/RTSP, chạy Vision cục bộ để hỗ trợ phát hiện té ngã và nhận diện người thân/người chưa được đăng ký, sau đó lưu sự kiện và hiển thị cảnh báo realtime trên web.
 
@@ -93,7 +99,7 @@ Khác biệt V1:
 - critical path không phụ thuộc LLM;
 - database là source of truth của product state;
 - face gallery production không dùng thư mục ảnh thủ công;
-- bounded buffering để bảo vệ latency/memory;
+- capacity-one latest-frame handoff để bảo vệ latency/memory;
 - degraded capacity được báo trung thực thay vì che frame drop.
 
 ## 1.5 Product Scope V1
@@ -307,7 +313,7 @@ Runtime-only:
 - MJPEG connection;
 - preview bytes;
 - Vision session temporal state;
-- queue/buffer metrics;
+- latest-slot overwrite/drop/staleness metrics;
 - actual device/provider status.
 
 Không persist mọi frame.
@@ -341,7 +347,8 @@ Không thay:
 
 chỉ để làm hardware chậm “chạy được”.
 
-CPU throughput thiếu có thể được báo `SUPPORTED-DEGRADED`.
+Khi throughput Vision thấp hơn capture, latest pending frame được overwrite;
+raw stream vẫn giữ source cadence và status phải báo drop/staleness trung thực.
 
 ## 2.8 Success / Acceptance Criteria
 
@@ -746,7 +753,7 @@ The architecture document must preserve these V1 invariants:
 - FrameHub uses latest-frame semantics.
 - MJPEG is video transport.
 - SSE is event transport.
-- Vision temporal buffering is bounded and separate.
+- Vision handoff là latest-wins capacity 1 và tách khỏi raw FrameHub.
 - Vision error does not make Camera offline.
 - Database is product source of truth.
 - FaceGallery is database-backed.

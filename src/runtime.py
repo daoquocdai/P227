@@ -4,36 +4,25 @@ from src.services.camera_service import CameraNotFoundError, camera_service
 from src.services.face_identity_service import face_gallery
 from src.services.frame_hub import FrameHub
 from src.services.stream_service import StreamService
+from src.services.synchronous_vision_manager import SynchronousVisionManager
 from src.services.vision_manager import VisionManager
-from src.services.vision_sample_buffer import VisionSampleBuffer
 from src.vision.adapters.mock import MockVisionEngine
+from src.vision.pipeline import RuntimeV2VisionPipeline
 
 
 def build_vision_engine(settings, mock_event_frame_ids: set[int] | None = None):
     if settings.vision_engine == "mock":
         return MockVisionEngine(emit_event_on_frame_ids=mock_event_frame_ids)
 
-    if settings.vision_engine == "legacy_v2":
-        from src.vision.adapters.v2 import V2VisionEngine
-
-        engine_class = V2VisionEngine
-        config_path = settings.vision_v2_config_path
-        checkpoint_path = settings.vision_v2_checkpoint_path
-    else:
-        from src.vision.adapters.legacy import LegacyVisionEngine
-
-        engine_class = LegacyVisionEngine
-        config_path = settings.vision_legacy_config_path
-        checkpoint_path = settings.vision_legacy_checkpoint_path
-
-    return engine_class(
-        yolo_path=settings.vision_legacy_yolo_path,
-        config_path=config_path,
-        checkpoint_path=checkpoint_path,
-        known_faces_dir=settings.vision_legacy_known_faces_dir,
-        identity_enabled=settings.vision_legacy_identity_enabled,
-        identity_provider=settings.vision_legacy_identity_provider,
-        insightface_root=settings.vision_legacy_insightface_root,
+    return RuntimeV2VisionPipeline(
+        yolo_path=settings.vision_yolo_path,
+        config_path=settings.vision_config_path,
+        checkpoint_path=settings.vision_checkpoint_path,
+        model_cache_dir=settings.vision_model_cache_dir,
+        known_faces_dir=settings.vision_known_faces_dir,
+        identity_enabled=settings.vision_identity_enabled,
+        identity_provider=settings.vision_identity_provider,
+        insightface_root=settings.vision_insightface_root,
         device=settings.vision_device,
         face_gallery=face_gallery,
     )
@@ -53,30 +42,32 @@ class LocalRuntime:
         if engine is None:
             settings = get_settings()
             engine = build_vision_engine(settings, mock_event_frame_ids)
-            if settings.vision_engine != "mock":
-                sample_buffer = VisionSampleBuffer(
-                    target_sample_rate=settings.vision_temporal_target_sample_rate,
-                    legacy_skip_factor=2,
-                    capacity=settings.vision_temporal_buffer_capacity,
-                )
 
         self.frame_hub = FrameHub()
+        self.processed_frame_hub = FrameHub()
         self.vision_sample_buffer = sample_buffer
 
-        self.camera = CameraRuntime(
-            self.frame_hub,
-            vision_sample_buffer=sample_buffer,
-        )
-
+        if get_settings().vision_engine == "mock" or vision_engine is not None:
+            self.camera = CameraRuntime(self.frame_hub)
+            self.vision = VisionManager(
+                frame_hub=self.frame_hub,
+                engine=engine,
+                event_dispatcher=event_dispatcher,
+            )
+        else:
+            self.vision = SynchronousVisionManager(
+                engine,
+                event_dispatcher,
+                processed_frame_hub=self.processed_frame_hub,
+            )
+            self.camera = CameraRuntime(
+                self.frame_hub,
+                vision_processor=self.vision.process,
+            )
         self.stream = StreamService(
-            self.frame_hub
-        )
-
-        self.vision = VisionManager(
-            frame_hub=self.frame_hub,
-            engine=engine,
-            event_dispatcher=event_dispatcher,
-            sample_buffer=sample_buffer,
+            self.frame_hub,
+            vision=self.vision,
+            processed_frame_hub=self.processed_frame_hub,
         )
 
     def start(self):
@@ -88,6 +79,7 @@ class LocalRuntime:
             camera_id = desired["id"]
             if desired["vision_enabled"]:
                 self.vision.enable(camera_id)
+                self.vision.set_identity_enabled(camera_id, desired.get("identity_enabled", False))
             else:
                 self.vision.disable(camera_id)
             if desired["camera_enabled"]:
@@ -119,7 +111,12 @@ class LocalRuntime:
     def set_vision_enabled(self, camera_id: str, enabled: bool) -> dict:
         camera_service.set_vision_enabled(camera_id, enabled)
         public_id = camera_service.public_id(camera_id)
-        return self.vision.enable(public_id) if enabled else self.vision.disable(public_id)
+        if not enabled:
+            return self.vision.disable(public_id)
+        self.vision.enable(public_id)
+        desired = next(item for item in camera_service.desired_states() if item["id"] == public_id)
+        self.vision.set_identity_enabled(public_id, desired.get("identity_enabled", False))
+        return self.vision.get_status(public_id)
 
     def restart_camera_if_enabled(self, camera_id: str) -> None:
         desired = next(item for item in camera_service.desired_states() if item["id"] == camera_service.public_id(camera_id))
@@ -131,5 +128,5 @@ class LocalRuntime:
         self.start_persisted_camera(public_id, desired["loop_video"])
 
     def stop(self):
-        self.vision.stop()
         self.camera.stop_all()
+        self.vision.stop()

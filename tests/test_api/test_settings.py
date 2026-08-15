@@ -2,6 +2,9 @@ from uuid import uuid4
 
 import pytest
 
+from src.models.vision import VisionDetection, VisionResult
+from src.services.vision_product_policy import VisionProductPolicy
+
 
 @pytest.mark.asyncio
 async def test_settings_persist_users_permissions_and_camera_state(client):
@@ -49,3 +52,37 @@ async def test_cannot_disable_last_admin(client):
     admin = next(user for user in settings["users"] if user["role"] == "admin")
     response = await client.patch(f"/api/v1/settings/users/{admin['id']}", json={"active": False})
     assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_stranger_threshold_update_changes_live_product_decision_without_restart(client):
+    def candidate():
+        return VisionResult(
+            camera_id="settings-live-camera",
+            frame_id=1,
+            captured_at=1.0,
+            processed_at=1.0,
+            processing_ms=1.0,
+            detections=[
+                VisionDetection(
+                    "person",
+                    0.9,
+                    track_id=7,
+                    metadata={
+                        "identity_state": "LOCKED_UNKNOWN",
+                        "identity_face_detected": True,
+                        "identity_similarity": 0.4,
+                    },
+                )
+            ],
+            metadata={"observation_time": 1.0},
+        )
+
+    policy = VisionProductPolicy()
+    high = await client.patch("/api/v1/settings/general", json={"stranger_threshold": 70})
+    assert high.status_code == 200
+    assert policy.apply(candidate()).events == []
+
+    low = await client.patch("/api/v1/settings/general", json={"stranger_threshold": 50})
+    assert low.status_code == 200
+    assert [event.type for event in policy.apply(candidate()).events] == ["unknown_person"]

@@ -6,11 +6,11 @@ import pytest
 from starlette.requests import Request
 
 from src.api.camera_stream import stream_camera
-from src.database import database_connection
+from src.database import BUILTIN_VIDEO_CAMERA_ID, database_connection
 from src.main import app
 from src.models.frame import FramePacket
 
-CAMERA_ID = "00000000-0000-0000-0000-000000000000"
+CAMERA_ID = BUILTIN_VIDEO_CAMERA_ID
 
 
 class FakeCapture:

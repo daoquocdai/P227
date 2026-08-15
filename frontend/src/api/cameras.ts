@@ -22,6 +22,7 @@ export interface CameraDto {
   active: boolean;
   vision_enabled: boolean;
   vision_status?: "disabled" | "waiting_for_source" | "running" | "error" | null;
+  identity_enabled: boolean;
   source_kind: "video_file" | "webcam" | "rtsp";
   source: string;
   playback_url?: string | null;
@@ -68,4 +69,8 @@ export function setCameraEnabled(id: string, enabled: boolean): Promise<unknown>
 
 export function setCameraVision(id: string, enabled: boolean): Promise<unknown> {
   return apiClient(`/cameras/${encodeURIComponent(id)}/vision/${enabled ? "enable" : "disable"}`, { method: "POST" });
+}
+
+export function setCameraIdentity(id:string,enabled:boolean):Promise<unknown>{
+  return apiClient(`/cameras/${encodeURIComponent(id)}/vision/identity`,{method:"PATCH",body:JSON.stringify({enabled})});
 }

@@ -14,7 +14,13 @@ python3 -m venv .venv
 source .venv/bin/activate
 
 # Install dependencies
-pip install -r requirements.txt
+VISION_PROFILE="${VISION_PROFILE:-cpu}"
+case "$VISION_PROFILE" in
+    cpu|intel|cuda) ;;
+    *) echo "VISION_PROFILE must be cpu, intel, or cuda" >&2; exit 2 ;;
+esac
+pip install -r "requirements/vision-${VISION_PROFILE}.txt"
+pip install --no-deps -r requirements/vision-identity.txt
 
 # Create .env if not exists
 if [ ! -f .env ]; then

@@ -1,4 +1,5 @@
 import json
+import logging
 import mimetypes
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -8,6 +9,8 @@ from src.database import database_connection
 from src.models.schemas import AlertReviewRequest, VisionEventAccepted, VisionEventRequest
 from src.services.event_presentation import event_description
 from src.services.media_paths import snapshot_url, valid_snapshot_name
+
+logger = logging.getLogger(__name__)
 
 
 class EventNotFoundError(Exception):
@@ -35,6 +38,10 @@ class SQLiteEventRepository:
             else None
         )
         valid_snapshot = valid_snapshot_name(event.snapshot_path)
+        if event.event_type.startswith("FALL_") and not event.metadata.get(
+            "snapshot_blurred", False
+        ):
+            valid_snapshot = None
         metadata = dict(event.metadata)
         metadata.update(
             {
@@ -135,7 +142,7 @@ class SQLiteEventRepository:
                     ),
                 )
 
-            self._insert_media(connection, event_id, event, valid_snapshot)
+            self._insert_optional_media(connection, event_id, event, valid_snapshot)
             if alert_type is None:
                 return VisionEventAccepted(id=event_id, event_id=event.event_id, status="resolved")
 
@@ -221,6 +228,27 @@ class SQLiteEventRepository:
         )
         return person_id
 
+    def _insert_optional_media(
+        self,
+        connection,
+        event_id: str,
+        event: VisionEventRequest,
+        snapshot_name: str | None,
+    ) -> None:
+        """Keep optional visual evidence outside the event/alert failure boundary."""
+        if not snapshot_name:
+            return
+        connection.execute("SAVEPOINT optional_event_media")
+        try:
+            self._insert_media(connection, event_id, event, snapshot_name)
+        except Exception:  # noqa: BLE001 - event delivery must survive evidence failure
+            connection.execute("ROLLBACK TO SAVEPOINT optional_event_media")
+            logger.exception(
+                "Could not persist optional event media event=%s", event.event_id
+            )
+        finally:
+            connection.execute("RELEASE SAVEPOINT optional_event_media")
+
     @staticmethod
     def _insert_media(
         connection,
@@ -234,21 +262,28 @@ class SQLiteEventRepository:
         mime_type = mimetypes.types_map.get(suffix)
         if mime_type not in {"image/jpeg", "image/png", "image/webp"}:
             return
-        subject = "fall" if event.event_type.startswith("FALL_") else "scene"
+        unknown = event.event_type == "UNKNOWN_PERSON"
+        privacy_blurred = bool(event.metadata.get("snapshot_blurred", False))
+        subject = "fall" if event.event_type.startswith("FALL_") else "unknown_person" if unknown else "scene"
         captured = event.occurred_at.astimezone(UTC)
+        settings_row = connection.execute(
+            "SELECT value_json FROM system_settings WHERE setting_key = 'general'"
+        ).fetchone()
+        retention_days = int(json.loads(settings_row["value_json"]).get("retention_days", 30))
         connection.execute(
             """INSERT INTO media_assets
                (id, event_id, media_type, subject_type, relative_path, mime_type,
                 is_blurred, captured_at, retention_until)
-               VALUES (?, ?, 'snapshot', ?, ?, ?, 0, ?, ?)""",
+               VALUES (?, ?, 'snapshot', ?, ?, ?, ?, ?, ?)""",
             (
                 str(uuid4()),
                 event_id,
                 subject,
                 snapshot_name,
                 mime_type,
+                int(privacy_blurred),
                 captured.isoformat(),
-                (captured + timedelta(days=30)).isoformat(),
+                (captured + timedelta(days=retention_days)).isoformat(),
             ),
         )
 

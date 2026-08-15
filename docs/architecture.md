@@ -1,399 +1,282 @@
 # Kiến trúc kỹ thuật GuardianCam Local Hub
 
-## 1. Mục tiêu tài liệu
+Tài liệu này mô tả production runtime hiện tại. `visionv2/runtimev2` và
+`visionv2/P-227-thi` là standalone reference/oracle; production không import hai
+tree này.
 
-Tài liệu này mô tả các quyết định kỹ thuật và invariant của production Local Hub. Sơ đồ được tách riêng tại [architecture_diagram.md](architecture_diagram.md).
+## 1. Process và dependency direction
 
-Runtime hiện tại là **một tiến trình FastAPI** sở hữu:
-
-- camera runtime;
-- FrameHub;
-- Vision worker;
-- event pipeline;
-- SQLite access;
-- API cho frontend.
-
-Không có AI node riêng cho từng camera và không cần Redis/Kafka/Celery.
-
-## 2. Nguyên tắc thiết kế
-
-### 2.1 Camera capture có một owner
-
-`CameraRuntime` là nơi duy nhất được sở hữu `cv2.VideoCapture`.
-
-Nó:
-
-1. mở source;
-2. đọc frame;
-3. gắn metadata/source time;
-4. publish `FramePacket`;
-5. release capture trong lifecycle của chính capture thread.
-
-MJPEG, preview và Vision không được mở lại cùng camera.
-
-### 2.2 FrameHub dùng latest-frame semantics
-
-`FrameHub` giữ frame mới nhất theo camera.
-
-Mục tiêu:
-
-- camera producer không bị consumer chậm block;
-- không tích backlog frame vô hạn;
-- streaming và Vision cùng đọc từ cùng nguồn frame đã publish.
-
-### 2.3 Streaming và event là hai loại dữ liệu khác nhau
-
-- **MJPEG:** video live.
-- **JPEG preview:** latest static frame cho Overview/thumbnail.
-- **SSE:** business alert/status event.
-
-Không dùng SSE/base64 để truyền video.
-
-### 2.4 Vision temporal buffer tách khỏi FrameHub
-
-Vision cần temporal semantics riêng nên có `VisionSampleBuffer` bounded.
-
-Buffer:
-
-- bám `source_timestamp`;
-- theo dõi `source_epoch`;
-- xử lý discontinuity;
-- ghi nhận input/temporal drop;
-- báo overload/fidelity;
-- không dùng capacity vô hạn để che throughput thiếu.
-
-## 3. Runtime components
-
-### CameraRuntime
-
-Trách nhiệm:
-
-- sole VideoCapture ownership;
-- source webcam/video/RTSP;
-- publish FramePacket;
-- observed source state;
-- release resource đúng thread.
-
-Camera status không được suy ra từ Vision status.
-
-### FrameHub
-
-Trách nhiệm:
-
-- lưu latest packet theo camera;
-- cung cấp packet cho stream/preview;
-- không tích queue vô hạn.
-
-### StreamService
-
-Trách nhiệm:
-
-- MJPEG endpoint cho camera đang xem;
-- encode/latest JPEG preview;
-- không persist mọi frame.
-
-### VisionSampleBuffer
-
-Trách nhiệm:
-
-- bounded temporal ingestion;
-- preserve source-time contract;
-- report drop/overload;
-- clear/reset khi disable/discontinuity.
-
-### VisionWorker
-
-Một background worker xử lý camera đã bật Vision.
-
-Worker:
-
-- không block FastAPI event loop;
-- không tạo `asyncio.run()` cho mỗi event;
-- gọi VisionEngine;
-- chuyển event qua dispatcher thread-safe.
-
-### VisionEngine
-
-Production chọn đúng một engine khi startup:
-
-- `LegacyVisionEngine` cho `legacy`/`legacy_v1` (binary, bone input);
-- `V2VisionEngine` cho `legacy_v2` (năm lớp, joint input);
-- `MockVisionEngine` chỉ cho smoke/test không phụ thuộc model.
-
-V2 kế thừa capture, pose, identity, temporal clock và event boundary của V1;
-khác biệt có chủ đích nằm ở SDA-GCN input/checkpoint/output mapping.
-
-Pipeline:
+Một FastAPI process sở hữu camera runtime, Vision sessions, event pipeline và
+SQLite access. Không cần Redis, Kafka, Celery hoặc AI service theo viewer.
 
 ```text
-sampled frame
-→ YOLO
-→ person crop
-→ MediaPipe Pose
-→ skeleton preprocess
-→ 64-sample window
-→ SDA-GCN
-→ fall state machine
-
-person crop
-→ InsightFace
-→ FaceGallery
-→ known / unknown
+FastAPI lifespan
+  └── LocalRuntime
+      ├── CameraRuntime
+      ├── raw FrameHub
+      ├── SynchronousVisionManager
+      │   ├── LatestFrameSlot per camera
+      │   ├── VisionSession per camera
+      │   ├── canonical RuntimeV2VisionPipeline
+      │   └── processed FrameHub
+      └── StreamService
 ```
 
-### Thread-safe event boundary
+`MockVisionEngine` + `VisionManager` là compatibility/test path. Canonical
+production dùng `SynchronousVisionManager`; tên class được giữ để tránh đổi API
+nội bộ, dù worker hiện chạy asynchronous với capture.
 
-`ThreadsafeVisionEventDispatcher` là biên giữa Vision thread và asyncio.
+## 2. Capture và streaming
 
-Yêu cầu:
+### Sole capture owner
 
-- dùng event loop đang chạy;
-- handoff bằng thread-safe primitive;
-- bounded delivery;
-- không block Vision thread;
-- không thao tác `asyncio.Queue` từ sai thread;
-- shutdown phải từ chối delivery mới một cách an toàn.
+`CameraRuntime` là nơi duy nhất mở `cv2.VideoCapture`. MJPEG, preview và Vision
+không reopen source.
 
-### EventService / Repository
+Mỗi frame được đóng gói trong `FramePacket` gồm:
 
-Trách nhiệm:
+- `frame_id`;
+- raw frame;
+- `captured_at`;
+- `source_timestamp` và `source_time_kind`;
+- `source_frame_index`;
+- `source_epoch`;
+- `discontinuity`.
 
-- normalize event;
-- idempotency theo external event ID;
-- transaction persistence;
-- event/alert/media/history;
-- publish SSE chỉ sau persistence thành công.
+### Raw-first fan-out
 
-## 4. Lifecycle
+Sau capture:
 
-Startup:
+1. raw packet được publish vào `FrameHub` ngay;
+2. packet đủ điều kiện được offer non-blocking vào Vision latest slot.
 
-1. initialize/migrate SQLite;
-2. tạo runtime services;
-3. load FaceGallery;
-4. bind async event sink/dispatcher;
-5. start Vision worker;
-6. load persisted camera/Vision desired state;
-7. auto-start các camera desired ON;
-8. auto-enable Vision desired ON.
+Raw stream vì vậy chạy theo source cadence, không chờ YOLO/MediaPipe/SDA-GCN.
+`FrameHub` chỉ giữ packet mới nhất; consumer chậm không tạo backlog.
 
-Shutdown:
+### Presentation overlay
 
-1. stop accepting work mới;
-2. stop Vision/session/sampler;
-3. stop camera runtime;
-4. stop dispatcher/event consumer;
-5. release remaining resources.
+`StreamService` lấy raw frame hiện tại và latest VisionResult. Overlay chỉ được
+dùng khi:
 
-Một camera source lỗi không được làm application lifespan thất bại.
+- cùng camera;
+- cùng `source_epoch`;
+- result observation time không ở tương lai;
+- age không quá `0.75s`.
 
-## 5. Desired state và observed state
+Viewer flags (`boxes`, `identity`) chỉ ảnh hưởng renderer. Fall overlay luôn bật
+khi Vision chạy. Viewer connect/disconnect không restart camera, không reload
+model và không tăng inference count.
 
-Database lưu **desired state**. Runtime giữ **observed state**.
+## 3. Vision scheduling
 
-Ví dụ:
+Mỗi camera Vision-enabled có:
 
-```text
-Persisted:
-camera desired = ON
-vision desired = ON
+- một `VisionSession`;
+- một `LatestFrameSlot` capacity 1;
+- một worker thread.
 
-Runtime:
-camera = error
-vision = waiting_for_source
-```
+Khi Vision bận, packet pending cũ bị thay bằng packet mới nhất. Đây là
+latest-wins controlled dropping, không phải sampler/queue trước Vision.
 
-Source lỗi không được tự đổi persisted desired state về OFF.
+Canonical pipeline giữ rule lấy zero-based even source frames. Rule này được
+đánh giá trước khi packet chiếm slot; không dựa trên số lần consumer gọi.
 
-Camera observed state có thể gồm:
+### Sticky discontinuity
 
-- `connecting`
-- `online`
-- `offline`
-- `error`
+Nếu boundary packet bị overwrite trước khi worker consume, marker
+`discontinuity=true` được chuyển sang packet mới nhất. Marker chỉ clear sau một
+packet discontinuity đã được consume. Epoch cũ pending không được commit sau khi
+source đã sang epoch mới.
 
-Vision observed state có thể gồm:
+## 4. Temporal semantics
 
-- `disabled`
-- `waiting_for_source`
-- `running`
-- `error`
+Temporal AI dùng observation time từ capture boundary:
 
-`degraded` là fidelity/capacity status, không đồng nghĩa Vision `error`.
-
-## 6. Vision engine contracts
-
-### Model
-
-- Input SDA-GCN của cả hai engine: `(1, 3, 64, 25, 1)`.
-- NTU 25-joint graph theo config/checkpoint hiện tại.
-- V1: bone modality, binary output theo class mapping đã train.
-- V2: joint modality, năm logits; chỉ raw class `1` là fall candidate.
-- Checkpoint strict load.
-
-### Temporal semantics
-
-Các metadata quan trọng:
-
-- `source_timestamp`
-- `source_time_kind`
-- `source_epoch`
-- `discontinuity`
-
-Fall confirmation dùng source time, không dùng wall-clock CPU để thay ý nghĩa window.
-
-Khi hardware không đủ throughput:
-
-- bounded buffer được phép drop;
-- camera/MJPEG phải tiếp tục;
-- `temporal_fidelity` phải phản ánh `degraded`;
-- không tăng buffer vô hạn;
-- không đổi model window/stride chỉ để “chạy được”.
-
-### Device
-
-Các stage không nhất thiết cùng device:
-
-| Stage | Runtime |
+| Source | Timestamp |
 |---|---|
-| YOLO | PyTorch device |
-| MediaPipe Pose | CPU/TFLite trong profile hiện tại |
-| Preprocess | CPU |
-| SDA-GCN | PyTorch device |
-| InsightFace | provider khả dụng theo cấu hình |
+| Video file | Media/source timestamp; deterministic frame/FPS fallback |
+| Webcam/RTSP live | `time.monotonic()` ngay sau capture |
 
-Không suy luận GPU support từ tên wheel. Chỉ báo acceleration khi provider/runtime thực tế có.
+Pipeline không dùng inference-completion wall clock cho window, fall
+confirmation, identity retry hoặc stranger cooldown.
 
-## 7. Face identity
+Khi `source_epoch` đổi, giữ control-plane:
 
-Production identity dùng database:
+- `vision_identity_enabled`;
+- `vision_identity_generation`;
+- Vision desired state.
+
+Reset temporal/source-dependent state:
+
+- fall buffers/windows/pending decisions;
+- tracking/Pose context state;
+- face retry/cache;
+- action/incident state.
+
+Không có temporal window nào được nối qua hai source epochs.
+
+## 5. Canonical Vision
 
 ```text
-persons + face_profiles
-        ↓
-FaceGallery cache
-        ↓
-LegacyVisionEngine / V2VisionEngine
+Eligible frame
+  → YOLO person tracking
+  → padded person crop
+  → MediaPipe Pose
+  → existing preprocessing
+  → source-time 2-second window
+  → linear resample to 64
+  → SDA-GCN (1, 3, 64, 25, 1)
+  → five classes; class 1 is fall candidate
+  → existing confirmation/recovery state machine
 ```
 
-Quy tắc:
+Hardware selection:
 
-- không query SQLite mỗi frame;
-- embedding phải có dimension hợp lệ và finite;
-- chỉ active person/profile được nạp;
-- mutation Persons/face profiles làm gallery reload/invalidate;
-- image enrollment không trở thành public static asset mặc định;
-- `register face/` chỉ là compatibility fallback cho legacy/standalone nếu code còn hỗ trợ.
+1. native NVIDIA CUDA nếu khả dụng;
+2. OpenVINO Intel GPU cho YOLO/SDA-GCN nếu khả dụng;
+3. CPU fallback.
 
-Face embedding là dữ liệu sinh trắc học nhạy cảm.
+MediaPipe Pose chạy CPU. InsightFace chọn provider theo config/runtime;
+DirectML thường dùng trên Intel Windows, CPU là fallback. Startup/status phải
+report provider thật, không suy luận từ tên package.
 
-## 8. Snapshot và media
+## 6. Identity và Unknown
 
-Có hai khái niệm tách biệt:
+`FaceGallery` lấy known-person embeddings từ `persons` và `face_profiles` trong
+SQLite. Gallery được cache và reload sau mutation; không query database mỗi
+frame.
 
-### Camera preview
+Identity behavior:
 
-- latest JPEG từ FrameHub;
-- dùng cho Overview/thumbnail;
-- không persist mọi frame;
-- khi chưa có frame, API/UI biểu diễn `null`/placeholder.
+- threshold known match: cosine similarity `> 0.45`;
+- 5 qualifying face+embedding observations;
+- minimum interval 1 giây observation time;
+- face miss update cadence timestamp nhưng không tăng confirmation count;
+- cache/retry độc lập theo track;
+- Unknown cooldown 30 giây observation time theo camera/epoch/track.
 
-### Event evidence snapshot
+Product mismatch score:
 
-- gắn với business event;
-- backing file nằm dưới snapshot root hợp lệ;
-- DB chỉ trả URL nếu file hợp lệ tồn tại;
-- record lịch sử thiếu file vẫn được giữ;
-- UI dùng placeholder thay vì broken image.
+```text
+1 - clamp(closest_known_cosine_similarity, 0, 1)
+```
 
-## 9. Database
+`VisionProductPolicy` đọc `general.stranger_threshold` live từ SQLite.
 
-V1 dùng SQLite và `sqlite3`.
+Identity OFF có ba hard boundaries có chủ đích:
 
-Nguồn schema:
+1. runtime không chạy continuous identity workflow;
+2. manager xóa stale metadata/Unknown event tại commit boundary;
+3. `EventService` re-check persisted identity state trước DB/SSE.
 
-- `database/schema.sql`: schema đầy đủ;
-- `src/database.py`: connection + runtime idempotent migrations;
-- `data/app.db`: runtime database, không version control.
+Các guard này chống in-flight race; không được xem là accidental duplication.
+Fall không đọc identity gate.
 
-Nhóm dữ liệu chính:
+## 7. Event commit và snapshots
 
-| Miền | Bảng |
+Per-camera feature lock serialize:
+
+1. final Identity guard;
+2. product policy;
+3. exact-frame snapshot;
+4. processed packet publish;
+5. event dispatch.
+
+Heavy inference chạy ngoài feature lock.
+
+Privacy evidence fallback:
+
+1. exact-frame identity face bbox;
+2. CPU-only full-frame detection;
+3. person crop + upscale;
+4. rotated person crop +90;
+5. rotated person crop -90;
+6. safe pose/head ROI;
+7. omit snapshot nếu không tìm được vùng blur an toàn.
+
+Privacy detection là detection-only, không tạo embedding hoặc Unknown state.
+Không blur toàn frame và không dùng face bbox từ frame khác.
+
+`ThreadsafeVisionEventDispatcher` chuyển event sang bounded async sink.
+`EventService` persist trước rồi mới publish SSE. Event ID idempotent.
+
+Media là optional evidence: repository dùng savepoint riêng cho media insert.
+Snapshot/media failure được log nhưng không rollback event/alert hoặc chặn SSE.
+
+## 8. Desired và observed state
+
+SQLite lưu desired state; runtime giữ observed state.
+
+```text
+desired camera ON + source unavailable
+→ camera observed error/offline
+→ desired state vẫn ON
+
+desired Vision ON + chưa có frame
+→ Vision waiting_for_source
+```
+
+Startup load FaceGallery, bind event loop/dispatcher, start runtime rồi restore
+Camera/Vision/Identity state. Một camera lỗi không làm application startup fail.
+
+Shutdown dừng camera capture trước, sau đó Vision/model resources và event
+transport.
+
+## 9. Persistence và frontend
+
+SQLite domains:
+
+| Domain | Tables |
 |---|---|
-| User/quyền | `users`, `user_permissions` |
-| Người thân | `persons`, `face_profiles` |
 | Camera | `cameras`, `camera_sources` |
-| Vision event | `events`, `event_persons`, `fall_event_details` |
-| Alert | `alerts`, `alert_actions` |
-| Media | `media_assets` |
-| Settings | `system_settings` |
-| Evaluation | `evaluation_runs`, `inference_metrics` |
+| Identity | `persons`, `face_profiles` |
+| Events | `events`, `event_persons`, `fall_event_details` |
+| Alerts | `alerts`, `alert_actions` |
+| Evidence | `media_assets` |
+| Configuration | `system_settings` |
 
-Các rule quan trọng:
+Frontend data flow:
 
-- mọi connection bật `PRAGMA foreign_keys=ON`;
-- external event ID phải idempotent;
-- human correction/audit không được thay bằng overwrite lịch sử;
-- camera đang chạy hoặc còn history có thể bị chặn xóa theo contract;
-- media path phải chống traversal/URL tùy ý;
-- database và snapshots phải được coi là một bộ khi backup bằng chứng.
+- Overview: REST + static preview.
+- Camera: REST + một selected MJPEG stream.
+- Alerts: initial REST + SSE refresh.
+- Persons: REST CRUD/enrollment.
+- Settings: persisted API; thresholds áp dụng live.
+- History: persisted events/media.
 
-## 10. Frontend data architecture
+## 10. State ownership
 
-Frontend không giữ một “source of truth” riêng cho product data.
-
-Các trang:
-
-- **Overview:** REST + static previews.
-- **Camera:** REST + một live MJPEG stream cho camera được chọn.
-- **Alerts:** initial REST + SSE updates.
-- **Persons:** REST CRUD + face enrollment.
-- **Settings:** persisted backend settings.
-- **History:** persisted event/media audit.
-
-Không hard-code camera/person/alert/settings production data.
+| State | Owner |
+|---|---|
+| Camera/Vision/Identity desired state | SQLite + camera/settings services |
+| Identity generation/feature flag | `SynchronousVisionManager` session |
+| Fall/face temporal state | canonical pipeline `VisionSession` |
+| Raw latest frame | raw `FrameHub` |
+| Latest structured result | Vision manager |
+| Exact processed packet | processed `FrameHub` |
+| Overlay flags | viewer/frontend + renderer |
+| Event/alert/media | EventService/repository |
 
 ## 11. Failure isolation
 
 | Failure | Expected behavior |
 |---|---|
-| Một camera source lỗi | Camera đó `error/offline`; backend và camera khác tiếp tục |
-| Vision lỗi | Camera stream vẫn hoạt động |
-| Vision quá chậm | Fidelity `degraded`; camera không bị block |
-| Snapshot write lỗi | Event vẫn có thể được persist/deliver; UI báo thiếu bằng chứng |
-| SSE client disconnect | Persistence vẫn hợp lệ; client reconnect |
-| Missing historical snapshot | API không giả URL hợp lệ; UI placeholder |
-| Invalid RTSP credential/path | Không phản chiếu secret ra frontend |
+| Camera source failure | Camera lỗi; backend/camera khác tiếp tục |
+| Vision frame/model exception | Raw stream tiếp tục; worker xử lý frame sau |
+| Vision chậm | Slot giữ latest frame; raw stream không chậm theo |
+| Viewer disconnect | Generator kết thúc; runtime/model không đổi |
+| Snapshot unsafe/write failure | Event/alert/SSE sống; media omitted |
+| Media DB insert failure | Event/alert transaction sống; media omitted |
+| SSE disconnect | Persistence không đổi; client reconnect |
 
-## 12. Security & privacy boundary
+## 12. Intentional non-goals
 
-Không đưa vào Git:
+- không queue/backlog vô hạn;
+- không capture/model theo viewer;
+- không cloud video upload mặc định;
+- không LLM trên critical detection path;
+- không runtime retraining;
+- không import legacy hoặc standalone oracle vào production.
 
-- `.env`;
-- API keys;
-- RTSP credentials;
-- runtime SQLite;
-- snapshots;
-- face images/embeddings.
-
-API không được trả raw `source_uri` chứa credential về frontend.
-
-Vision/business event không gửi raw frame/video qua JSON.
-
-## 13. Những gì runtime cố ý không có
-
-- distributed broker;
-- nhiều database writer service;
-- WebSocket video;
-- agent quyết định sự kiện;
-- per-camera AI service;
-- cloud video upload mặc định;
-- runtime model retraining.
-
-## 14. Tài liệu liên quan
-
-- [Architecture diagrams](architecture_diagram.md)
-- [Gate 1](Gate1.md)
-- [API](api.md)
-- [Setup](setup.md)
-- [Testing](testing.md)
+Xem thêm [architecture_diagram.md](architecture_diagram.md), [api.md](api.md),
+[setup.md](setup.md) và [testing.md](testing.md).

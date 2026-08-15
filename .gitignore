@@ -138,4 +138,9 @@ compose.override.yml
 Thumbs.db
 Desktop.ini
 $RECYCLE.BIN/
-visionv2/
+/visionv2/*
+!/visionv2/runtimev2/
+!/visionv2/runtimev2/**
+/visionv2/runtimev2/.cache/
+/visionv2/runtimev2/__pycache__/
+/visionv2/runtimev2/**/__pycache__/

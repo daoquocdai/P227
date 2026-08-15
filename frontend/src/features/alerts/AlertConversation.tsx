@@ -22,7 +22,7 @@ export function AlertConversation({ alert, onBack, onStatus }: { alert: AlertEve
     <AlertSummaryBanner alert={alert} />
     <div className="alert-product-detail">
       <SnapshotCard alert={alert} onExpand={() => alert.snapshotUrl && setSnapshotModal(true)} />
-      <section className="alert-product-copy"><h2>{alert.title}</h2><p>{alert.preview}</p><dl><div><dt>Người liên quan</dt><dd>{alert.subject}</dd></div><div><dt>Vị trí</dt><dd>{alert.location}</dd></div><div><dt>Độ tin cậy</dt><dd>{alert.confidence ?? 0}%</dd></div></dl></section>
+      <section className="alert-product-copy"><h2>{alert.title}</h2><p>{alert.preview}</p><dl><div><dt>Người liên quan</dt><dd>{alert.subject}</dd></div><div><dt>Vị trí</dt><dd>{alert.location}</dd></div><div><dt>{alert.type === "stranger" ? "Mức độ không khớp" : "Độ tin cậy"}</dt><dd>{alert.confidence ?? 0}%</dd></div></dl></section>
       <div className="alert-product-actions"><button onClick={openCamera}><Camera /> Mở camera</button><button disabled={terminal} onClick={() => setSafeModal(true)}><Check /> Xác nhận an toàn</button><button disabled={terminal} onClick={() => setFalseModal(true)}><ThumbsDown /> Báo sai</button></div>
     </div>
     {safeModal && <ConfirmSafeModal subject={alert.subject} onCancel={() => setSafeModal(false)} onConfirm={() => { setSafeModal(false); onStatus("safe", "Người dùng xác nhận an toàn"); }} />}

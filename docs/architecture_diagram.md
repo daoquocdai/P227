@@ -1,218 +1,150 @@
 # GuardianCam — Architecture Diagrams
 
-Tài liệu này chỉ chứa các sơ đồ kiến trúc chính để dùng khi review, trình bày hoặc làm deliverable. Giải thích chi tiết nằm trong [architecture.md](architecture.md).
+Các sơ đồ dưới đây phản ánh production runtime hiện tại.
 
-## 1. System context
-
-```mermaid
-flowchart LR
-    USER[Người thân / Người chăm sóc]
-    UI[React Web]
-    HUB[GuardianCam Local Hub]
-    CAM[Webcam / Video / RTSP]
-    DB[(SQLite)]
-    SNAP[(Local Snapshots)]
-
-    CAM --> HUB
-    USER --> UI
-    UI <--> HUB
-    HUB <--> DB
-    HUB --> SNAP
-```
-
-## 2. Runtime architecture
+## 1. Runtime
 
 ```mermaid
 flowchart LR
-    SOURCE[Webcam / Video / RTSP]
-    CAMERA[CameraRuntime]
-    HUB[FrameHub\nlatest-frame]
-    PREVIEW[JPEG Preview]
-    MJPEG[MJPEG Stream]
-    BUFFER[VisionSampleBuffer\nbounded]
-    WORKER[VisionWorker]
-    ENGINE[Selected VisionEngine\nV1 / V2 / Mock]
-    SNAP[Event Snapshot]
-    DISPATCH[Thread-safe Dispatcher]
-    SINK[Async Event Sink]
-    SERVICE[EventService]
-    DB[(SQLite)]
-    SSE[SSE Alerts]
-    UI[React Frontend]
-
-    SOURCE --> CAMERA
-    CAMERA --> HUB
-
-    HUB --> PREVIEW
-    HUB --> MJPEG
-    HUB --> BUFFER
-
-    BUFFER --> WORKER
-    WORKER --> ENGINE
-    ENGINE --> SNAP
-    ENGINE --> DISPATCH
-    DISPATCH --> SINK
-    SINK --> SERVICE
-
-    SERVICE --> DB
-    SERVICE --> SSE
-
-    PREVIEW --> UI
+    SRC[Webcam / Video / RTSP] --> CAP[CameraRuntime sole capture owner]
+    CAP --> RAW[Raw FrameHub latest]
+    RAW --> PREVIEW[Preview JPEG]
+    RAW --> MJPEG[MJPEG source cadence]
+    CAP --> ELIGIBLE[Even source-frame eligibility]
+    ELIGIBLE --> SLOT[LatestFrameSlot capacity 1]
+    SLOT --> WORKER[Per-camera Vision worker]
+    WORKER --> PIPE[Canonical Vision pipeline]
+    PIPE --> POLICY[VisionProductPolicy]
+    POLICY --> SNAP[Exact-frame privacy snapshot]
+    SNAP --> PROCESSED[Processed FrameHub]
+    POLICY --> DISPATCH[Thread-safe dispatcher]
+    DISPATCH --> SINK[Async event sink]
+    SINK --> SERVICE[EventService]
+    SERVICE --> DB[(SQLite)]
+    SERVICE --> SSE[SSE]
+    PREVIEW --> UI[React]
     MJPEG --> UI
     DB --> UI
     SSE --> UI
 ```
 
-## 3. Vision pipeline
+## 2. Stream overlay
+
+```mermaid
+flowchart TD
+    RAW[Current raw FramePacket] --> CHECK{Latest result exists?}
+    RESULT[Latest VisionResult] --> CHECK
+    CHECK -->|different epoch| PLAIN[Render raw]
+    CHECK -->|future or age > 0.75s| PLAIN
+    CHECK -->|same epoch and fresh| OVERLAY[Render raw + latest overlay]
+    FLAGS[Viewer boxes/identity flags] --> OVERLAY
+    OVERLAY --> JPEG[MJPEG JPEG]
+    PLAIN --> JPEG
+```
+
+## 3. Vision and events
 
 ```mermaid
 flowchart LR
-    FRAME[Sampled Frame]
-    YOLO[YOLO\nPerson Detection]
-    CROP[Person Crop]
-    POSE[MediaPipe Pose]
-    PRE[Preprocess / Normalize]
-    WINDOW[64 Skeleton Samples]
-    GCN[SDA-GCN]
-    FACE[InsightFace]
-    FALL[Fall State Machine]
-    ID[Known / Unknown]
-    RESULT[VisionResult]
-
-    FRAME --> YOLO
-    YOLO --> CROP
-    CROP --> POSE
-    POSE --> PRE
-    PRE --> WINDOW
-    WINDOW --> GCN
-    CROP --> FACE
-    GCN --> FALL
-    FACE --> ID
-    FALL --> RESULT
-    ID --> RESULT
+    FRAME[Eligible packet] --> YOLO[YOLO person]
+    YOLO --> CROP[Person crop]
+    CROP --> POSE[MediaPipe Pose CPU]
+    POSE --> WINDOW[Source-time window]
+    WINDOW --> RESAMPLE[64-frame resample]
+    RESAMPLE --> GCN[SDA-GCN]
+    GCN --> FALL[Fall state machine]
+    CROP --> IDGATE{Identity enabled?}
+    IDGATE -->|yes| FACE[InsightFace]
+    FACE --> RETRY[Per-track retry/cache]
+    RETRY --> KNOWN[Known / Locked Unknown]
+    FALL --> RESULT[VisionResult]
+    KNOWN --> RESULT
+    RESULT --> PRODUCT[Threshold/cooldown policy]
+    PRODUCT --> PRIVACY[Privacy-safe snapshot]
+    PRIVACY --> EVENT[Event adapter/dispatcher]
 ```
 
-## 4. Identity data flow
+## 4. Source discontinuity
 
 ```mermaid
-flowchart LR
-    UI[Người thân Page]
-    API[Persons API]
-    PERSON[(persons)]
-    PROFILE[(face_profiles)]
-    SERVICE[Face Identity Service]
-    GALLERY[FaceGallery\nin-memory cache]
-    ENGINE[Real VisionEngine\nV1 or V2]
-    FACE[Camera Face Embedding]
-    MATCH[Known / Unknown]
+sequenceDiagram
+    participant C as CameraRuntime
+    participant S as LatestFrameSlot
+    participant V as Vision worker
+    participant P as Pipeline session
 
-    UI --> API
-    API --> PERSON
-    API --> SERVICE
-    SERVICE --> PROFILE
-
-    PERSON --> GALLERY
-    PROFILE --> GALLERY
-
-    GALLERY --> ENGINE
-    FACE --> ENGINE
-    ENGINE --> MATCH
+    C->>S: epoch N boundary, discontinuity=true
+    C->>S: newer epoch N packet overwrites pending
+    Note over S: discontinuity remains sticky
+    S->>V: latest packet + discontinuity=true
+    V->>P: process observation
+    P->>P: keep control-plane flags/generation
+    P->>P: reset temporal fall/face/tracking state
+    C->>S: next normal packet
+    S->>V: discontinuity=false
 ```
 
-**Production source of truth:** `persons` + `face_profiles` trong SQLite. Thư mục `register face/` không phải nguồn dữ liệu production.
+## 5. Identity OFF race protection
 
-## 5. Startup restore
+```mermaid
+sequenceDiagram
+    participant UI as Camera UI
+    participant API as Cameras API
+    participant DB as SQLite desired state
+    participant M as Vision manager
+    participant E as In-flight inference
+    participant ES as EventService
+
+    E->>E: computing possible Unknown
+    UI->>API: Identity OFF
+    API->>DB: persist OFF first
+    API->>M: invalidate generation/cache
+    E-->>M: stale Unknown result
+    M->>M: strip identity metadata/event
+    ES->>DB: final persisted gate if event was queued
+    Note over M,ES: Fall event is preserved
+```
+
+## 6. Snapshot privacy and optional media
+
+```mermaid
+flowchart TD
+    EVENT[Fall or Unknown event] --> EXACT{Exact-frame face bbox?}
+    EXACT -->|yes| BLUR[Blur face ROI]
+    EXACT -->|no| FULL[CPU full-frame detector]
+    FULL -->|miss| CROP[Person crop + upscale]
+    CROP -->|miss| ROTATE[Rotate +90 / -90]
+    ROTATE -->|miss| POSE[Pose/head safe ROI]
+    POSE -->|miss| OMIT[Omit snapshot]
+    FULL -->|found| BLUR
+    CROP -->|found| BLUR
+    ROTATE -->|found| BLUR
+    POSE -->|safe| BLUR
+    BLUR --> MEDIA[Optional media savepoint]
+    OMIT --> PERSIST[Persist event + alert]
+    MEDIA -->|success| PERSIST
+    MEDIA -->|failure| PERSIST
+    PERSIST --> SSE[SSE alert]
+```
+
+## 7. Startup restore
 
 ```mermaid
 sequenceDiagram
     participant APP as FastAPI lifespan
     participant DB as SQLite
     participant RT as LocalRuntime
+    participant VIS as Vision manager
     participant CAM as CameraRuntime
-    participant VIS as VisionManager/Worker
 
-    APP->>DB: initialize + idempotent migrations
-    APP->>RT: create runtime services
-    RT->>DB: load face gallery
-    RT->>DB: load camera/Vision desired state
-
-    loop từng camera desired ON
+    APP->>DB: initialize/migrate
+    APP->>RT: create services and bind dispatcher
+    RT->>DB: load FaceGallery and desired state
+    loop each desired Vision ON
+        RT->>VIS: enable session + restore Identity
+    end
+    loop each desired Camera ON
         RT->>CAM: start source
     end
-
-    loop từng camera Vision desired ON
-        RT->>VIS: enable
-    end
-
-    Note over CAM,VIS: Một source lỗi không làm toàn application startup fail
+    Note over APP,CAM: one unavailable source does not fail application startup
 ```
-
-## 6. Event flow
-
-```mermaid
-sequenceDiagram
-    participant VW as VisionWorker
-    participant VE as VisionEngine
-    participant D as Dispatcher
-    participant S as Async Sink
-    participant ES as EventService
-    participant DB as SQLite
-    participant SSE as SSE
-    participant UI as React UI
-
-    VW->>VE: process(FramePacket, Session)
-    VE-->>VW: VisionResult + business event
-    VW->>D: dispatch(event)
-    D->>S: thread-safe handoff
-    S->>ES: consume(event)
-    ES->>DB: persist transaction
-    DB-->>ES: success
-    ES->>SSE: publish alert
-    SSE-->>UI: realtime update
-```
-
-## 7. Desired state vs observed state
-
-```mermaid
-flowchart TB
-    DB[(Persisted Desired State)]
-    RESTORE[Startup Restore]
-    RUNTIME[Observed Runtime State]
-    API[Camera / Settings Controls]
-
-    API --> DB
-    API --> RUNTIME
-    DB --> RESTORE
-    RESTORE --> RUNTIME
-
-    RUNTIME --> C1[Camera: online / connecting / offline / error]
-    RUNTIME --> VS[Vision: disabled / waiting_for_source / running / error]
-```
-
-Một camera desired ON có thể tạm `offline/error`; điều đó không được tự đổi persisted desired state thành OFF.
-
-## 8. Deployment boundary
-
-```mermaid
-flowchart TB
-    subgraph LOCAL["Một GuardianCam Local Hub"]
-        FASTAPI[FastAPI]
-        CAMERA[Camera Runtime]
-        VISION[Vision Worker]
-        EVENT[Event Pipeline]
-        SQLITE[(SQLite)]
-        SNAP[Snapshots]
-        FRONTEND[React/Vite]
-    end
-
-    SOURCES[Camera Sources] --> CAMERA
-    FRONTEND <--> FASTAPI
-
-    CAMERA --> VISION
-    VISION --> EVENT
-    EVENT --> SQLITE
-    EVENT --> SNAP
-    FASTAPI <--> SQLITE
-```
-
-Runtime không yêu cầu Redis, Kafka, Celery hoặc một AI service riêng cho từng camera.

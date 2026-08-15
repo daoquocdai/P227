@@ -16,12 +16,10 @@ RUN apt-get update \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-COPY requirements.txt ./
+COPY requirements ./requirements
 RUN python -m pip install --upgrade pip setuptools wheel \
-    && python -m pip install \
-        --index-url https://download.pytorch.org/whl/cpu \
-        torch==2.5.1 torchvision==0.20.1 \
-    && python -m pip install -r requirements.txt
+    && python -m pip install -r requirements/vision-cpu.txt \
+    && python -m pip install --no-deps -r requirements/vision-identity.txt
 
 
 FROM python:3.11-slim AS runtime
@@ -32,7 +30,7 @@ ENV PATH="/opt/venv/bin:$PATH" \
     APP_HOST=0.0.0.0 \
     APP_PORT=8000 \
     VISION_DEVICE=cpu \
-    VISION_LEGACY_IDENTITY_PROVIDER=cpu \
+    VISION_IDENTITY_PROVIDER=cpu \
     HOME=/home/appuser
 
 WORKDIR /app

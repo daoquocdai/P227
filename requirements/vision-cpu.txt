@@ -1,0 +1,8 @@
+# Portable CPU/Docker profile. It does not claim host GPU passthrough.
+--extra-index-url https://download.pytorch.org/whl/cpu
+-r base.txt
+
+onnxruntime==1.26.0
+torch==2.5.1+cpu
+torchvision==0.20.1+cpu
+ultralytics==8.4.110

@@ -1,6 +1,6 @@
 import { AlertTriangle, Camera, CameraOff, ChevronLeft, ChevronRight, Edit3, Expand, Minimize, RefreshCw, ShieldCheck, Trash2, Video, Wifi, X } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { deleteCamera, getCamera, getCameras, updateCamera, type CameraDto, type CameraEventDto } from "../api/cameras";
+import { deleteCamera, getCamera, getCameras, setCameraIdentity, updateCamera, type CameraDto, type CameraEventDto } from "../api/cameras";
 import { CameraStream } from "../components";
 import "./cameraViewer.css";
 import "./cameraApi.css";
@@ -18,6 +18,8 @@ export default function CameraPage() {
   const selectorRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<HTMLDivElement>(null);
   const camerasRequestInFlight = useRef(false);
+  const [showBoxes,setShowBoxes]=useState(()=>localStorage.getItem("camera.showBoxes")!=="false");
+  const [recognitionEnabled,setRecognitionEnabled]=useState(false);
 
   const load = async () => {
     if (camerasRequestInFlight.current) return;
@@ -43,6 +45,7 @@ export default function CameraPage() {
   }, [selectedId]);
 
   const selected = feeds.find((feed) => feed.id === selectedId);
+  useEffect(()=>{setRecognitionEnabled(Boolean(selected?.identity_enabled))},[selected?.id,selected?.identity_enabled]);
   const todayEvents = events.filter((event) => isToday(event.occurred_at));
   const offline = !selected || selected.status !== "online";
   const navigate = (path: string) => { window.history.pushState({}, "", path); window.dispatchEvent(new PopStateEvent("popstate")); };
@@ -67,15 +70,20 @@ export default function CameraPage() {
     <header className="smart-camera-heading"><div><p>Không gian của bạn</p><h1>Camera</h1></div><span><ShieldCheck /> {feeds.filter((item) => item.status === "online").length}/{feeds.length} camera trực tuyến</span></header>
     <div className="smart-viewer-shell">
       <div className="smart-camera-viewer" key={selected.id} ref={viewerRef}>
-        <CameraStream cameraId={selected.id} streamReady={selected.stream_ready} streamUrl={selected.stream_url} />
+        <CameraStream cameraId={selected.id} streamReady={selected.stream_ready} streamUrl={selected.stream_url} showBoxes={showBoxes} showIdentity={recognitionEnabled} />
         {selected.source_kind === "rtsp" && !selected.playback_url && !offline && <div className="smart-camera-offline"><Wifi /><strong>Camera RTSP đã được cấu hình</strong><span>Đang chờ Local Hub cung cấp luồng phát cho trình duyệt</span></div>}
         {offline && <div className="smart-camera-offline"><CameraOff /><strong>{selected.status === "error" ? "Không thể mở camera" : "Camera đang ngoại tuyến"}</strong><span>{selected.error ?? (selected.last_seen_at ? `Lần cuối ${formatTime(selected.last_seen_at)}` : "Chưa có heartbeat")}</span></div>}
         <div className="smart-viewer-top"><span className={`smart-live ${offline ? "offline" : ""}`}><i /><span>{offline ? "Ngoại tuyến" : "Trực tiếp"}</span></span><button className="camera-fullscreen-button" onClick={toggleFullscreen} aria-label={fullscreen?"Thu nhỏ camera":"Phóng to toàn màn hình"} title={fullscreen?"Thoát toàn màn hình":"Toàn màn hình"}>{fullscreen?<Minimize/>:<Expand/>}</button></div>
         <div className="smart-viewer-bottom"><div><strong>{selected.name}</strong><span>{selected.location} · {selected.source}</span></div><time>{selected.last_seen_at ? formatTime(selected.last_seen_at) : "—"}</time></div>
       </div>
 
+      <div className="vision-display-controls" aria-label="Tùy chọn hiển thị Vision">
+        <label><input type="checkbox" checked={showBoxes} onChange={event=>{setShowBoxes(event.target.checked);localStorage.setItem("camera.showBoxes",String(event.target.checked))}}/> Hiện khung</label>
+        <label><input type="checkbox" checked={recognitionEnabled} onChange={event=>{const enabled=event.target.checked;setRecognitionEnabled(enabled);void setCameraIdentity(selected.id,enabled).then(()=>load()).catch(()=>setRecognitionEnabled(!enabled))}}/> Phát hiện người lạ</label>
+      </div>
+
       <div className="camera-selector-wrap"><header><h2>Camera khác</h2><div><button onClick={() => moveCarousel(-1)}><ChevronLeft /></button><button onClick={() => moveCarousel(1)}><ChevronRight /></button></div></header>
-        <div className="camera-selector" ref={selectorRef}>{feeds.filter((feed)=>feed.id!==selected.id).map((feed) => <button key={feed.id} onClick={() => setSelectedId(feed.id)}><VideoThumbnail feed={feed} /><span className="thumbnail-camera-info"><strong>{feed.location||"Chưa đặt vị trí"}</strong><small><i className={feed.status !== "online" ? "offline" : ""} />{feed.status === "online" ? "Trực tuyến" : "Ngoại tuyến"}</small></span></button>)}</div>
+        <div className="camera-selector" ref={selectorRef}>{feeds.filter((feed)=>feed.id!==selected.id).map((feed) => <button key={feed.id} onClick={() => setSelectedId(feed.id)}><VideoThumbnail feed={feed} showBoxes={showBoxes} /><span className="thumbnail-camera-info"><strong>{feed.location||"Chưa đặt vị trí"}</strong><small><i className={feed.status !== "online" ? "offline" : ""} />{feed.status === "online" ? "Trực tuyến" : "Ngoại tuyến"}</small></span></button>)}</div>
       </div>
 
       <section className="smart-camera-actions"><button className="primary" onClick={()=>setEditing(true)}><Edit3/><span><strong>Chi tiết camera</strong><small>Chỉnh sửa tên, vị trí và nguồn phát</small></span></button><div className="camera-readonly-state"><ShieldCheck/><span><strong>{selected.active?"Camera đang bật":"Camera đang tắt"}</strong><small>Vision: {selected.vision_status??"disabled"} · Bật/tắt trong Cài đặt</small></span></div></section>
@@ -92,10 +100,10 @@ function EventRow({ event, onOpen }: { event: CameraEventDto; onOpen: () => void
   return <button className={`viewer-event-row ${fall ? "danger" : "info"}`} onClick={onOpen}><time>{formatTime(event.occurred_at)}</time><span><Icon /></span><div><strong>{event.title}</strong><small>{event.description}</small></div><ChevronRight /></button>;
 }
 
-function VideoThumbnail({ feed }: { feed: CameraDto }) {
+function VideoThumbnail({ feed, showBoxes }: { feed: CameraDto; showBoxes: boolean }) {
   const [failed,setFailed]=useState(false);
   return <span className={`video-thumbnail ${feed.status !== "online" ? "offline" : ""}`}>
-    {feed.stream_ready&&!failed?<CameraStream cameraId={feed.id} streamReady streamUrl={feed.stream_url} onError={()=>setFailed(true)}/>:<span className="camera-source-placeholder"><Camera /></span>}
+    {feed.stream_ready&&!failed?<CameraStream cameraId={feed.id} streamReady streamUrl={feed.stream_url} showBoxes={showBoxes} showIdentity={feed.identity_enabled} onError={()=>setFailed(true)}/>:<span className="camera-source-placeholder"><Camera /></span>}
     <span className={`thumbnail-status ${feed.status !== "online" ? "offline" : ""}`}><i />{feed.status === "online" ? "Trực tiếp" : "Ngoại tuyến"}</span><span className="thumbnail-name">{feed.name}</span>
   </span>;
 }

@@ -2,6 +2,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from src.models.vision import VisionResult
+
 
 @dataclass(slots=True)
 class FramePacket:
@@ -15,4 +17,10 @@ class FramePacket:
     source_timestamp: float | None = None
     source_time_kind: str = "capture_arrival"
     source_epoch: int = 0
+    # Zero-based identity inside the current source epoch. Unlike the Vision
+    # consumer call count, this remains stable when pending frames are dropped.
+    source_frame_index: int | None = None
     discontinuity: bool = False
+    # Set synchronously before publication in the production capture path so
+    # stream consumers always render the result belonging to this exact frame.
+    vision_result: VisionResult | None = None

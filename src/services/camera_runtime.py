@@ -2,6 +2,7 @@ import logging
 import os
 import threading
 import time
+from collections import deque
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -25,6 +26,9 @@ class CameraRuntimeState:
     last_frame_at: float | None = None
 
     error: str | None = None
+    capture_fps: float = 0.0
+    source_frames_read: int = 0
+    frames_published: int = 0
 
     def to_dict(self):
         state = asdict(self)
@@ -41,9 +45,11 @@ class CameraRuntime:
         frame_hub: FrameHub,
         reconnect_delay: float = 1.0,
         vision_sample_buffer=None,
+        vision_processor=None,
     ):
         self.frame_hub = frame_hub
         self.vision_sample_buffer = vision_sample_buffer
+        self.vision_processor = vision_processor
 
         self.reconnect_delay = reconnect_delay
 
@@ -53,6 +59,7 @@ class CameraRuntime:
         self._stop_events = {}
         self._states = {}
         self._captures = {}
+        self._capture_times: dict[str, deque[float]] = {}
 
     def start(
         self,
@@ -126,6 +133,7 @@ class CameraRuntime:
             self._threads.pop(camera_id, None)
             self._stop_events.pop(camera_id, None)
             self._captures.pop(camera_id, None)
+            self._capture_times.pop(camera_id, None)
 
         if remove_frame:
             self.frame_hub.remove(camera_id)
@@ -219,6 +227,8 @@ class CameraRuntime:
 
         frame_id = -1
         source_epoch = -1
+        source_frames_read = 0
+        frames_published = 0
 
         is_file = self._is_file(source)
 
@@ -269,7 +279,7 @@ class CameraRuntime:
                 else 0
             )
 
-            next_frame_at = time.monotonic()
+            playback_start = time.monotonic()
 
             try:
 
@@ -288,9 +298,7 @@ class CameraRuntime:
                                     0
                                 )
 
-                                next_frame_at = (
-                                    time.monotonic()
-                                )
+                                playback_start = time.monotonic()
 
                                 source_epoch += 1
                                 frame_in_epoch = -1
@@ -312,27 +320,32 @@ class CameraRuntime:
 
                         break
 
+                    frame_id += 1
+                    frame_in_epoch += 1
+                    source_frames_read += 1
+
                     if is_file:
 
                         now = time.monotonic()
 
-                        wait_time = (
-                            next_frame_at - now
-                        )
+                        source_position = frame_in_epoch * frame_interval
+                        wait_time = playback_start + source_position - now
 
                         if wait_time > 0:
                             stop_event.wait(
                                 wait_time
                             )
 
-                        next_frame_at += (
-                            frame_interval
-                        )
-
-                    frame_id += 1
-                    frame_in_epoch += 1
+                        # Do not publish a stale decoded frame merely to catch
+                        # up; the next loop reads toward the current position.
+                        if wait_time < -frame_interval:
+                            continue
 
                     captured_at = time.time()
+                    capture_times = self._capture_times.setdefault(camera_id, deque(maxlen=60))
+                    capture_times.append(captured_at)
+                    capture_span = capture_times[-1] - capture_times[0] if len(capture_times) > 1 else 0.0
+                    capture_fps = (len(capture_times) - 1) / capture_span if capture_span > 0 else 0.0
                     source_timestamp = (
                         frame_in_epoch / source_fps
                         if is_file
@@ -347,10 +360,14 @@ class CameraRuntime:
                         source_timestamp=source_timestamp,
                         source_time_kind=("media_timeline" if is_file else "monotonic_arrival"),
                         source_epoch=source_epoch,
+                        source_frame_index=frame_in_epoch,
                         discontinuity=frame_in_epoch == 0,
                     )
 
                     self.frame_hub.publish(packet)
+                    frames_published += 1
+                    if self.vision_processor is not None:
+                        self.vision_processor(packet)
                     if self.vision_sample_buffer is not None:
                         self.vision_sample_buffer.offer(packet)
 
@@ -360,6 +377,9 @@ class CameraRuntime:
                         frame_id=frame_id,
                         last_frame_at=captured_at,
                         error=None,
+                        capture_fps=capture_fps,
+                        source_frames_read=source_frames_read,
+                        frames_published=frames_published,
                     )
 
             except Exception as exc:

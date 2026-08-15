@@ -28,6 +28,7 @@ class VisionManager:
         self._last_errors: dict[str, dict] = {}
         self._event_dispatcher = event_dispatcher
         self._sample_buffer = sample_buffer
+        self._engine = engine
         self._event_handler_errors: dict[str, int] = {}
         self._last_event_handler_errors: dict[str, str] = {}
         self.worker = VisionWorker(
@@ -59,6 +60,19 @@ class VisionManager:
             self._current_errors.pop(camera_id, None)
             self._last_results.pop(camera_id, None)
         return self.get_status(camera_id)
+
+    def set_identity_enabled(self, camera_id: str, enabled: bool) -> dict:
+        session = self.worker.get_session(camera_id)
+        if session is not None:
+            session.state["vision_identity_enabled"] = enabled
+            session.state.pop("vision_face_cache", None)
+        if enabled and hasattr(self._engine, "set_identity_enabled"):
+            self._engine.set_identity_enabled(True)
+        return self.get_status(camera_id)
+
+    def is_identity_enabled(self, camera_id: str) -> bool:
+        session = self.worker.get_session(camera_id)
+        return bool(session and session.state.get("vision_identity_enabled", False))
 
     def get_status(self, camera_id: str) -> dict:
         enabled = self.worker.is_enabled(camera_id)
@@ -101,9 +115,13 @@ class VisionManager:
             "processed_frames": 0 if session is None else session.processed_frames,
             "dropped_frames": 0 if session is None else session.dropped_frames,
             "last_processed_frame_id": -1 if session is None else session.last_processed_frame_id,
+            "worker_threads": self.worker.thread_count,
             "last_result": None if result is None else asdict(result),
             "current_error": current_error,
             "last_error": last_error,
+            "identity_enabled": bool(
+                session and session.state.get("vision_identity_enabled", False)
+            ),
             "event_dispatch": dispatch_status,
             "temporal": self._temporal_status(camera_id),
         }

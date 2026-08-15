@@ -1,25 +1,64 @@
-# GuardianCam Vision runtime
+# Canonical production Vision
 
 Production enters this package through `src.runtime.LocalRuntime` and
-the selected `VisionEngine`; files here are not standalone applications.
+`RuntimeV2VisionPipeline` in `pipeline.py`. `visionv2/runtimev2` and
+`visionv2/P-227-thi` remain standalone reference/oracle trees; production does
+not import them.
 
-Engine selections:
+## Runtime contract
 
-- `mock`: lightweight test engine
-- `legacy` or `legacy_v1`: frozen binary V1 bone model
-- `legacy_v2`: five-class V2 joint model; only raw class `1` is a fall candidate
+```text
+CameraRuntime capture
+  ├── raw FrameHub → realtime MJPEG/preview
+  └── even source frame → LatestFrameSlot(capacity=1)
+                         → per-camera Vision worker
+                         → RuntimeV2VisionPipeline
+```
 
-Required inference artifacts:
+Vision therefore does not run synchronously inside the capture loop. Slow
+inference overwrites one pending packet instead of creating a queue, while raw
+streaming continues at source cadence.
 
-- `yolov8n.pt`
-- `work_dir/fall_detection/ntu25-bone/config.yaml`
-- `work_dir/fall_detection/ntu25-bone/runs-best_val.pt`
-- `work_dir/fall_detection/joint/config.yaml`
-- `work_dir/fall_detection/joint/runs-best_val.pt`
+Temporal semantics use `FramePacket.source_timestamp`:
 
-The unchanged standalone V1 oracle lives in `legacy/vision_v1/realtime.py` and
-is exercised only by `tests/test_vision/golden_regression.py`. Face identity in
-production is supplied by the database-backed `FaceGallery`; old standalone
-register and recognize applications are not runtime dependencies.
-The unchanged V2 oracle lives in `legacy/vision_v2/realtime.py`; production
-does not import from the top-level `visionv2/` source-material directory.
+- video: media/source timeline;
+- live camera: monotonic capture time;
+- `source_epoch`/sticky discontinuity prevents windows crossing loops/reconnects.
+
+## Model semantics
+
+The canonical pipeline preserves:
+
+- YOLO person tracking/crop behavior;
+- MediaPipe Pose extraction;
+- existing preprocessing and 64-frame resampling;
+- five-class SDA-GCN output;
+- class `1` as fall candidate;
+- existing confirmation/recovery/movement rules;
+- known-face cosine threshold `>0.45`;
+- five qualifying Unknown observations at one-second source-time intervals.
+
+Required artifacts:
+
+- `yolov8n.pt`;
+- `work_dir/fall_detection/joint/config.yaml`;
+- `work_dir/fall_detection/joint/runs-best_val.pt`.
+
+## Hardware
+
+`VISION_DEVICE=auto` selects CUDA first, then Intel OpenVINO GPU, then CPU.
+MediaPipe Pose runs on CPU. Identity uses configured ONNX Runtime providers;
+DirectML is supported on Windows with CPU fallback. The one-shot privacy face
+detector intentionally uses CPU provider for native stability.
+
+Known identities come from the database-backed `FaceGallery`. InsightFace
+`buffalo_l` is required only when Identity is enabled.
+
+## Product boundaries
+
+- Fall is always enabled whenever Vision is enabled.
+- Identity OFF disables continuous recognition/Unknown events but not Fall.
+- Product thresholds are applied by `VisionProductPolicy`, not model math.
+- Snapshot privacy is handled at the manager commit boundary using the exact
+  event packet.
+- Viewer count and presentation flags never create inference.

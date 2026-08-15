@@ -5,11 +5,16 @@ interface CameraStreamProps {
   playbackUrl?: string | null; // Compatibility only; production viewing uses MJPEG.
   className?: string;
   onError?: () => void;
+  showBoxes?: boolean;
+  showIdentity?: boolean;
 }
 
-export function CameraStream({ cameraId, streamReady, streamUrl, className, onError }: CameraStreamProps) {
+export function CameraStream({ cameraId, streamReady, streamUrl, className, onError, showBoxes=true, showIdentity=true }: CameraStreamProps) {
   if (streamReady && streamUrl) {
-    return <img className={className} src={streamUrl} alt={`Luồng trực tiếp ${cameraId}`} onError={onError} />;
+    const separator=streamUrl.includes("?")?"&":"?";
+    const configured=`${streamUrl}${separator}boxes=${showBoxes}&identity=${showIdentity}`;
+    const streamClassName=["camera-stream-image",className].filter(Boolean).join(" ");
+    return <img className={streamClassName} src={configured} alt={`Luồng trực tiếp ${cameraId}`} onError={onError} />;
   }
   return null;
 }

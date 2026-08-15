@@ -28,25 +28,20 @@ class Settings(BaseSettings):
     # Explicit test/demo control. Empty means the production mock emits no events.
     mock_vision_event_frame_ids: str = ""
 
-    # Vision. Mock remains the safe default; Legacy imports and models are lazy.
-    vision_engine: Literal["mock", "legacy", "legacy_v1", "legacy_v2"] = "mock"
+    # Production has one canonical VisionV2 implementation. Mock is test-only.
+    vision_engine: Literal["canonical", "mock"] = "canonical"
     vision_device: str = "auto"
-    vision_legacy_yolo_path: Path = VISION_ROOT / "yolov8n.pt"
-    vision_legacy_config_path: Path = (
-        VISION_ROOT / "work_dir" / "fall_detection" / "ntu25-bone" / "config.yaml"
-    )
-    vision_legacy_checkpoint_path: Path = (
-        VISION_ROOT / "work_dir" / "fall_detection" / "ntu25-bone" / "runs-best_val.pt"
-    )
-    vision_v2_config_path: Path = VISION_ROOT / "work_dir" / "fall_detection" / "joint" / "config.yaml"
-    vision_v2_checkpoint_path: Path = (
+    vision_yolo_path: Path = VISION_ROOT / "yolov8n.pt"
+    vision_config_path: Path = VISION_ROOT / "work_dir" / "fall_detection" / "joint" / "config.yaml"
+    vision_checkpoint_path: Path = (
         VISION_ROOT / "work_dir" / "fall_detection" / "joint" / "runs-best_val.pt"
     )
-    vision_legacy_known_faces_dir: Path = VISION_ROOT / "register face"
-    vision_legacy_identity_enabled: bool = False
-    vision_legacy_identity_provider: Literal["auto", "cpu", "directml"] = "auto"
-    vision_legacy_insightface_root: Path = Path.home() / ".insightface"
-    vision_temporal_target_sample_rate: float = Field(default=15.0, gt=0)
+    vision_model_cache_dir: Path = Path("data/vision-cache")
+    vision_known_faces_dir: Path = VISION_ROOT / "register face"
+    vision_identity_enabled: bool = False
+    vision_identity_provider: Literal["auto", "cpu", "cuda", "directml"] = "auto"
+    vision_insightface_root: Path = Path.home() / ".insightface"
+    vision_temporal_target_sample_rate: float = Field(default=5.0, gt=0)
     vision_temporal_buffer_capacity: int = Field(default=8, ge=2, multiple_of=2)
 
     @field_validator("vision_device")

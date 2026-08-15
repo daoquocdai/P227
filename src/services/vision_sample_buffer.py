@@ -35,7 +35,7 @@ class _CameraTemporalState:
 class VisionSampleBuffer:
     """Bounded source-time sampler dedicated to Vision consumption.
 
-    Legacy V1 samples every other engine input. The public target rate is the
+    Canonical Vision samples every other engine input. The public target rate is the
     actual model-observation cadence, while the input grid is faster by the
     explicit skip factor. Queue eviction always preserves that pairing.
     """
@@ -43,20 +43,24 @@ class VisionSampleBuffer:
     def __init__(
         self,
         *,
-        target_sample_rate: float = 15.0,
-        legacy_skip_factor: int = 2,
+        target_sample_rate: float = 5.0,
+        inference_skip_factor: int = 2,
         capacity: int = 8,
+        model_window_seconds: float = 2.0,
     ) -> None:
         if target_sample_rate <= 0:
             raise ValueError("target_sample_rate must be positive")
-        if legacy_skip_factor < 1:
-            raise ValueError("legacy_skip_factor must be positive")
-        if capacity < legacy_skip_factor or capacity % legacy_skip_factor:
-            raise ValueError("capacity must be a positive multiple of legacy_skip_factor")
+        if inference_skip_factor < 1:
+            raise ValueError("inference_skip_factor must be positive")
+        if capacity < inference_skip_factor or capacity % inference_skip_factor:
+            raise ValueError("capacity must be a positive multiple of inference_skip_factor")
+        if model_window_seconds <= 0:
+            raise ValueError("model_window_seconds must be positive")
         self.target_sample_rate = target_sample_rate
-        self.legacy_skip_factor = legacy_skip_factor
+        self.inference_skip_factor = inference_skip_factor
         self.capacity = capacity
-        self.input_rate = target_sample_rate * legacy_skip_factor
+        self.model_window_seconds = model_window_seconds
+        self.input_rate = target_sample_rate * inference_skip_factor
         self._input_period = 1.0 / self.input_rate
         self._condition = threading.Condition(threading.RLock())
         self._states: dict[str, _CameraTemporalState] = {}
@@ -107,7 +111,7 @@ class VisionSampleBuffer:
             )
             major_gap = (
                 state.next_input_timestamp is not None
-                and source_timestamp - state.next_input_timestamp > 63.0 / self.target_sample_rate
+                and source_timestamp - state.next_input_timestamp > self.model_window_seconds
             )
             if packet.discontinuity or epoch_changed or rolled_back or major_gap:
                 if (rolled_back or major_gap) and not packet.discontinuity:
@@ -143,21 +147,21 @@ class VisionSampleBuffer:
             missed_slots = max(0, math.floor((overdue + tolerance) / self._input_period))
             if missed_slots:
                 state.input_drop_count += missed_slots
-                state.temporal_drop_count += math.ceil(missed_slots / self.legacy_skip_factor)
+                state.temporal_drop_count += math.ceil(missed_slots / self.inference_skip_factor)
                 state.epoch_input_drop_count += missed_slots
-                state.epoch_temporal_drop_count += math.ceil(missed_slots / self.legacy_skip_factor)
+                state.epoch_temporal_drop_count += math.ceil(missed_slots / self.inference_skip_factor)
                 state.degraded_reason = "source_cadence_gap"
                 state.next_input_timestamp += missed_slots * self._input_period
 
             if len(state.packets) >= self.capacity:
-                drop_count = min(self.legacy_skip_factor, len(state.packets))
+                drop_count = min(self.inference_skip_factor, len(state.packets))
                 for _ in range(drop_count):
                     state.packets.popleft()
                 state.input_drop_count += drop_count
-                state.temporal_drop_count += math.ceil(drop_count / self.legacy_skip_factor)
+                state.temporal_drop_count += math.ceil(drop_count / self.inference_skip_factor)
                 state.overload_count += 1
                 state.epoch_input_drop_count += drop_count
-                state.epoch_temporal_drop_count += math.ceil(drop_count / self.legacy_skip_factor)
+                state.epoch_temporal_drop_count += math.ceil(drop_count / self.inference_skip_factor)
                 state.epoch_overload_count += 1
                 state.degraded_reason = "buffer_overload"
 
@@ -204,7 +208,7 @@ class VisionSampleBuffer:
             span = metadata.get("window_source_time_span")
             if span is not None:
                 state.window_source_time_span = float(span)
-                expected_span = 63.0 / self.target_sample_rate
+                expected_span = self.model_window_seconds
                 state.strict_window_observed = abs(float(span) - expected_span) <= self._input_period
                 if not state.strict_window_observed and state.degraded_reason is None:
                     state.degraded_reason = "window_source_span"

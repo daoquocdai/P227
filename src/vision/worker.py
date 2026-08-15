@@ -13,7 +13,11 @@ logger = logging.getLogger(__name__)
 
 
 class VisionWorker:
-    """Consume one latest frame per enabled camera without owning capture."""
+    """Run one ordered consumer per camera without owning capture.
+
+    Camera threads isolate ordering and mutable session/tracker state. Heavy
+    immutable model state remains owned by the shared engine.
+    """
 
     def __init__(
         self,
@@ -32,12 +36,18 @@ class VisionWorker:
         self._enabled: set[str] = set()
         self._sessions: dict[str, VisionSession] = {}
         self._stop_event = threading.Event()
-        self._thread: threading.Thread | None = None
+        self._threads: dict[str, threading.Thread] = {}
         self._engine_started = False
 
     @property
     def is_running(self) -> bool:
-        return self._thread is not None and self._thread.is_alive()
+        with self._lock:
+            return self._engine_started and not self._stop_event.is_set()
+
+    @property
+    def thread_count(self) -> int:
+        with self._lock:
+            return sum(thread.is_alive() for thread in self._threads.values())
 
     def start(self) -> None:
         with self._lock:
@@ -46,19 +56,21 @@ class VisionWorker:
             self._stop_event.clear()
             self.engine.start()
             self._engine_started = True
-            self._thread = threading.Thread(target=self._run, name="vision-worker", daemon=True)
-            self._thread.start()
+            for camera_id in self._enabled:
+                self._start_camera_thread(camera_id)
 
     def stop(self) -> None:
         self._stop_event.set()
-        thread = self._thread
-        if thread and thread.is_alive():
-            thread.join(timeout=5)
+        with self._lock:
+            threads = list(self._threads.values())
+        for thread in threads:
+            if thread.is_alive():
+                thread.join(timeout=5)
         with self._lock:
             if self._engine_started:
                 self.engine.stop()
                 self._engine_started = False
-            self._thread = None
+            self._threads.clear()
 
     def enable(self, camera_id: str) -> VisionSession:
         with self._lock:
@@ -66,6 +78,15 @@ class VisionWorker:
             session = self._sessions.setdefault(camera_id, VisionSession(camera_id=camera_id))
         if self.sample_buffer is not None:
             self.sample_buffer.enable(camera_id)
+        try:
+            self.engine.prepare_camera(camera_id, session)
+        except Exception as exc:
+            logger.exception("Vision camera preparation failed: camera=%s", camera_id)
+            if self.on_error:
+                self.on_error(camera_id, -1, exc)
+        with self._lock:
+            if self._engine_started:
+                self._start_camera_thread(camera_id)
         return session
 
     def disable(self, camera_id: str, clear_session: bool = True) -> None:
@@ -73,8 +94,15 @@ class VisionWorker:
             self.sample_buffer.disable(camera_id)
         with self._lock:
             self._enabled.discard(camera_id)
+            thread = self._threads.pop(camera_id, None)
             if clear_session:
                 self._sessions.pop(camera_id, None)
+        if thread is not None and thread is not threading.current_thread() and thread.is_alive():
+            thread.join(timeout=5)
+        if thread is not None and thread.is_alive():
+            logger.error("Vision camera worker did not stop before resource release: camera=%s", camera_id)
+            return
+        self.engine.release_camera(camera_id)
 
     def is_enabled(self, camera_id: str) -> bool:
         with self._lock:
@@ -84,58 +112,64 @@ class VisionWorker:
         with self._lock:
             return self._sessions.get(camera_id)
 
-    def _enabled_snapshot(self) -> list[str]:
-        with self._lock:
-            return list(self._enabled)
+    def _start_camera_thread(self, camera_id: str) -> None:
+        existing = self._threads.get(camera_id)
+        if existing is not None and existing.is_alive():
+            return
+        thread = threading.Thread(
+            target=self._run_camera,
+            args=(camera_id,),
+            name=f"vision-worker-{camera_id}",
+            daemon=True,
+        )
+        self._threads[camera_id] = thread
+        thread.start()
 
-    def _run(self) -> None:
-        while not self._stop_event.is_set():
+    def _run_camera(self, camera_id: str) -> None:
+        while not self._stop_event.is_set() and self.is_enabled(camera_id):
             source = self.frame_hub if self.sample_buffer is None else self.sample_buffer
             current_version = source.version
-            for camera_id in self._enabled_snapshot():
-                if self._stop_event.is_set():
-                    return
-                packet = (
-                    self.frame_hub.get_latest(camera_id)
-                    if self.sample_buffer is None
-                    else self.sample_buffer.get_nowait(camera_id)
-                )
-                session = self.get_session(camera_id)
-                if packet is None or session is None or not self.is_enabled(camera_id):
-                    continue
-                if packet.frame_id <= session.last_processed_frame_id:
-                    continue
+            packet = (
+                self.frame_hub.get_latest(camera_id)
+                if self.sample_buffer is None
+                else self.sample_buffer.get_nowait(camera_id)
+            )
+            session = self.get_session(camera_id)
+            if packet is None or session is None or not self.is_enabled(camera_id):
+                source.wait_for_update(after_version=current_version, timeout=0.5)
+                continue
+            if packet.frame_id <= session.last_processed_frame_id:
+                source.wait_for_update(after_version=current_version, timeout=0.5)
+                continue
 
-                previous_epoch = session.state.get("vision_source_epoch")
-                if packet.discontinuity or (
-                    previous_epoch is not None and previous_epoch != packet.source_epoch
-                ):
-                    session.state.clear()
-                session.state["vision_source_epoch"] = packet.source_epoch
+            previous_epoch = session.state.get("vision_source_epoch")
+            if packet.discontinuity or (
+                previous_epoch is not None and previous_epoch != packet.source_epoch
+            ):
+                session.state.clear()
+            session.state["vision_source_epoch"] = packet.source_epoch
 
-                session.note_frame(packet.frame_id)
-                try:
-                    result = self.engine.process(packet, session)
-                except Exception as exc:
-                    session.mark_processed(packet.frame_id)
-                    logger.exception("Vision error: camera=%s frame=%s", camera_id, packet.frame_id)
-                    if self.on_error and self.is_enabled(camera_id):
-                        self.on_error(camera_id, packet.frame_id, exc)
-                    continue
-
+            session.note_frame(packet.frame_id)
+            try:
+                result = self.engine.process(packet, session)
+            except Exception as exc:
                 session.mark_processed(packet.frame_id)
-                if self.sample_buffer is not None:
-                    self.sample_buffer.note_result(packet, result.metadata)
-                self._attach_event_snapshot(packet, result)
-                if self.on_result and self.is_enabled(camera_id):
-                    self.on_result(result)
+                logger.exception("Vision error: camera=%s frame=%s", camera_id, packet.frame_id)
+                if self.on_error and self.is_enabled(camera_id):
+                    self.on_error(camera_id, packet.frame_id, exc)
+                continue
 
-            source.wait_for_update(after_version=current_version, timeout=0.5)
+            session.mark_processed(packet.frame_id)
+            if self.sample_buffer is not None:
+                self.sample_buffer.note_result(packet, result.metadata)
+            self._attach_event_snapshot(packet, result)
+            if self.on_result and self.is_enabled(camera_id):
+                self.on_result(result)
 
     @staticmethod
     def _attach_event_snapshot(packet, result: VisionResult) -> None:
         """Persist the exact processed frame before the event crosses into asyncio."""
-        if not result.events or result.metadata.get("engine") not in {"legacy", "legacy_v2"}:
+        if not result.events or result.metadata.get("engine") != "canonical":
             return
         if all(valid_snapshot_name(event.metadata.get("snapshot_path")) for event in result.events):
             return
