@@ -3,7 +3,7 @@ from uuid import uuid4
 import numpy as np
 
 from src.database import database_connection
-from src.services.face_identity_service import FaceGallery
+from src.services.face_identity_service import FaceGallery, FaceIdentityService
 
 
 def test_face_gallery_loads_active_profiles_and_invalidates_deactivated_person():
@@ -33,3 +33,16 @@ def test_face_gallery_loads_active_profiles_and_invalidates_deactivated_person()
         connection.commit()
     gallery.reload()
     assert all(face.person_id != person_id for face in gallery.snapshot())
+
+
+def test_face_enrollment_auto_provider_prefers_cuda(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "src.vision.runtime.VisionRuntimeResolver.available_ort_providers",
+        lambda: ("DmlExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"),
+    )
+    service = FaceIdentityService(FaceGallery(), tmp_path, provider="auto")
+
+    providers, context_id = service._execution_provider()
+
+    assert providers == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    assert context_id == 0

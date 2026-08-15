@@ -16,7 +16,6 @@ RUN apt-get update \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-COPY requirements.txt ./
 COPY requirements ./requirements
 RUN python -m pip install --upgrade pip setuptools wheel \
     && python -m pip install -r requirements/vision-cpu.txt

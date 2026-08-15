@@ -17,6 +17,8 @@ BACKEND_PORT ?= 8000
 FRONTEND_DIR := frontend
 PYTHON_PATHS := src tests
 COMPOSE := docker compose
+VISION_PROFILE ?= cpu
+VISION_REQUIREMENTS := requirements/vision-$(VISION_PROFILE).txt
 
 .PHONY: help setup venv install install-backend install-frontend \
 	dev dev-backend dev-frontend db-init \
@@ -41,7 +43,7 @@ install: install-backend install-frontend ## Install backend and frontend depend
 
 install-backend: ## Install Python dependencies into .venv
 	$(PYTHON) -m pip install --upgrade pip
-	$(PYTHON) -m pip install -r requirements.txt
+	$(PYTHON) -m pip install -r $(VISION_REQUIREMENTS)
 
 install-frontend: ## Install exact frontend dependencies from package-lock.json
 	cd $(FRONTEND_DIR) && $(NPM) ci

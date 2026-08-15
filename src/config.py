@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     vision_model_cache_dir: Path = Path("data/vision-cache")
     vision_known_faces_dir: Path = VISION_ROOT / "register face"
     vision_identity_enabled: bool = False
-    vision_identity_provider: Literal["auto", "cpu", "directml"] = "auto"
+    vision_identity_provider: Literal["auto", "cpu", "cuda", "directml"] = "auto"
     vision_insightface_root: Path = Path.home() / ".insightface"
     vision_temporal_target_sample_rate: float = Field(default=5.0, gt=0)
     vision_temporal_buffer_capacity: int = Field(default=8, ge=2, multiple_of=2)

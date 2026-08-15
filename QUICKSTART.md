@@ -18,14 +18,20 @@ npm.cmd --version
 
 ## 2. Clone và tạo môi trường
 
-### Intel Iris Xe
-
 ```cmd
 git clone https://github.com/AI20K-Build-Phase-Cohort-3/P-227.git
 cd P-227
 python -m venv .venv
 .venv\Scripts\activate
 python -m pip install --upgrade pip
+```
+
+Chọn **đúng một** dependency profile phù hợp với máy. Không cài nhiều profile
+vào cùng `.venv` vì các gói ONNX Runtime và Torch của chúng loại trừ lẫn nhau.
+
+### Intel Iris Xe / Windows
+
+```cmd
 python -m pip install -r requirements/vision-intel.txt
 ```
 
@@ -34,6 +40,20 @@ python -m pip install -r requirements/vision-intel.txt
 ```cmd
 python -m pip install -r requirements/vision-cuda.txt
 ```
+
+Profile này cài PyTorch CUDA 12.4 và ONNX Runtime GPU. Kiểm tra ngay sau khi
+cài; cả Torch và ORT phải nhìn thấy CUDA trước khi chạy ứng dụng:
+
+```cmd
+nvidia-smi
+python -c "import torch; print(torch.__version__); print(torch.version.cuda); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else None)"
+python -c "import torch; import onnxruntime as ort; print(ort.__version__); print(ort.get_available_providers())"
+```
+
+Kết quả mong đợi gồm `True`, tên GPU NVIDIA và
+`CUDAExecutionProvider`. Lệnh ORT import `torch` trước để preload CUDA/cuDNN
+DLL đi kèm PyTorch. Nếu thiếu một trong các kết quả này, không coi runtime CUDA
+đã sẵn sàng; kiểm tra lại NVIDIA driver và cài lại profile trong `.venv` sạch.
 
 ### CPU fallback
 
@@ -196,5 +216,6 @@ Network có MJPEG response. Vision status không quyết định Camera online/o
 GET /api/v1/cameras/{id}/vision/status
 ```
 
-Kiểm tra `current_error`, device diagnostics, model paths và InsightFace root.
-Chi tiết tại [docs/setup.md](docs/setup.md).
+Kiểm tra `current_error` và realtime metrics tại endpoint trên. Backend ghi
+hardware/backend đã chọn vào startup log; đối chiếu log đó với model paths và
+InsightFace root. Chi tiết tại [docs/setup.md](docs/setup.md).

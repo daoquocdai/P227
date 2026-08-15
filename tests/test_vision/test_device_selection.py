@@ -193,3 +193,137 @@ def test_auto_identity_prefers_cuda_provider_over_directml(monkeypatch):
 
     assert providers == ["CUDAExecutionProvider", "CPUExecutionProvider"]
     assert context_id == 0
+
+
+@pytest.mark.parametrize(
+    ("torch_runtime", "openvino_devices", "ort_providers", "expected"),
+    [
+        (
+            FakeTorch(available=True, count=1),
+            ["CPU", "GPU"],
+            ["CUDAExecutionProvider", "DmlExecutionProvider", "CPUExecutionProvider"],
+            ("cuda", "pytorch", "cuda:0", "pytorch", "cuda:0", "CUDAExecutionProvider"),
+        ),
+        (
+            FakeTorch(available=False),
+            ["CPU", "GPU"],
+            ["DmlExecutionProvider", "CPUExecutionProvider"],
+            ("intel", "openvino", "intel:gpu", "openvino", "GPU", "DmlExecutionProvider"),
+        ),
+        (
+            FakeTorch(available=False),
+            ["CPU"],
+            ["CPUExecutionProvider"],
+            ("cpu", "pytorch", "cpu", "pytorch", "cpu", "CPUExecutionProvider"),
+        ),
+    ],
+)
+def test_auto_hardware_capability_matrix(
+    torch_runtime,
+    openvino_devices,
+    ort_providers,
+    expected,
+):
+    plan = VisionRuntimeResolver.resolve_capability_plan(
+        torch_runtime,
+        "auto",
+        openvino_devices=openvino_devices,
+        ort_providers=ort_providers,
+        identity_provider="auto",
+    )
+
+    assert (
+        plan.profile,
+        plan.yolo_runtime,
+        plan.yolo_device,
+        plan.sda_gcn_runtime,
+        plan.sda_gcn_device,
+        plan.identity_providers[0],
+    ) == expected
+
+
+def test_nvidia_name_does_not_force_cuda_when_pytorch_cuda_is_unusable():
+    plan = VisionRuntimeResolver.resolve_capability_plan(
+        FakeTorch(available=False),
+        "auto",
+        openvino_devices=["CPU"],
+        ort_providers=["CPUExecutionProvider"],
+        identity_provider="auto",
+    )
+
+    assert plan.profile == "cpu"
+    assert plan.torch_device == "cpu"
+
+
+def test_cuda_models_remain_cuda_when_ort_cuda_provider_is_missing():
+    plan = VisionRuntimeResolver.resolve_capability_plan(
+        FakeTorch(available=True, count=1),
+        "auto",
+        openvino_devices=["CPU", "GPU"],
+        ort_providers=["DmlExecutionProvider", "CPUExecutionProvider"],
+        identity_provider="auto",
+    )
+
+    assert plan.yolo_device == "cuda:0"
+    assert plan.sda_gcn_device == "cuda:0"
+    assert plan.identity_providers == ("DmlExecutionProvider", "CPUExecutionProvider")
+
+
+def test_capability_plan_rejects_explicit_cuda_when_unavailable():
+    with pytest.raises(RuntimeError, match="CUDA is unavailable"):
+        VisionRuntimeResolver.resolve_capability_plan(
+            FakeTorch(available=False),
+            "cuda",
+            openvino_devices=["CPU", "GPU"],
+            ort_providers=["CPUExecutionProvider"],
+            identity_provider="auto",
+        )
+
+
+@pytest.mark.parametrize(
+    ("available", "expected"),
+    [
+        (
+            ["DmlExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"],
+            ("CUDAExecutionProvider", "CPUExecutionProvider"),
+        ),
+        (
+            ["DmlExecutionProvider", "CPUExecutionProvider"],
+            ("DmlExecutionProvider", "CPUExecutionProvider"),
+        ),
+        (["CPUExecutionProvider"], ("CPUExecutionProvider",)),
+    ],
+)
+def test_identity_provider_order_uses_available_ort_capabilities(available, expected):
+    providers, context_id = VisionRuntimeResolver.resolve_identity_execution(available, "auto")
+
+    assert providers == expected
+    assert context_id == (0 if expected[0] != "CPUExecutionProvider" else -1)
+
+
+def test_privacy_detector_remains_detection_only_and_cpu_only(monkeypatch):
+    calls = {}
+
+    class Detector:
+        @staticmethod
+        def detect(_frame, max_num, metric):
+            calls["detect"] = (max_num, metric)
+            return np.empty((0, 5), dtype=np.float32), None
+
+    class FaceAnalysis:
+        def __init__(self, **kwargs):
+            calls["init"] = kwargs
+            self.det_model = Detector()
+
+        @staticmethod
+        def prepare(**kwargs):
+            calls["prepare"] = kwargs
+
+    monkeypatch.setitem(sys.modules, "insightface.app", SimpleNamespace(FaceAnalysis=FaceAnalysis))
+    engine = CanonicalVisionPipeline(identity_provider="auto")
+    engine._initialized = True
+
+    assert engine.detect_faces_for_privacy(np.zeros((16, 16, 3), dtype=np.uint8)) == []
+    assert calls["init"]["providers"] == ["CPUExecutionProvider"]
+    assert calls["init"]["allowed_modules"] == ["detection"]
+    assert calls["prepare"]["ctx_id"] == -1

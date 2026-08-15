@@ -7,6 +7,7 @@ import numpy as np
 
 from src.config import get_settings
 from src.database import database_connection
+from src.vision.runtime import VisionRuntimeResolver
 
 
 class FaceEnrollmentError(ValueError):
@@ -104,18 +105,14 @@ class FaceIdentityService:
             return face_app
 
     def _execution_provider(self) -> tuple[list[str], int]:
-        if self.provider not in {"auto", "cpu", "directml"}:
-            raise FaceEnrollmentError("Identity provider must be auto, cpu, or directml")
         try:
-            import onnxruntime as ort
-        except ImportError as exc:
-            raise FaceEnrollmentError(f"ONNX Runtime is unavailable: {exc}") from exc
-        available = set(ort.get_available_providers())
-        if self.provider in {"auto", "directml"} and "DmlExecutionProvider" in available:
-            return ["DmlExecutionProvider", "CPUExecutionProvider"], 0
-        if self.provider == "directml":
-            raise FaceEnrollmentError("DirectML was requested but is unavailable")
-        return ["CPUExecutionProvider"], -1
+            providers, context_id = VisionRuntimeResolver.resolve_identity_execution(
+                VisionRuntimeResolver.available_ort_providers(),
+                self.provider,
+            )
+        except (RuntimeError, ValueError) as exc:
+            raise FaceEnrollmentError(str(exc)) from exc
+        return list(providers), context_id
 
 
 face_gallery = FaceGallery()

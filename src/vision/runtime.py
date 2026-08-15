@@ -23,6 +23,21 @@ class VisionRuntimePlan:
         return asdict(self)
 
 
+@dataclass(frozen=True, slots=True)
+class VisionCapabilityPlan:
+    """Pure stage selection derived only from runtime capabilities."""
+
+    profile: str
+    requested_device: str
+    torch_device: str
+    yolo_runtime: str
+    yolo_device: str
+    sda_gcn_runtime: str
+    sda_gcn_device: str
+    identity_providers: tuple[str, ...]
+    identity_context_id: int
+
+
 class VisionRuntimeResolver:
     """Resolve the canonical model runtime once and report every fallback."""
 
@@ -36,6 +51,98 @@ class VisionRuntimeResolver:
         if normalized.startswith("cuda:") and normalized[5:].isdigit():
             return normalized
         raise ValueError("device must be auto, cpu, cuda, or cuda:N")
+
+    @staticmethod
+    def available_openvino_devices() -> tuple[str, ...]:
+        try:
+            from openvino import Core
+
+            return tuple(Core().available_devices)
+        except (ImportError, RuntimeError):
+            return ()
+
+    @staticmethod
+    def available_ort_providers() -> tuple[str, ...]:
+        try:
+            import onnxruntime as ort
+
+            return tuple(ort.get_available_providers())
+        except ImportError:
+            return ()
+
+    @staticmethod
+    def _has_openvino_gpu(devices: tuple[str, ...] | list[str]) -> bool:
+        return any(device == "GPU" or device.startswith("GPU.") for device in devices)
+
+    @staticmethod
+    def resolve_identity_execution(
+        available_providers: tuple[str, ...] | list[str],
+        requested_provider: str,
+    ) -> tuple[tuple[str, ...], int]:
+        requested = requested_provider.strip().lower()
+        if requested not in {"auto", "cpu", "cuda", "directml"}:
+            raise ValueError("Identity provider must be auto, cpu, cuda, or directml")
+        available = set(available_providers)
+
+        if requested in {"auto", "cuda"} and "CUDAExecutionProvider" in available:
+            fallback = ("CPUExecutionProvider",) if "CPUExecutionProvider" in available else ()
+            return ("CUDAExecutionProvider", *fallback), 0
+        if requested == "cuda":
+            raise RuntimeError("CUDAExecutionProvider was requested but is unavailable")
+
+        if requested in {"auto", "directml"} and "DmlExecutionProvider" in available:
+            fallback = ("CPUExecutionProvider",) if "CPUExecutionProvider" in available else ()
+            return ("DmlExecutionProvider", *fallback), 0
+        if requested == "directml":
+            raise RuntimeError("DirectML was requested but is unavailable")
+
+        if "CPUExecutionProvider" not in available:
+            raise RuntimeError("CPUExecutionProvider is unavailable")
+        return ("CPUExecutionProvider",), -1
+
+    @classmethod
+    def resolve_capability_plan(
+        cls,
+        torch: Any,
+        requested_device: str,
+        *,
+        openvino_devices: tuple[str, ...] | list[str],
+        ort_providers: tuple[str, ...] | list[str],
+        identity_provider: str,
+    ) -> VisionCapabilityPlan:
+        """Resolve the intended backend matrix without loading native models."""
+        device, runtime_plan = cls.resolve_pytorch(torch, requested_device)
+        requested = runtime_plan.requested_device
+        torch_device = str(device)
+
+        if torch_device.startswith("cuda"):
+            profile = "cuda"
+            yolo_runtime, yolo_device = "pytorch", torch_device
+            action_runtime, action_device = "pytorch", torch_device
+        elif requested == "auto" and cls._has_openvino_gpu(openvino_devices):
+            profile = "intel"
+            yolo_runtime, yolo_device = "openvino", "intel:gpu"
+            action_runtime, action_device = "openvino", "GPU"
+        else:
+            profile = "cpu"
+            yolo_runtime, yolo_device = "pytorch", "cpu"
+            action_runtime, action_device = "pytorch", "cpu"
+
+        identity_providers, identity_context_id = cls.resolve_identity_execution(
+            ort_providers,
+            identity_provider,
+        )
+        return VisionCapabilityPlan(
+            profile=profile,
+            requested_device=requested,
+            torch_device=torch_device,
+            yolo_runtime=yolo_runtime,
+            yolo_device=yolo_device,
+            sda_gcn_runtime=action_runtime,
+            sda_gcn_device=action_device,
+            identity_providers=identity_providers,
+            identity_context_id=identity_context_id,
+        )
 
     @classmethod
     def resolve_pytorch(cls, torch: Any, requested_device: str) -> tuple[Any, VisionRuntimePlan]:

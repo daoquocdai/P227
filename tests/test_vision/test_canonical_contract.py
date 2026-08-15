@@ -56,6 +56,17 @@ def test_engine_selection(selection, expected_type):
     assert isinstance(build_vision_engine(settings), expected_type)
 
 
+@pytest.mark.parametrize("device", ["auto", "cuda", "cpu"])
+def test_all_hardware_modes_construct_the_same_canonical_pipeline(device):
+    settings = Settings(
+        vision_engine="canonical",
+        vision_device=device,
+        vision_identity_enabled=False,
+    )
+
+    assert type(build_vision_engine(settings)) is CanonicalVisionPipeline
+
+
 def test_canonical_model_contract_and_joint_input():
     values = np.arange(1 * 3 * 64 * 25 * 1, dtype=np.float32).reshape(3, 64, 25, 1)
     assert CanonicalVisionPipeline.EXPECTED_MODEL["num_class"] == 5

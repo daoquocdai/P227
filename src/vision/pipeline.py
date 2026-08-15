@@ -95,6 +95,7 @@ class RuntimeV2VisionPipeline(VisionEngine):
         self._contexts: dict[str, CameraContext] = {}
         self._dependencies: SimpleNamespace | None = None
         self._device: Any = None
+        self._capability_plan: Any = None
         self._detector_model_path = self.yolo_path
         self._detector_device: str | None = None
         self._action_model: Any = None
@@ -465,6 +466,18 @@ class RuntimeV2VisionPipeline(VisionEngine):
             )
         model_args["graph"] = "src.vision.graph.ntu_rgb_d_hierarchy.Graph"
 
+        try:
+            capability_plan = VisionRuntimeResolver.resolve_capability_plan(
+                deps.torch,
+                self.requested_device,
+                openvino_devices=VisionRuntimeResolver.available_openvino_devices(),
+                ort_providers=VisionRuntimeResolver.available_ort_providers(),
+                identity_provider=self.identity_provider,
+            )
+        except (RuntimeError, ValueError) as exc:
+            raise VisionInitializationError(str(exc)) from exc
+        self._capability_plan = capability_plan
+        self._device_diagnostics["profile"] = capability_plan.profile
         device = self._select_torch_device(deps.torch)
         detector_path, detector_device, detector_diagnostics = VisionRuntimeResolver.resolve_detector(
             deps.YOLO,
@@ -543,25 +556,19 @@ class RuntimeV2VisionPipeline(VisionEngine):
         self._known_faces = known_faces
 
     def _identity_execution(self, torch_device: Any) -> tuple[list[str], int]:
-        if self.identity_provider not in {"auto", "cpu", "directml"}:
-            raise VisionInitializationError(
-                "Identity provider must be auto, cpu, or directml"
-            )
+        del torch_device
         try:
-            import onnxruntime as ort
-        except ImportError as exc:
-            raise VisionInitializationError(f"Missing ONNX Runtime: {exc}") from exc
-        available = set(ort.get_available_providers())
-        use_cuda = getattr(torch_device, "type", str(torch_device).split(":", 1)[0]) == "cuda"
-        if self.identity_provider == "auto" and use_cuda and "CUDAExecutionProvider" in available:
-            return ["CUDAExecutionProvider", "CPUExecutionProvider"], 0
-        if self.identity_provider in {"auto", "directml"} and "DmlExecutionProvider" in available:
-            return ["DmlExecutionProvider", "CPUExecutionProvider"], 0
-        if self.identity_provider == "directml":
-            raise VisionInitializationError("DirectML was requested but is unavailable")
-        if use_cuda and "CUDAExecutionProvider" in available:
-            return ["CUDAExecutionProvider", "CPUExecutionProvider"], 0
-        return ["CPUExecutionProvider"], -1
+            if self._capability_plan is not None:
+                providers = self._capability_plan.identity_providers
+                context_id = self._capability_plan.identity_context_id
+            else:
+                providers, context_id = VisionRuntimeResolver.resolve_identity_execution(
+                    VisionRuntimeResolver.available_ort_providers(),
+                    self.identity_provider,
+                )
+        except (RuntimeError, ValueError) as exc:
+            raise VisionInitializationError(str(exc)) from exc
+        return list(providers), context_id
 
     def _select_torch_device(self, torch: Any) -> Any:
         cuda_available = bool(torch.cuda.is_available())
