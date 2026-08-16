@@ -121,7 +121,7 @@ src/vision/work_dir/fall_detection/joint/runs-best_val.pt
 Backend:
 
 ```cmd
-cd /d D:\VinAI\Project\P-227
+cd /d <duong-dan-den-P-227>
 .venv\Scripts\activate
 python -m uvicorn src.main:app --host 127.0.0.1 --port 8000
 ```
@@ -129,7 +129,7 @@ python -m uvicorn src.main:app --host 127.0.0.1 --port 8000
 Frontend ở terminal khác:
 
 ```cmd
-cd /d D:\VinAI\Project\P-227\frontend
+cd /d <duong-dan-den-P-227>\frontend
 npm.cmd run dev
 ```
 
@@ -203,6 +203,85 @@ từ database và áp dụng live, không cần restart.
 | `GET` | `/api/v1/alerts/stream` | Realtime SSE |
 | `GET` | `/api/v1/settings` | Settings persisted |
 | `PATCH` | `/api/v1/settings/general` | Threshold/general settings áp dụng live |
+
+### Ví dụ Queries (Sample Queries)
+
+**1. Kiểm tra trạng thái hệ thống (Health Check)**
+```bash
+curl -X GET http://127.0.0.1:8000/health
+```
+
+**2. Lấy danh sách camera & trạng thái observed**
+```bash
+curl -X GET http://127.0.0.1:8000/api/v1/cameras
+```
+
+**3. Khởi chạy camera, bật Vision Engine & bật tính năng Nhận diện người lạ**
+```bash
+# Bật camera
+curl -X POST "http://127.0.0.1:8000/api/v1/cameras/cam-1/start?loop_video=true"
+
+# Bật Vision Engine (Fall Detection luôn ON)
+curl -X POST http://127.0.0.1:8000/api/v1/cameras/cam-1/vision/enable
+
+# Bật Identity Workflow (Phát hiện người lạ)
+curl -X PATCH http://127.0.0.1:8000/api/v1/cameras/cam-1/vision/identity \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true}'
+```
+
+**4. Xem trạng thái chi tiết Vision (Metrics, Latency, Device runtime)**
+```bash
+curl -X GET http://127.0.0.1:8000/api/v1/cameras/cam-1/vision/status
+```
+
+**5. Gửi sự kiện Vision mẫu (Vision Event Ingestion Adapter)**
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/vision/events \
+  -H "Content-Type: application/json" \
+  -d '{
+    "schema_version": 1,
+    "event_id": "evt-sample-001",
+    "camera_id": "cam-1",
+    "camera_location": "Phòng khách",
+    "event_type": "FALL_CONFIRMED",
+    "occurred_at": "2026-08-16T10:00:00Z",
+    "confidence": 0.95,
+    "track_id": "1",
+    "identity_status": "UNKNOWN",
+    "identity_name": null,
+    "immobile_seconds": 3.5
+  }'
+```
+
+**6. Lấy danh sách cảnh báo & Đánh giá xác minh (Human-in-the-loop Review)**
+```bash
+# Lấy danh sách alerts
+curl -X GET http://127.0.0.1:8000/api/v1/alerts
+
+# Cập nhật trạng thái xác minh cảnh báo
+curl -X PATCH http://127.0.0.1:8000/api/v1/alerts/alt-1 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "status": "safe",
+    "note": "Đã kiểm tra người thân an toàn"
+  }'
+```
+
+**7. Thay đổi cấu hình ngưỡng hệ thống trực tiếp (General Settings Live Patch)**
+```bash
+curl -X PATCH http://127.0.0.1:8000/api/v1/settings/general \
+  -H "Content-Type: application/json" \
+  -d '{
+    "stranger_threshold": 85,
+    "fall_threshold": 80
+  }'
+```
+
+**8. Lắng nghe cảnh báo thời gian thực qua SSE Stream**
+```bash
+curl -N http://127.0.0.1:8000/api/v1/alerts/stream
+```
 
 Xem contract đầy đủ tại [docs/api.md](docs/api.md).
 
