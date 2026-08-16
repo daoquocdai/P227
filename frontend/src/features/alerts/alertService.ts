@@ -20,6 +20,16 @@ interface BackendAlert {
   created_at: string;
   updated_at: string;
   is_read: boolean;
+  agent_status?: "queued" | "running" | "completed" | "failed" | "skipped" | null;
+  agent_verdict?: "CONFIRMED_ALERT" | "UNCERTAIN" | "DUPLICATE" | null;
+  agent_reason_summary?: string | null;
+  incident_id?: string | null;
+  incident_status?: "OPEN" | "ACKNOWLEDGED" | "RESOLVED_SAFE" | null;
+  occurrence_count?: number;
+  first_seen_at?: string;
+  last_seen_at?: string;
+  acknowledged_at?: string | null;
+  resolved_at?: string | null;
 }
 
 const statusValues: AlertStatus[] = ["pending", "checking", "resolved", "safe", "false_alarm", "need_help"];
@@ -58,6 +68,14 @@ function toAlertEvent(alert: BackendAlert): AlertEvent {
     unread: !alert.is_read, preview: alert.description, confidence,
     immobileSeconds: alert.immobile_seconds ?? undefined, snapshotUrl: alert.snapshot_url ?? undefined,
     reviewNote: alert.review_note ?? undefined,
+    agentStatus: alert.agent_status ?? undefined,
+    agentVerdict: alert.agent_verdict ?? undefined,
+    agentReasonSummary: alert.agent_reason_summary ?? undefined,
+    incidentId: alert.incident_id ?? undefined, incidentStatus: alert.incident_status ?? undefined,
+    occurrenceCount: alert.occurrence_count ?? 1,
+    firstSeenAt: toIsoTimestamp(alert.first_seen_at ?? alert.timestamp),
+    lastSeenAt: toIsoTimestamp(alert.last_seen_at ?? alert.timestamp),
+    acknowledgedAt: alert.acknowledged_at ?? undefined, resolvedAt: alert.resolved_at ?? undefined,
   };
 }
 

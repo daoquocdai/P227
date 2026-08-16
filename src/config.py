@@ -61,6 +61,16 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     model_name: str = "gpt-4o-mini"
     llm_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    alert_agent_enabled: bool = False
+    alert_agent_model: str = "gpt-5-mini"
+    alert_agent_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
+    alert_agent_queue_capacity: int = Field(default=32, ge=1, le=1000)
+    alert_agent_max_attempts: int = Field(default=2, ge=1, le=5)
+    alert_agent_max_tool_steps: int = Field(default=4, ge=1, le=8)
+    alert_agent_shutdown_timeout_seconds: float = Field(default=5.0, gt=0, le=60)
+    unknown_incident_merge_seconds: int = Field(default=120, ge=60, le=3600)
+    fall_incident_merge_seconds: int = Field(default=90, ge=60, le=3600)
+    alert_agent_review_milestones: str = "1,2,5,10,20,50"
 
     # Database
     database_url: str = "sqlite:///./data/app.db"

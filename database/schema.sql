@@ -222,9 +222,37 @@ CREATE TABLE media_assets (
 CREATE INDEX idx_media_assets_event ON media_assets(event_id);
 CREATE INDEX idx_media_assets_retention ON media_assets(retention_until);
 
+CREATE TABLE incidents (
+    id TEXT PRIMARY KEY NOT NULL CHECK (length(id) = 36), camera_id TEXT NOT NULL REFERENCES cameras(id),
+    incident_type TEXT NOT NULL CHECK (incident_type IN ('fall', 'unknown_person')),
+    status TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'ACKNOWLEDGED', 'RESOLVED_SAFE')),
+    opened_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, occurrence_count INTEGER NOT NULL DEFAULT 1,
+    track_id TEXT, source_session TEXT, episode_key TEXT, version INTEGER NOT NULL DEFAULT 1,
+    review_requested_version INTEGER NOT NULL DEFAULT 0, summary_version INTEGER NOT NULL DEFAULT 0,
+    agent_summary TEXT, acknowledged_at TEXT, acknowledged_by TEXT REFERENCES users(id),
+    resolved_at TEXT, resolved_by TEXT REFERENCES users(id), resolution_reason TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+CREATE INDEX idx_incidents_correlation ON incidents(camera_id, incident_type, status, track_id, source_session, last_seen_at DESC);
+CREATE TABLE incident_events (
+    incident_id TEXT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+    event_id TEXT NOT NULL UNIQUE REFERENCES events(id) ON DELETE CASCADE,
+    disposition TEXT NOT NULL DEFAULT 'attached' CHECK (disposition IN ('attached', 'suppressed_after_resolution')),
+    attached_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), PRIMARY KEY (incident_id, event_id)
+);
+CREATE TABLE incident_actions (
+    id TEXT PRIMARY KEY NOT NULL CHECK (length(id) = 36), incident_id TEXT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+    action_type TEXT NOT NULL CHECK (action_type IN ('created', 'occurrence_attached', 'acknowledged', 'resolved_safe', 'agent_summary_applied', 'agent_result_stale', 'event_suppressed')),
+    event_id TEXT REFERENCES events(id), user_id TEXT REFERENCES users(id), incident_version INTEGER NOT NULL, note TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+CREATE INDEX idx_incident_actions_incident ON incident_actions(incident_id, created_at, id);
+
 CREATE TABLE alerts (
     id TEXT PRIMARY KEY NOT NULL CHECK (length(id) = 36),
     event_id TEXT NOT NULL REFERENCES events(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    incident_id TEXT UNIQUE REFERENCES incidents(id) ON UPDATE CASCADE ON DELETE RESTRICT,
     alert_type TEXT NOT NULL CHECK (alert_type IN ('unknown_person', 'fall')),
     severity TEXT NOT NULL DEFAULT 'medium'
         CHECK (severity IN ('low', 'medium', 'high', 'critical')),
@@ -278,6 +306,48 @@ CREATE INDEX idx_alert_actions_alert_created
 CREATE INDEX idx_alert_actions_verdict_created
     ON alert_actions(human_verdict, created_at)
     WHERE human_verdict IS NOT NULL;
+
+CREATE TABLE agent_runs (
+    id TEXT PRIMARY KEY NOT NULL CHECK (length(id) = 36),
+    event_id TEXT NOT NULL REFERENCES events(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    incident_id TEXT REFERENCES incidents(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    incident_version INTEGER,
+    review_generation INTEGER NOT NULL DEFAULT 1,
+    alert_id TEXT NOT NULL REFERENCES alerts(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    model TEXT NOT NULL,
+    policy_version TEXT NOT NULL DEFAULT 'gate2-v1',
+    status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'completed', 'failed', 'skipped')),
+    attempt INTEGER NOT NULL DEFAULT 1 CHECK (attempt >= 1),
+    verdict TEXT CHECK (verdict IS NULL OR verdict IN ('CONFIRMED_ALERT', 'UNCERTAIN', 'DUPLICATE')),
+    severity TEXT CHECK (severity IS NULL OR severity IN ('low', 'medium', 'high', 'critical')),
+    reason_summary TEXT CHECK (reason_summary IS NULL OR length(reason_summary) <= 500),
+    error_code TEXT CHECK (error_code IS NULL OR length(error_code) <= 100),
+    started_at TEXT,
+    completed_at TEXT,
+    latency_ms REAL CHECK (latency_ms IS NULL OR latency_ms >= 0),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE (event_id, policy_version)
+);
+
+CREATE INDEX idx_agent_runs_event ON agent_runs(event_id, created_at DESC);
+CREATE UNIQUE INDEX uq_agent_runs_incident_generation ON agent_runs(incident_id, review_generation) WHERE incident_id IS NOT NULL;
+
+CREATE TABLE agent_actions (
+    id TEXT PRIMARY KEY NOT NULL CHECK (length(id) = 36),
+    run_id TEXT NOT NULL REFERENCES agent_runs(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    event_id TEXT NOT NULL REFERENCES events(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    tool_name TEXT NOT NULL CHECK (tool_name IN ('get_incident_context', 'get_event_context', 'enrich_incident_alert')),
+    action_type TEXT NOT NULL CHECK (action_type IN ('read', 'enrichment')),
+    status TEXT NOT NULL CHECK (status IN ('succeeded', 'failed', 'reused')),
+    safe_arguments_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(safe_arguments_json)),
+    safe_result_summary TEXT CHECK (safe_result_summary IS NULL OR length(safe_result_summary) <= 1000),
+    duration_ms REAL CHECK (duration_ms IS NULL OR duration_ms >= 0),
+    idempotency_key TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE (idempotency_key)
+);
+
+CREATE INDEX idx_agent_actions_run ON agent_actions(run_id, created_at, id);
 
 CREATE TABLE evaluation_runs (
     id TEXT PRIMARY KEY NOT NULL CHECK (length(id) = 36),

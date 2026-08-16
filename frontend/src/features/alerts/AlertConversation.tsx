@@ -1,4 +1,4 @@
-import { Camera, Check, ThumbsDown } from "lucide-react";
+import { Camera, Check, Eye, ThumbsDown } from "lucide-react";
 import { useState } from "react";
 import type { AlertEvent } from "./alert.types";
 import { AlertConversationHeader } from "./AlertConversationHeader";
@@ -22,8 +22,8 @@ export function AlertConversation({ alert, onBack, onStatus }: { alert: AlertEve
     <AlertSummaryBanner alert={alert} />
     <div className="alert-product-detail">
       <SnapshotCard alert={alert} onExpand={() => alert.snapshotUrl && setSnapshotModal(true)} />
-      <section className="alert-product-copy"><h2>{alert.title}</h2><p>{alert.preview}</p><dl><div><dt>Người liên quan</dt><dd>{alert.subject}</dd></div><div><dt>Vị trí</dt><dd>{alert.location}</dd></div><div><dt>{alert.type === "stranger" ? "Mức độ không khớp" : "Độ tin cậy"}</dt><dd>{alert.confidence ?? 0}%</dd></div></dl></section>
-      <div className="alert-product-actions"><button onClick={openCamera}><Camera /> Mở camera</button><button disabled={terminal} onClick={() => setSafeModal(true)}><Check /> Xác nhận an toàn</button><button disabled={terminal} onClick={() => setFalseModal(true)}><ThumbsDown /> Báo sai</button></div>
+      <section className="alert-product-copy"><h2>{alert.title}</h2><p>{alert.preview}</p><p>Đã ghi nhận: <strong>{alert.occurrenceCount ?? 1} lần</strong><br/>Lần đầu: {new Date(alert.firstSeenAt ?? alert.occurredAt).toLocaleString("vi-VN")}<br/>Lần gần nhất: {new Date(alert.lastSeenAt ?? alert.occurredAt).toLocaleString("vi-VN")}</p>{alert.agentReasonSummary && <p><strong>Guardian Agent:</strong> {alert.agentReasonSummary}</p>}<dl><div><dt>Người liên quan</dt><dd>{alert.subject}</dd></div><div><dt>Vị trí</dt><dd>{alert.location}</dd></div><div><dt>{alert.type === "stranger" ? "Mức độ không khớp" : "Độ tin cậy"}</dt><dd>{alert.confidence ?? 0}%</dd></div></dl></section>
+      <div className="alert-product-actions"><button onClick={openCamera}><Camera /> Mở camera</button><button disabled={terminal || alert.status === "checking"} onClick={() => onStatus("checking", "Người dùng đã xem cảnh báo")}><Eye /> Đã xem</button><button disabled={terminal} onClick={() => setSafeModal(true)}><Check /> Xác nhận an toàn</button><button disabled={terminal} onClick={() => setFalseModal(true)}><ThumbsDown /> Báo sai</button></div>
     </div>
     {safeModal && <ConfirmSafeModal subject={alert.subject} onCancel={() => setSafeModal(false)} onConfirm={() => { setSafeModal(false); onStatus("safe", "Người dùng xác nhận an toàn"); }} />}
     {falseModal && <FalseAlarmForm onCancel={() => setFalseModal(false)} onSubmit={(reason, note) => { setFalseModal(false); onStatus("false_alarm", [reason, note].filter(Boolean).join(": ")); }} />}

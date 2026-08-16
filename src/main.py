@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from src.agents.alert_orchestrator import AlertAgentOrchestrator
 from src.api.alerts import router as alerts_router
 from src.api.auth import router as auth_router
 from src.api.camera_stream import router as camera_stream_router
@@ -20,7 +21,7 @@ from src.api.vision import router as vision_router
 from src.config import get_settings
 from src.database import initialize_database
 from src.runtime import LocalRuntime
-from src.services.event_service import vision_event_sink
+from src.services.event_service import event_service, vision_event_sink
 from src.services.face_identity_service import face_gallery
 from src.services.operational_metrics_collector import OperationalMetricsCollector
 from src.services.vision_event_dispatcher import ThreadsafeVisionEventDispatcher
@@ -31,6 +32,10 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     print(f"Starting {settings.app_name} in {settings.app_env} mode")
     initialize_database()
+    alert_agent = AlertAgentOrchestrator(settings)
+    alert_agent.start()
+    event_service.set_agent_enqueue(alert_agent.enqueue)
+    app.state.alert_agent = alert_agent
     face_gallery.reload()
     vision_event_sink.start()
     consumer = asyncio.create_task(vision_event_sink.consume(), name="vision-event-consumer")
@@ -57,6 +62,8 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        event_service.set_agent_enqueue(None)
+        await alert_agent.stop()
         metrics_collector.stop()
         runtime.stop()
         dispatcher.stop()

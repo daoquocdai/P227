@@ -3,7 +3,7 @@ import logging
 import threading
 import time
 from datetime import UTC, datetime
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from src.models.schemas import VisionEventRequest
 from src.models.vision import VisionEvent, VisionResult
@@ -24,6 +24,9 @@ EVENT_TYPE_MAP = {
 
 class VisionEventAdapter:
     """Map semantic Vision events to the existing backend ingestion contract."""
+
+    def __init__(self) -> None:
+        self._runtime_session = str(uuid4())
 
     def adapt(self, result: VisionResult) -> list[VisionEventRequest]:
         return [self._event(result, event, index) for index, event in enumerate(result.events)]
@@ -51,6 +54,8 @@ class VisionEventAdapter:
                 "source_frame_id": result.frame_id,
                 "internal_event_type": event.type,
                 "vision_processing_ms": result.processing_ms,
+                "source_epoch": result.metadata.get("source_epoch"),
+                "source_session": f"{self._runtime_session}:{result.metadata.get('source_epoch', 0)}",
             }
         )
         return VisionEventRequest(

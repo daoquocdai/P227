@@ -9,6 +9,7 @@ python-dotenv==1.2.2
 psutil==7.2.2
 
 # Agent and LLM integration
+openai==2.53.0
 langchain==1.3.14
 langchain-openai==1.4.1
 langgraph==1.2.10

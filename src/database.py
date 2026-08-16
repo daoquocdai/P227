@@ -146,11 +146,109 @@ def _apply_runtime_migrations(connection: sqlite3.Connection) -> None:
             value_json TEXT NOT NULL CHECK (json_valid(value_json)),
             updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
         );
+        CREATE TABLE IF NOT EXISTS agent_runs (
+            id TEXT PRIMARY KEY NOT NULL CHECK (length(id) = 36),
+            event_id TEXT NOT NULL REFERENCES events(id) ON UPDATE CASCADE ON DELETE CASCADE,
+            alert_id TEXT NOT NULL REFERENCES alerts(id) ON UPDATE CASCADE ON DELETE CASCADE,
+            model TEXT NOT NULL,
+            policy_version TEXT NOT NULL DEFAULT 'gate2-v1',
+            status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'completed', 'failed', 'skipped')),
+            attempt INTEGER NOT NULL DEFAULT 1 CHECK (attempt >= 1),
+            verdict TEXT CHECK (verdict IS NULL OR verdict IN ('CONFIRMED_ALERT', 'UNCERTAIN', 'DUPLICATE')),
+            severity TEXT CHECK (severity IS NULL OR severity IN ('low', 'medium', 'high', 'critical')),
+            reason_summary TEXT CHECK (reason_summary IS NULL OR length(reason_summary) <= 500),
+            error_code TEXT CHECK (error_code IS NULL OR length(error_code) <= 100),
+            started_at TEXT, completed_at TEXT,
+            latency_ms REAL CHECK (latency_ms IS NULL OR latency_ms >= 0),
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            UNIQUE (event_id, policy_version)
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_runs_event ON agent_runs(event_id, created_at DESC);
+        CREATE TABLE IF NOT EXISTS agent_actions (
+            id TEXT PRIMARY KEY NOT NULL CHECK (length(id) = 36),
+            run_id TEXT NOT NULL REFERENCES agent_runs(id) ON UPDATE CASCADE ON DELETE CASCADE,
+            event_id TEXT NOT NULL REFERENCES events(id) ON UPDATE CASCADE ON DELETE CASCADE,
+            tool_name TEXT NOT NULL CHECK (tool_name IN ('get_incident_context', 'get_event_context', 'enrich_incident_alert')),
+            action_type TEXT NOT NULL CHECK (action_type IN ('read', 'enrichment')),
+            status TEXT NOT NULL CHECK (status IN ('succeeded', 'failed', 'reused')),
+            safe_arguments_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(safe_arguments_json)),
+            safe_result_summary TEXT CHECK (safe_result_summary IS NULL OR length(safe_result_summary) <= 1000),
+            duration_ms REAL CHECK (duration_ms IS NULL OR duration_ms >= 0),
+            idempotency_key TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_actions_run ON agent_actions(run_id, created_at, id);
+        CREATE TABLE IF NOT EXISTS incidents (
+            id TEXT PRIMARY KEY NOT NULL, camera_id TEXT NOT NULL REFERENCES cameras(id),
+            incident_type TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'OPEN', opened_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL, occurrence_count INTEGER NOT NULL DEFAULT 1, track_id TEXT,
+            source_session TEXT, episode_key TEXT, version INTEGER NOT NULL DEFAULT 1,
+            review_requested_version INTEGER NOT NULL DEFAULT 0, summary_version INTEGER NOT NULL DEFAULT 0,
+            agent_summary TEXT, acknowledged_at TEXT, acknowledged_by TEXT REFERENCES users(id),
+            resolved_at TEXT, resolved_by TEXT REFERENCES users(id), resolution_reason TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_incidents_correlation ON incidents(camera_id, incident_type, status, track_id, source_session, last_seen_at DESC);
+        CREATE TABLE IF NOT EXISTS incident_events (
+            incident_id TEXT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+            event_id TEXT NOT NULL UNIQUE REFERENCES events(id) ON DELETE CASCADE,
+            disposition TEXT NOT NULL DEFAULT 'attached',
+            attached_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            PRIMARY KEY (incident_id, event_id)
+        );
+        CREATE TABLE IF NOT EXISTS incident_actions (
+            id TEXT PRIMARY KEY NOT NULL, incident_id TEXT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+            action_type TEXT NOT NULL, event_id TEXT REFERENCES events(id), user_id TEXT REFERENCES users(id),
+            incident_version INTEGER NOT NULL, note TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_incident_actions_incident ON incident_actions(incident_id, created_at, id);
         """
     )
     alert_columns = {row[1] for row in connection.execute("PRAGMA table_info(alerts)").fetchall()}
     if "is_read" not in alert_columns:
         connection.execute("ALTER TABLE alerts ADD COLUMN is_read INTEGER NOT NULL DEFAULT 0 CHECK (is_read IN (0, 1))")
+    if "incident_id" not in alert_columns:
+        connection.execute("ALTER TABLE alerts ADD COLUMN incident_id TEXT REFERENCES incidents(id)")
+        connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_alerts_incident ON alerts(incident_id) WHERE incident_id IS NOT NULL"
+        )
+    run_columns = {row[1] for row in connection.execute("PRAGMA table_info(agent_runs)").fetchall()}
+    if "incident_id" not in run_columns:
+        connection.execute("ALTER TABLE agent_runs ADD COLUMN incident_id TEXT REFERENCES incidents(id)")
+    if "incident_version" not in run_columns:
+        connection.execute("ALTER TABLE agent_runs ADD COLUMN incident_version INTEGER")
+    if "review_generation" not in run_columns:
+        connection.execute("ALTER TABLE agent_runs ADD COLUMN review_generation INTEGER NOT NULL DEFAULT 1")
+    connection.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_runs_incident_generation ON agent_runs(incident_id, review_generation) WHERE incident_id IS NOT NULL"
+    )
+    action_sql = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_actions'"
+    ).fetchone()[0]
+    if "get_incident_context" not in action_sql:
+        connection.executescript(
+            """
+            ALTER TABLE agent_actions RENAME TO agent_actions_legacy;
+            CREATE TABLE agent_actions (
+                id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+                event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+                tool_name TEXT NOT NULL CHECK (tool_name IN ('get_incident_context','get_event_context','enrich_incident_alert')),
+                action_type TEXT NOT NULL CHECK (action_type IN ('read','enrichment')),
+                status TEXT NOT NULL CHECK (status IN ('succeeded','failed','reused')),
+                safe_arguments_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(safe_arguments_json)),
+                safe_result_summary TEXT, duration_ms REAL, idempotency_key TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+            );
+            INSERT INTO agent_actions SELECT id,run_id,event_id,
+                CASE tool_name WHEN 'get_recent_alerts' THEN 'get_incident_context' WHEN 'enrich_alert' THEN 'enrich_incident_alert' ELSE tool_name END,
+                action_type,status,safe_arguments_json,safe_result_summary,duration_ms,idempotency_key,created_at
+                FROM agent_actions_legacy;
+            DROP TABLE agent_actions_legacy;
+            CREATE INDEX idx_agent_actions_run ON agent_actions(run_id,created_at,id);
+            """
+        )
     face_columns = {row[1] for row in connection.execute("PRAGMA table_info(face_profiles)").fetchall()}
     if "angle_label" not in face_columns:
         connection.execute("ALTER TABLE face_profiles ADD COLUMN angle_label TEXT")
@@ -163,9 +261,7 @@ def _apply_runtime_migrations(connection: sqlite3.Connection) -> None:
     if "password_hash" not in user_columns:
         connection.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
     if "force_password_change" not in user_columns:
-        connection.execute(
-            "ALTER TABLE users ADD COLUMN force_password_change INTEGER NOT NULL DEFAULT 0"
-        )
+        connection.execute("ALTER TABLE users ADD COLUMN force_password_change INTEGER NOT NULL DEFAULT 0")
     connection.execute(
         """INSERT OR IGNORE INTO system_settings (setting_key, value_json) VALUES
            ('general', '{"retention_days":30,"stranger_threshold":78,"fall_threshold":72,"sensitive_enabled":true,"sensitive_from":"22:00","sensitive_to":"06:00"}'),

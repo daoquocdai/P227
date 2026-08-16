@@ -23,6 +23,16 @@ export interface AlertEvent {
   immobileSeconds?: number;
   snapshotUrl?: string;
   reviewNote?: string;
+  agentStatus?: "queued" | "running" | "completed" | "failed" | "skipped";
+  agentVerdict?: "CONFIRMED_ALERT" | "UNCERTAIN" | "DUPLICATE";
+  agentReasonSummary?: string;
+  incidentId?: string;
+  incidentStatus?: "OPEN" | "ACKNOWLEDGED" | "RESOLVED_SAFE";
+  occurrenceCount?: number;
+  firstSeenAt?: string;
+  lastSeenAt?: string;
+  acknowledgedAt?: string;
+  resolvedAt?: string;
 }
 
 export interface ChatMessage {
