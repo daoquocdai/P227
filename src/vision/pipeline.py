@@ -27,6 +27,10 @@ WINDOW_RETAIN_SECONDS = 1.0
 DECISION_DELAY_SECONDS = 3.0
 MOVEMENT_CHECK_SECONDS = 2.0
 MOVEMENT_THRESHOLD = 0.1
+FALL_RECOVERY_CONFIRM_SECONDS = 3.0
+FALL_MISSING_PERSON_GRACE_SECONDS = 3.0
+FALL_PENDING_NON_FALL_TOLERANCE = 1
+FALL_LYING_TORSO_HORIZONTAL_RATIO = 0.55
 FRAME_SIZE = 1024
 FALL_LABEL = "Nga!"
 FACE_RECOGNITION_MAX_ATTEMPTS = 5
@@ -163,7 +167,9 @@ class RuntimeV2VisionPipeline(VisionEngine):
             else int(state.get("vision_frame_count", 0)) + 1
         )
         state["vision_frame_count"] = frame_count
-        source_gap = max(0, packet.frame_id - session.last_processed_frame_id - 1) if session.last_processed_frame_id >= 0 else 0
+        source_gap = (
+            max(0, packet.frame_id - session.last_processed_frame_id - 1) if session.last_processed_frame_id >= 0 else 0
+        )
         events: list[VisionEvent] = []
 
         if self._initialization_error is not None:
@@ -242,13 +248,9 @@ class RuntimeV2VisionPipeline(VisionEngine):
                 crop = prepared[y1:y2, x1:x2]
                 confidence = self._box_value(boxes_obj, "conf", best_idx, 0.0)
                 track_id = self._box_int_value(boxes_obj, "id", best_idx)
-                self._record_stage_metric(
-                    state, "detector_postprocess", detector_postprocess_started
-                )
+                self._record_stage_metric(state, "detector_postprocess", detector_postprocess_started)
                 face_started = time.perf_counter()
-                detection_metadata = self._identity_metadata(
-                    crop, track_id, state, source_timestamp, packet.frame_id
-                )
+                detection_metadata = self._identity_metadata(crop, track_id, state, source_timestamp, packet.frame_id)
                 self._record_stage_metric(state, "face", face_started)
                 detections.append(
                     VisionDetection(
@@ -281,7 +283,9 @@ class RuntimeV2VisionPipeline(VisionEngine):
                         "right_shoulder": keypoints[8, :2].tolist(),
                     }
 
-                self._observe_movement(state, keypoints, source_timestamp)
+                state.pop("vision_fall_missing_since", None)
+                if pose_found:
+                    self._observe_movement(state, keypoints, source_timestamp)
         else:
             self._record_stage_metric(state, "detector_postprocess", detector_postprocess_started)
 
@@ -290,7 +294,7 @@ class RuntimeV2VisionPipeline(VisionEngine):
         timestamps = self._buffer(state, "vision_sampled_timestamps", WINDOW_SIZE)
         source_timestamps = self._buffer(state, "vision_sampled_source_timestamps", WINDOW_SIZE)
         if not person_found:
-            self._reset_for_no_person(state)
+            self._reset_for_no_person(state, source_timestamp)
 
         kpts_buffer.append(keypoints)
         frame_ids.append(packet.frame_id)
@@ -348,17 +352,46 @@ class RuntimeV2VisionPipeline(VisionEngine):
             state["vision_last_probabilities"] = probabilities
 
             decisions = state.setdefault("vision_pending_decisions", [])
+            is_fall = raw_class == self.FALL_CLASS_ID
+            if is_fall:
+                state["vision_fall_candidate_count"] = int(
+                    state.get("vision_fall_candidate_count", 0)
+                ) + 1
+                state["vision_pending_non_fall_streak"] = 0
+            elif state.get("vision_current_action") != FALL_LABEL:
+                # A pending fall must represent continuous model evidence.  Movement
+                # is only a cancellation signal; lack of movement must never allow a
+                # stale, transient Fall classification to mature into an alert.  One
+                # non-Fall window is tolerated because the temporal model can jitter
+                # around a genuine transition.
+                non_fall_streak = int(state.get("vision_pending_non_fall_streak", 0)) + 1
+                state["vision_pending_non_fall_streak"] = non_fall_streak
+                if (
+                    non_fall_streak > FALL_PENDING_NON_FALL_TOLERANCE
+                    and not self._is_lying_pose(raw_array[-1])
+                ):
+                    cancelled_pending_fall = False
+                    for decision in decisions:
+                        if decision["is_fall"]:
+                            decision["cancelled"] = True
+                            cancelled_pending_fall = True
+                    if cancelled_pending_fall:
+                        state["vision_current_action"] = "Khong nga"
+                        state["vision_fall_state"] = "normal"
+                        state["vision_incident_id"] = None
             decisions.append(
                 {
                     "created_at": source_timestamp,
-                    "is_fall": raw_class == self.FALL_CLASS_ID,
+                    "is_fall": is_fall,
                     "confidence": probabilities[self.FALL_CLASS_ID],
                     "cancelled": False,
                     "last_raw_kpts": raw_array[-1] if raw_class == self.FALL_CLASS_ID else None,
                     "incident_id": None,
                 }
             )
-            state["vision_pending_fall"] = any(item["is_fall"] for item in decisions)
+            state["vision_pending_fall"] = any(
+                item["is_fall"] and not item["cancelled"] for item in decisions
+            )
             if state["vision_pending_fall"] and state.get("vision_current_action") != FALL_LABEL:
                 state["vision_fall_state"] = "pending"
 
@@ -411,9 +444,7 @@ class RuntimeV2VisionPipeline(VisionEngine):
                 from insightface.app import FaceAnalysis
 
                 providers, face_ctx_id = self._identity_execution(self._device)
-                face_app = FaceAnalysis(
-                    name="buffalo_l", root=str(self.insightface_root), providers=providers
-                )
+                face_app = FaceAnalysis(name="buffalo_l", root=str(self.insightface_root), providers=providers)
                 face_app.prepare(ctx_id=face_ctx_id, det_size=(640, 640))
                 self._face_app = face_app
             self.identity_enabled = enabled
@@ -479,9 +510,7 @@ class RuntimeV2VisionPipeline(VisionEngine):
         if actual != expected:
             raise VisionInitializationError(f"Expected SDA-GCN config {expected}, got {actual}")
         if config.get("test_feeder_args", {}).get("bone") is not self.EXPECTED_BONE_MODALITY:
-            raise VisionInitializationError(
-                f"SDA-GCN config bone modality must be {self.EXPECTED_BONE_MODALITY}"
-            )
+            raise VisionInitializationError(f"SDA-GCN config bone modality must be {self.EXPECTED_BONE_MODALITY}")
         model_args["graph"] = "src.vision.graph.ntu_rgb_d_hierarchy.Graph"
 
         try:
@@ -766,9 +795,7 @@ class RuntimeV2VisionPipeline(VisionEngine):
             # track instead of permanently poisoning its five-attempt budget.
             entry["attempts"] += 1
         main_face = max(faces, key=lambda face: (face.bbox[2] - face.bbox[0]) * (face.bbox[3] - face.bbox[1]))
-        best_name, best_person_id, best_score = self._closest_known_identity(
-            main_face.embedding
-        )
+        best_name, best_person_id, best_score = self._closest_known_identity(main_face.embedding)
         known = best_score > 0.45
         metadata = {
             "identity_status": "KNOWN" if known else "UNKNOWN",
@@ -817,9 +844,7 @@ class RuntimeV2VisionPipeline(VisionEngine):
             "identity_face_detected": False,
         }
 
-    def _closest_known_identity(
-        self, embedding: np.ndarray
-    ) -> tuple[str | None, str | None, float]:
+    def _closest_known_identity(self, embedding: np.ndarray) -> tuple[str | None, str | None, float]:
         known_faces = (
             self._face_gallery.snapshot()
             if self._face_gallery is not None
@@ -917,14 +942,16 @@ class RuntimeV2VisionPipeline(VisionEngine):
         current["sample_times"].append(time.monotonic())
 
     @staticmethod
-    def _reset_for_no_person(state: dict[str, Any]) -> None:
+    def _reset_for_no_person(state: dict[str, Any], source_timestamp: float) -> None:
         for decision in state.setdefault("vision_pending_decisions", []):
             decision["cancelled"] = True
         state["vision_pending_fall"] = False
         if state.get("vision_current_action") == FALL_LABEL:
-            state["vision_incident_id"] = None
-            state["vision_current_action"] = "Khong nga"
-            state["vision_fall_state"] = "normal"
+            missing_since = state.setdefault("vision_fall_missing_since", source_timestamp)
+            if source_timestamp - float(missing_since) < FALL_MISSING_PERSON_GRACE_SECONDS:
+                state["vision_fall_state"] = "confirmed"
+                return
+            RuntimeV2VisionPipeline._clear_active_fall(state)
         else:
             state["vision_fall_state"] = "normal"
 
@@ -946,28 +973,38 @@ class RuntimeV2VisionPipeline(VisionEngine):
                 "vision_identity_enabled",
                 "vision_identity_generation",
             }
-            for key in [
-                name for name in state if name.startswith("vision_") and name not in retained
-            ]:
+            for key in [name for name in state if name.startswith("vision_") and name not in retained]:
                 state.pop(key, None)
         state["vision_source_epoch"] = packet.source_epoch
 
     @staticmethod
     def _observe_movement(state: dict[str, Any], keypoints: np.ndarray, source_timestamp: float) -> None:
+        state["vision_latest_raw_kpts"] = keypoints
         if state.get("vision_current_action") == FALL_LABEL:
             previous = state.get("vision_last_raw_kpts")
             if previous is not None:
                 movement = float(np.mean(np.linalg.norm(keypoints - previous, axis=1)))
                 state["vision_movement"] = movement
                 if movement > MOVEMENT_THRESHOLD:
-                    state["vision_current_action"] = "Khong nga"
-                    state["vision_fall_state"] = "normal"
-                    state["vision_incident_id"] = None
-                    for decision in state.setdefault("vision_pending_decisions", []):
-                        decision["cancelled"] = True
+                    recovery_started = state.setdefault("vision_recovery_started_at", source_timestamp)
+                    state["vision_recovery_last_movement_at"] = source_timestamp
+                    state["vision_fall_state"] = "recovery_pending"
+                    non_fall_at = state.get("vision_recovery_non_fall_at")
+                    if (
+                        non_fall_at is not None
+                        and float(non_fall_at) >= float(recovery_started)
+                        and source_timestamp - float(recovery_started) >= FALL_RECOVERY_CONFIRM_SECONDS
+                    ):
+                        RuntimeV2VisionPipeline._clear_active_fall(state)
+                else:
+                    state.pop("vision_recovery_started_at", None)
+                    state.pop("vision_recovery_last_movement_at", None)
+                    state.pop("vision_recovery_non_fall_at", None)
+                    state["vision_fall_state"] = "confirmed"
             state["vision_last_raw_kpts"] = keypoints
 
         decisions = state.setdefault("vision_pending_decisions", [])
+        movement_cancelled_fall = False
         for decision in decisions:
             if decision["cancelled"]:
                 continue
@@ -978,8 +1015,12 @@ class RuntimeV2VisionPipeline(VisionEngine):
             elif elapsed < DECISION_DELAY_SECONDS and decision["is_fall"] and previous is not None:
                 movement = float(np.mean(np.linalg.norm(keypoints - previous, axis=1)))
                 if movement > MOVEMENT_THRESHOLD:
-                    decision["cancelled"] = True
+                    movement_cancelled_fall = True
                 decision["last_raw_kpts"] = keypoints
+        if movement_cancelled_fall:
+            for decision in decisions:
+                if decision["is_fall"]:
+                    decision["cancelled"] = True
 
     def _advance_decisions(
         self,
@@ -997,6 +1038,8 @@ class RuntimeV2VisionPipeline(VisionEngine):
                 active.append(decision)
                 continue
             if decision["is_fall"]:
+                if not self._is_lying_pose(state.get("vision_latest_raw_kpts")):
+                    continue
                 if state.get("vision_current_action") != FALL_LABEL:
                     incident_id = str(self._incident_factory())
                     state["vision_current_action"] = FALL_LABEL
@@ -1014,12 +1057,18 @@ class RuntimeV2VisionPipeline(VisionEngine):
                             },
                         )
                     )
+                    state["vision_fall_confirmed_count"] = int(
+                        state.get("vision_fall_confirmed_count", 0)
+                    ) + 1
                     state["vision_event_frame_id"] = frame_id
                     state["vision_event_source_time"] = source_timestamp
             else:
-                state["vision_current_action"] = "Khong nga"
-                state["vision_fall_state"] = "normal"
-                state["vision_incident_id"] = None
+                if state.get("vision_current_action") == FALL_LABEL:
+                    state["vision_recovery_non_fall_at"] = source_timestamp
+                else:
+                    state["vision_current_action"] = "Khong nga"
+                    state["vision_fall_state"] = "normal"
+                    state["vision_incident_id"] = None
         state["vision_pending_decisions"] = active
         state["vision_pending_fall"] = any(item["is_fall"] for item in active)
         if state["vision_pending_fall"] and state.get("vision_current_action") != FALL_LABEL:
@@ -1030,6 +1079,31 @@ class RuntimeV2VisionPipeline(VisionEngine):
         elif state.get("vision_current_action") == "Khong nga":
             state["vision_fall_state"] = "normal"
         return events
+
+    @staticmethod
+    def _is_lying_pose(keypoints: np.ndarray | None) -> bool:
+        if keypoints is None or keypoints.shape[0] <= 20:
+            return False
+        hip = keypoints[0, :2]
+        shoulders = keypoints[20, :2]
+        torso = shoulders - hip
+        length = float(np.linalg.norm(torso))
+        if length < 0.03:
+            return False
+        return abs(float(torso[0])) / length >= FALL_LYING_TORSO_HORIZONTAL_RATIO
+
+    @staticmethod
+    def _clear_active_fall(state: dict[str, Any]) -> None:
+        state["vision_incident_id"] = None
+        state["vision_current_action"] = "Khong nga"
+        state["vision_fall_state"] = "normal"
+        state.pop("vision_fall_missing_since", None)
+        state.pop("vision_recovery_started_at", None)
+        state.pop("vision_recovery_last_movement_at", None)
+        state.pop("vision_recovery_non_fall_at", None)
+        state.pop("vision_pending_non_fall_streak", None)
+        for decision in state.setdefault("vision_pending_decisions", []):
+            decision["cancelled"] = True
 
     def _result(
         self,
@@ -1061,7 +1135,12 @@ class RuntimeV2VisionPipeline(VisionEngine):
             "current_action": state.get("vision_current_action", "Waiting for frames..."),
             "geometry": state.get("vision_geometry", {}),
             "pending_fall": bool(state.get("vision_pending_fall", False)),
+            "fall_candidate_count": int(state.get("vision_fall_candidate_count", 0)),
+            "fall_confirmed_count": int(state.get("vision_fall_confirmed_count", 0)),
             "incident_id": state.get("vision_incident_id"),
+            "movement": state.get("vision_movement"),
+            "recovery_started_at": state.get("vision_recovery_started_at"),
+            "fall_missing_since": state.get("vision_fall_missing_since"),
             "pose_found": pose_found,
             "privacy_pose_frame_id": state.get("vision_privacy_pose_frame_id"),
             "privacy_head_shoulders": state.get("vision_privacy_head_shoulders"),
@@ -1083,9 +1162,7 @@ class RuntimeV2VisionPipeline(VisionEngine):
             "window_captured_at": window_timestamps,
             "window_source_timestamps": window_source_timestamps,
             "window_source_time_span": (
-                None
-                if not window_source_timestamps
-                else window_source_timestamps[-1] - window_source_timestamps[0]
+                None if not window_source_timestamps else window_source_timestamps[-1] - window_source_timestamps[0]
             ),
             "pose_count_before_resample": None if window_ids is None else len(window_ids),
             "performance": {
@@ -1113,5 +1190,3 @@ class RuntimeV2VisionPipeline(VisionEngine):
 # Compatibility name for external test/tool imports. Production constructs
 # RuntimeV2VisionPipeline explicitly.
 CanonicalVisionPipeline = RuntimeV2VisionPipeline
-
-

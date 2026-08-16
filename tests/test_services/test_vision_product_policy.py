@@ -41,6 +41,12 @@ def result(*, confidence=0.9, similarity=0.1, state="LOCKED_UNKNOWN"):
     )
 
 
+def unknown_result(**kwargs):
+    value = result(**kwargs)
+    value.events.clear()
+    return value
+
+
 def set_thresholds(stranger, fall):
     with database_connection() as connection:
         row = connection.execute(
@@ -56,10 +62,14 @@ def set_thresholds(stranger, fall):
 
 def test_product_thresholds_gate_below_and_accept_equal_confidence():
     set_thresholds(stranger=80, fall=80)
-    below = VisionProductPolicy().apply(result(confidence=0.79, similarity=0.21))
+    below = VisionProductPolicy(notification_cooldown_seconds=0).apply(
+        result(confidence=0.79, similarity=0.21)
+    )
     assert below.events == []
 
-    equal = VisionProductPolicy().apply(result(confidence=0.80, similarity=0.20))
+    equal = VisionProductPolicy(notification_cooldown_seconds=0).apply(
+        result(confidence=0.80, similarity=0.20)
+    )
     assert {event.type for event in equal.events} == {"fall_confirmed", "unknown_person"}
 
 
@@ -90,45 +100,50 @@ def test_unknown_requires_final_retry_state_and_has_cooldown():
     set_thresholds(stranger=78, fall=72)
     now = [100.0]
     policy = VisionProductPolicy(unknown_cooldown_seconds=60, clock=lambda: now[0])
-    assert not any(event.type == "unknown_person" for event in policy.apply(result(state="PENDING")).events)
-    assert sum(event.type == "unknown_person" for event in policy.apply(result()).events) == 1
-    assert not any(event.type == "unknown_person" for event in policy.apply(result()).events)
+    assert not any(
+        event.type == "unknown_person" for event in policy.apply(unknown_result(state="PENDING")).events
+    )
+    assert sum(event.type == "unknown_person" for event in policy.apply(unknown_result()).events) == 1
+    assert not any(event.type == "unknown_person" for event in policy.apply(unknown_result()).events)
     now[0] += 59.9
-    assert not any(event.type == "unknown_person" for event in policy.apply(result()).events)
+    assert not any(event.type == "unknown_person" for event in policy.apply(unknown_result()).events)
     now[0] += 0.1
-    assert sum(event.type == "unknown_person" for event in policy.apply(result()).events) == 1
+    assert sum(event.type == "unknown_person" for event in policy.apply(unknown_result()).events) == 1
 
-    different_track = result()
+    different_track = unknown_result()
     different_track.detections[0].track_id = 8
+    assert not any(event.type == "unknown_person" for event in policy.apply(different_track).events)
+
+    now[0] += 60
     assert sum(event.type == "unknown_person" for event in policy.apply(different_track).events) == 1
 
 
 def test_feature_boundary_clears_unknown_cooldown_for_a_fresh_workflow():
     set_thresholds(stranger=78, fall=72)
     policy = VisionProductPolicy(unknown_cooldown_seconds=30, clock=lambda: 100.0)
-    first = result()
+    first = unknown_result()
     policy.apply(first)
-    suppressed = result()
+    suppressed = unknown_result()
     policy.apply(suppressed)
     assert sum(event.type == "unknown_person" for event in first.events) == 1
     assert not any(event.type == "unknown_person" for event in suppressed.events)
 
     policy.clear_camera("policy-camera")
-    fresh = result()
+    fresh = unknown_result()
     policy.apply(fresh)
-    assert sum(event.type == "unknown_person" for event in fresh.events) == 1
+    assert not any(event.type == "unknown_person" for event in fresh.events)
 
 
 def test_default_cooldown_uses_observation_time_not_processing_wall_clock():
     set_thresholds(stranger=78, fall=72)
     policy = VisionProductPolicy()
-    first = result()
+    first = unknown_result()
     first.metadata.update(observation_time=10.0, source_epoch=2)
     policy.apply(first)
-    within = result()
+    within = unknown_result()
     within.metadata.update(observation_time=69.9, source_epoch=2)
     policy.apply(within)
-    after = result()
+    after = unknown_result()
     after.metadata.update(observation_time=70.0, source_epoch=2)
     policy.apply(after)
 
@@ -156,6 +171,23 @@ def test_fall_has_one_minute_cooldown_per_camera_and_source_epoch():
     new_epoch = result(similarity=1.0)
     new_epoch.metadata["source_epoch"] = 1
     assert sum(event.type == "fall_confirmed" for event in policy.apply(new_epoch).events) == 1
+
+
+def test_fall_and_unknown_share_one_minute_notification_slot_per_camera():
+    set_thresholds(stranger=78, fall=72)
+    now = [100.0]
+    policy = VisionProductPolicy(clock=lambda: now[0])
+
+    first = policy.apply(result())
+    assert [event.type for event in first.events] == ["fall_confirmed"]
+
+    now[0] += 59.9
+    within = policy.apply(unknown_result())
+    assert within.events == []
+
+    now[0] += 0.1
+    after = policy.apply(unknown_result())
+    assert [event.type for event in after.events] == ["unknown_person"]
 
 
 def test_known_identity_never_creates_unknown_person_event():
@@ -194,7 +226,7 @@ def test_exact_frame_snapshot_reaches_database_and_unknown_is_blurred(tmp_path, 
         identity_face_bbox_xyxy=[1, 1, 5, 5],
         identity_face_bbox_frame_id=vision_result.frame_id,
     )
-    VisionProductPolicy().apply(vision_result)
+    VisionProductPolicy(notification_cooldown_seconds=0).apply(vision_result)
     packet = FramePacket(
         "policy-camera",
         12,

@@ -20,6 +20,18 @@ def unknown(event_id: str, track: str, *, session: str = "runtime-a:0", seconds:
     )
 
 
+def fall(event_id: str, episode: str, *, seconds: int = 0):
+    return VisionEventRequest(
+        event_id=event_id,
+        camera_id="fall-camera",
+        camera_location="Phòng khách",
+        event_type="FALL_CONFIRMED",
+        occurred_at=datetime.now(UTC) + timedelta(seconds=seconds),
+        confidence=0.94,
+        metadata={"source_session": "fall-runtime:0", "incident_id": episode},
+    )
+
+
 @pytest.fixture(autouse=True)
 def identity_on(monkeypatch):
     monkeypatch.setattr("src.services.event_service.camera_service.identity_enabled_state", lambda _camera_id: True)
@@ -50,6 +62,19 @@ async def test_different_unknown_track_creates_new_incident():
     with database_connection() as connection:
         assert connection.execute("SELECT count(*) FROM incidents").fetchone()[0] == 2
         assert connection.execute("SELECT count(*) FROM alerts").fetchone()[0] == 2
+
+
+@pytest.mark.asyncio
+async def test_stable_fall_episode_metadata_correlates_to_one_incident_alert():
+    service = EventService()
+    first = await service.create(fall("fall-evidence-1", "fall-episode-a"))
+    second = await service.create(fall("fall-evidence-2", "fall-episode-a", seconds=61))
+    assert second.incident_id == first.incident_id
+    assert second.id == first.id
+    with database_connection() as connection:
+        assert connection.execute("SELECT count(*) FROM events").fetchone()[0] == 2
+        assert connection.execute("SELECT count(*) FROM incidents").fetchone()[0] == 1
+        assert connection.execute("SELECT count(*) FROM alerts").fetchone()[0] == 1
 
 
 @pytest.mark.asyncio
