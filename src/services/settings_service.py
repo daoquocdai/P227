@@ -76,12 +76,22 @@ class SettingsService:
         return self.get()[group]
 
     def create_user(self, data) -> dict[str, Any]:
+        from src.services.auth_service import hash_password
+
         user_id = str(uuid4())
         try:
             with database_connection() as connection:
                 connection.execute(
-                    "INSERT INTO users (id, email, display_name, role) VALUES (?, ?, ?, ?)",
-                    (user_id, data.email.strip(), data.name.strip(), data.role),
+                    """INSERT INTO users
+                       (id, email, display_name, role, password_hash, force_password_change)
+                       VALUES (?, ?, ?, ?, ?, 1)""",
+                    (
+                        user_id,
+                        data.email.strip(),
+                        data.name.strip(),
+                        data.role,
+                        hash_password(data.password),
+                    ),
                 )
         except Exception as exc:
             if "UNIQUE" in str(exc):

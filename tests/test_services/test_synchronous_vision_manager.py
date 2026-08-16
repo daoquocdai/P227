@@ -140,7 +140,10 @@ def test_identity_is_not_visible_to_capture_until_native_model_is_ready():
     assert not toggle.is_alive()
     assert manager.get_status("cam")["identity_enabled"] is True
     manager.process(packet(4))
-    wait_until(lambda: manager.latest_result("cam").frame_id == 4)
+    wait_until(
+        lambda: manager.latest_result("cam") is not None
+        and manager.latest_result("cam").frame_id == 4
+    )
     manager.stop()
 
 
@@ -625,3 +628,69 @@ def test_fall_dispatch_is_independent_of_identity_state(identity_enabled):
 
     assert dispatcher.event_types == ["fall_confirmed"]
     manager.stop()
+
+
+def test_slow_exact_frame_snapshot_does_not_block_next_vision_frame(monkeypatch):
+    snapshot_entered = threading.Event()
+    release_snapshot = threading.Event()
+    snapshotted_pixels = []
+
+    def slow_snapshot(frame_packet, _result, privacy_face_detector=None):
+        del privacy_face_detector
+        snapshot_entered.set()
+        assert release_snapshot.wait(2)
+        snapshotted_pixels.append(int(frame_packet.frame[0, 0, 0]))
+
+    class OneEventEngine(FakeEngine):
+        def process(self, frame_packet, session):
+            self.event_id = "exact-frame" if frame_packet.frame_id == 2 else None
+            return super().process(frame_packet, session)
+
+    class RecordingDispatcher:
+        def __init__(self):
+            self.frames = []
+
+        def dispatch(self, result):
+            self.frames.append(result.frame_id)
+            return True
+
+    monkeypatch.setattr(
+        "src.services.synchronous_vision_manager.attach_event_snapshots", slow_snapshot
+    )
+    dispatcher = RecordingDispatcher()
+    manager = SynchronousVisionManager(OneEventEngine(), dispatcher)
+    manager.start()
+    manager.enable("cam")
+    first = packet(2)
+    first.frame.fill(17)
+    manager.offer(first)
+    assert snapshot_entered.wait(1)
+    first.frame.fill(99)
+    manager.offer(packet(4))
+    wait_until(lambda: manager.latest_result("cam").frame_id == 4)
+    assert dispatcher.frames == []
+    release_snapshot.set()
+    wait_until(lambda: dispatcher.frames == [2])
+    assert snapshotted_pixels == [17]
+    manager.stop()
+
+
+def test_event_work_queue_is_bounded_and_saturation_preserves_core_event():
+    class RecordingDispatcher:
+        def __init__(self):
+            self.frames = []
+
+        def dispatch(self, result):
+            self.frames.append(result.frame_id)
+            return True
+
+    dispatcher = RecordingDispatcher()
+    manager = SynchronousVisionManager(FakeEngine(), dispatcher)
+    for frame_id in range(0, manager.EVENT_QUEUE_CAPACITY * 2, 2):
+        captured = packet(frame_id)
+        result = FakeEngine("queued").process(captured, object())
+        manager._enqueue_event_work(captured, result)
+    overflow = packet(100)
+    manager._enqueue_event_work(overflow, FakeEngine("overflow").process(overflow, object()))
+    assert manager._event_queue.qsize() == manager.EVENT_QUEUE_CAPACITY
+    assert dispatcher.frames == [100]

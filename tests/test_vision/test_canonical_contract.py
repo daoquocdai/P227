@@ -38,7 +38,7 @@ def make_pipeline(tmp_path, predicted_class: int) -> CanonicalVisionPipeline:
     )
     engine._dependencies = make_dependencies()
     engine._device = torch.device("cpu")
-    engine._action_model = FiveClassModel([predicted_class])
+    engine._action_model = FiveClassModel([predicted_class] * 10)
     engine._initialized = True
     engine.test_clock = clock
     return engine

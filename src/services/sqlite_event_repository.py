@@ -8,6 +8,7 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 from src.database import database_connection
 from src.models.schemas import AlertReviewRequest, VisionEventAccepted, VisionEventRequest
 from src.services.event_presentation import event_description
+from src.services.incident_coordinator import IncidentCoordinator
 from src.services.media_paths import snapshot_url, valid_snapshot_name
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,9 @@ def stable_uuid(value: str, category: str) -> str:
 
 
 class SQLiteEventRepository:
+    def __init__(self, incident_coordinator: IncidentCoordinator | None = None) -> None:
+        self._incidents = incident_coordinator or IncidentCoordinator()
+
     def create(self, event: VisionEventRequest, description: str) -> VisionEventAccepted:
         event_id = stable_uuid(event.event_id, "event")
         camera_id = stable_uuid(event.camera_id, "camera")
@@ -38,9 +42,7 @@ class SQLiteEventRepository:
             else None
         )
         valid_snapshot = valid_snapshot_name(event.snapshot_path)
-        if event.event_type.startswith("FALL_") and not event.metadata.get(
-            "snapshot_blurred", False
-        ):
+        if event.event_type.startswith("FALL_") and not event.metadata.get("snapshot_blurred", False):
             valid_snapshot = None
         metadata = dict(event.metadata)
         metadata.update(
@@ -54,6 +56,7 @@ class SQLiteEventRepository:
         )
 
         with database_connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute("SELECT id FROM events WHERE id = ?", (event_id,)).fetchone()
             if existing:
                 row = connection.execute("SELECT id, status FROM alerts WHERE event_id = ?", (event_id,)).fetchone()
@@ -146,24 +149,79 @@ class SQLiteEventRepository:
             if alert_type is None:
                 return VisionEventAccepted(id=event_id, event_id=event.event_id, status="resolved")
 
+            incident = self._incidents.correlate(
+                connection,
+                event_id=event_id,
+                camera_id=camera_id,
+                incident_type=alert_type,
+                occurred_at=event.occurred_at.isoformat(),
+                track_id=event.track_id,
+                metadata=metadata,
+            )
+            if incident.suppressed:
+                existing_alert = connection.execute(
+                    "SELECT id FROM alerts WHERE incident_id=?", (incident.incident_id,)
+                ).fetchone()
+                return VisionEventAccepted(
+                    id=existing_alert["id"] if existing_alert else event_id,
+                    event_id=event.event_id,
+                    status="safe",
+                    incident_id=incident.incident_id,
+                    incident_version=incident.version,
+                    occurrence_count=incident.occurrence_count,
+                    suppressed=True,
+                )
+            if incident.updated:
+                existing_alert = connection.execute(
+                    "SELECT id,status FROM alerts WHERE incident_id=?", (incident.incident_id,)
+                ).fetchone()
+                connection.execute(
+                    "UPDATE alerts SET updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?",
+                    (existing_alert["id"],),
+                )
+                return VisionEventAccepted(
+                    id=existing_alert["id"],
+                    event_id=event.event_id,
+                    status=self._ui_status(existing_alert["status"], None),
+                    incident_id=incident.incident_id,
+                    incident_version=incident.version,
+                    occurrence_count=incident.occurrence_count,
+                    incident_updated=True,
+                    agent_review_required=incident.review_required,
+                )
+
             severity = "high" if alert_type == "fall" else "critical"
             connection.execute(
-                "INSERT INTO alerts (id, event_id, alert_type, severity, status) VALUES (?, ?, ?, ?, 'open')",
-                (alert_id, event_id, alert_type, severity),
+                "INSERT INTO alerts (id, event_id, incident_id, alert_type, severity, status) VALUES (?, ?, ?, ?, ?, 'open')",
+                (alert_id, event_id, incident.incident_id, alert_type, severity),
             )
             connection.execute(
                 "INSERT INTO alert_actions (id, alert_id, action_type, new_status) VALUES (?, ?, 'created', 'open')",
                 (str(uuid4()), alert_id),
             )
-            return VisionEventAccepted(id=alert_id, event_id=event.event_id, status="pending")
+            return VisionEventAccepted(
+                id=alert_id,
+                event_id=event.event_id,
+                status="pending",
+                incident_id=incident.incident_id,
+                incident_version=incident.version,
+                occurrence_count=1,
+                alert_created=True,
+                agent_review_required=incident.review_required,
+            )
 
     def list_alerts(self) -> list[dict]:
         query = """
-            SELECT a.id, a.event_id, a.alert_type, a.severity, a.status AS db_status, a.is_read,
+            SELECT a.id, a.event_id, a.incident_id, a.alert_type, a.severity, a.status AS db_status, a.is_read,
                    a.created_at, a.updated_at,
                    e.occurred_at, e.ai_confidence, e.metadata_json,
                    c.id AS camera_id, c.name AS camera_name, c.location_label,
                    fed.immobility_duration_ms,
+                   i.status AS incident_status, i.opened_at AS incident_opened_at,
+                   i.last_seen_at AS incident_last_seen_at, i.occurrence_count,
+                   i.version AS incident_version, i.agent_summary,
+                   i.acknowledged_at AS incident_acknowledged_at,
+                   i.resolved_at AS incident_resolved_at,
                    (SELECT ma.relative_path FROM media_assets ma
                     WHERE ma.event_id = e.id ORDER BY ma.created_at DESC LIMIT 1) AS snapshot_path,
                    (SELECT aa.human_verdict FROM alert_actions aa
@@ -175,10 +233,19 @@ class SQLiteEventRepository:
                    (SELECT aa.action_type FROM alert_actions aa
                     WHERE aa.alert_id = a.id
                     ORDER BY aa.created_at DESC, aa.id DESC LIMIT 1) AS latest_action
+                   ,(SELECT ar.status FROM agent_runs ar WHERE ar.alert_id = a.id
+                     ORDER BY ar.created_at DESC LIMIT 1) AS agent_status
+                   ,(SELECT ar.verdict FROM agent_runs ar WHERE ar.alert_id = a.id
+                     ORDER BY ar.created_at DESC LIMIT 1) AS agent_verdict
+                   ,(SELECT ar.severity FROM agent_runs ar WHERE ar.alert_id = a.id
+                     ORDER BY ar.created_at DESC LIMIT 1) AS agent_severity
+                   ,(SELECT ar.reason_summary FROM agent_runs ar WHERE ar.alert_id = a.id
+                     ORDER BY ar.created_at DESC LIMIT 1) AS agent_reason_summary
             FROM alerts a
             JOIN events e ON e.id = a.event_id
             JOIN cameras c ON c.id = e.camera_id
             LEFT JOIN fall_event_details fed ON fed.event_id = e.id
+            LEFT JOIN incidents i ON i.id = a.incident_id
             ORDER BY e.occurred_at DESC
         """
         with database_connection() as connection:
@@ -186,13 +253,36 @@ class SQLiteEventRepository:
 
     def review(self, alert_id: str, review: AlertReviewRequest) -> dict:
         with database_connection() as connection:
-            current = connection.execute("SELECT status FROM alerts WHERE id = ?", (alert_id,)).fetchone()
+            current = connection.execute("SELECT status,incident_id FROM alerts WHERE id = ?", (alert_id,)).fetchone()
             if not current:
                 raise EventNotFoundError(alert_id)
             db_status, action_type, verdict = self._review_mapping(review.status)
             # Match SQLite's schema defaults so TEXT timestamp constraints remain
             # chronologically sortable ("...Z" versus Python's "+00:00").
             now = datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            if current["incident_id"]:
+                incident = connection.execute(
+                    "SELECT status,version FROM incidents WHERE id=?", (current["incident_id"],)
+                ).fetchone()
+                if incident["status"] == "RESOLVED_SAFE":
+                    return self.get_alert(alert_id)
+                if review.status in {"checking", "need_help"}:
+                    incident_status = "ACKNOWLEDGED"
+                    connection.execute(
+                        "UPDATE incidents SET status=?,acknowledged_at=COALESCE(acknowledged_at,?),version=version+1,updated_at=? WHERE id=?",
+                        (incident_status, now, now, current["incident_id"]),
+                    )
+                    self._incident_user_action(
+                        connection, current["incident_id"], "acknowledged", incident["version"] + 1, review.note
+                    )
+                elif review.status in {"safe", "resolved", "false_alarm"}:
+                    connection.execute(
+                        "UPDATE incidents SET status='RESOLVED_SAFE',resolved_at=?,resolution_reason=?,version=version+1,updated_at=? WHERE id=?",
+                        (now, review.note, now, current["incident_id"]),
+                    )
+                    self._incident_user_action(
+                        connection, current["incident_id"], "resolved_safe", incident["version"] + 1, review.note
+                    )
             connection.execute(
                 """UPDATE alerts SET status = ?, is_read = 1, updated_at = ?,
                    acknowledged_at = CASE WHEN ? = 'acknowledged' THEN COALESCE(acknowledged_at, ?) ELSE acknowledged_at END,
@@ -243,9 +333,7 @@ class SQLiteEventRepository:
             self._insert_media(connection, event_id, event, snapshot_name)
         except Exception:  # noqa: BLE001 - event delivery must survive evidence failure
             connection.execute("ROLLBACK TO SAVEPOINT optional_event_media")
-            logger.exception(
-                "Could not persist optional event media event=%s", event.event_id
-            )
+            logger.exception("Could not persist optional event media event=%s", event.event_id)
         finally:
             connection.execute("RELEASE SAVEPOINT optional_event_media")
 
@@ -297,9 +385,7 @@ class SQLiteEventRepository:
             "event_id": metadata.get("external_event_id", row["event_id"]),
             "timestamp": row["occurred_at"],
             "event_type": source_event_type,
-            "description": event_description(
-                source_event_type, row["location_label"], metadata.get("identity_name")
-            ),
+            "description": event_description(source_event_type, row["location_label"], metadata.get("identity_name")),
             "camera_id": row["camera_name"],
             "camera_location": row["location_label"],
             "confidence": row["ai_confidence"],
@@ -315,7 +401,26 @@ class SQLiteEventRepository:
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "is_read": bool(row["is_read"]),
+            "incident_id": row["incident_id"],
+            "incident_status": row["incident_status"],
+            "occurrence_count": row["occurrence_count"] or 1,
+            "first_seen_at": row["incident_opened_at"] or row["occurred_at"],
+            "last_seen_at": row["incident_last_seen_at"] or row["occurred_at"],
+            "incident_version": row["incident_version"],
+            "agent_reason_summary": row["agent_summary"] or row["agent_reason_summary"],
+            "acknowledged_at": row["incident_acknowledged_at"],
+            "resolved_at": row["incident_resolved_at"],
+            "agent_status": row["agent_status"],
+            "agent_verdict": row["agent_verdict"],
+            "agent_severity": row["agent_severity"],
         }
+
+    @staticmethod
+    def _incident_user_action(connection, incident_id: str, action_type: str, version: int, note: str | None) -> None:
+        connection.execute(
+            "INSERT INTO incident_actions (id,incident_id,action_type,incident_version,note) VALUES (?,?,?,?,?)",
+            (str(uuid4()), incident_id, action_type, version, note),
+        )
 
     def mark_read(self, alert_id: str) -> dict:
         with database_connection() as connection:

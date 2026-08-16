@@ -21,7 +21,8 @@ async def test_settings_persist_users_permissions_and_camera_state(client):
 
     email = f"caregiver-{uuid4()}@example.local"
     created = await client.post(
-        "/api/v1/settings/users", json={"name": "Người chăm sóc", "email": email, "role": "caregiver"}
+        "/api/v1/settings/users",
+        json={"name": "Người chăm sóc", "email": email, "password": "TamThoi@123", "role": "caregiver"},
     )
     assert created.status_code == 201
     user_id = created.json()["id"]
