@@ -1,9 +1,8 @@
 # Canonical production Vision
 
 Production enters this package through `src.runtime.LocalRuntime` and
-`RuntimeV2VisionPipeline` in `pipeline.py`. `visionv2/runtimev2` and
-`visionv2/P-227-thi` remain standalone reference/oracle trees; production does
-not import them.
+`CanonicalVisionPipeline` in `pipeline.py`. SDA-GCN is accessed only through
+`src/vision/sda_gcn.py`; model internals live in the top-level `SDA-GCN/` tree.
 
 ## Runtime contract
 
@@ -12,7 +11,7 @@ CameraRuntime capture
   ├── raw FrameHub → realtime MJPEG/preview
   └── even source frame → LatestFrameSlot(capacity=1)
                          → per-camera Vision worker
-                         → RuntimeV2VisionPipeline
+                         → CanonicalVisionPipeline
 ```
 
 Vision therefore does not run synchronously inside the capture loop. Slow
@@ -41,8 +40,8 @@ The canonical pipeline preserves:
 Required artifacts:
 
 - `yolov8n.pt`;
-- `work_dir/fall_detection/joint/config.yaml`;
-- `work_dir/fall_detection/joint/runs-best_val.pt`.
+- `../../SDA-GCN/config/production.yaml`;
+- `../../SDA-GCN/weights/fall-detection-joint.pt`.
 
 ## Hardware
 

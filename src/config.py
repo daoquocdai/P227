@@ -6,6 +6,7 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 VISION_ROOT = Path(__file__).resolve().parent / "vision"
+SDA_GCN_ROOT = Path(__file__).resolve().parents[1] / "SDA-GCN"
 
 
 class Settings(BaseSettings):
@@ -31,14 +32,12 @@ class Settings(BaseSettings):
     # Explicit test/demo control. Empty means the production mock emits no events.
     mock_vision_event_frame_ids: str = ""
 
-    # Production has one canonical VisionV2 implementation. Mock is test-only.
+    # Production has one canonical vision implementation. Mock is test-only.
     vision_engine: Literal["canonical", "mock"] = "canonical"
     vision_device: str = "auto"
     vision_yolo_path: Path = VISION_ROOT / "yolov8n.pt"
-    vision_config_path: Path = VISION_ROOT / "work_dir" / "fall_detection" / "joint" / "config.yaml"
-    vision_checkpoint_path: Path = (
-        VISION_ROOT / "work_dir" / "fall_detection" / "joint" / "runs-best_val.pt"
-    )
+    vision_config_path: Path = SDA_GCN_ROOT / "config" / "production.yaml"
+    vision_checkpoint_path: Path = SDA_GCN_ROOT / "weights" / "fall-detection-joint.pt"
     vision_model_cache_dir: Path = Path("data/vision-cache")
     vision_known_faces_dir: Path = VISION_ROOT / "register face"
     vision_identity_enabled: bool = False

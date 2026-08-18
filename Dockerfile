@@ -46,6 +46,7 @@ RUN apt-get update \
 
 COPY --from=builder /opt/venv /opt/venv
 COPY --chown=appuser:appuser src ./src
+COPY --chown=appuser:appuser SDA-GCN ./SDA-GCN
 COPY --chown=appuser:appuser database ./database
 
 RUN mkdir -p /app/data /app/snapshots /home/appuser/.insightface \

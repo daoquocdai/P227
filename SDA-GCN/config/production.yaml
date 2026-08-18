@@ -12,11 +12,11 @@ log_interval: 100
 loss_type: CE
 lr_decay_rate: 0.1
 lr_ratio: 0.001
-model: model.SDAGCN.Model
+model: sda_gcn.model.SDAGCN.Model
 model_args:
   adaptive: true
   drop_out: 0.5
-  graph: graph.ntu_rgb_d_hierarchy.Graph
+  graph: sda_gcn.graph.ntu_rgb_d_hierarchy.Graph
   graph_args:
     CoM: 0
     labeling_mode: spatial

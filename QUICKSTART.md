@@ -107,8 +107,8 @@ Canonical Fall Vision cần:
 
 ```text
 src\vision\yolov8n.pt
-src\vision\work_dir\fall_detection\joint\config.yaml
-src\vision\work_dir\fall_detection\joint\runs-best_val.pt
+SDA-GCN\config\production.yaml
+SDA-GCN\weights\fall-detection-joint.pt
 ```
 
 Giữ cấu hình sau nếu chưa cài InsightFace `buffalo_l`:
