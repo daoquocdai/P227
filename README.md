@@ -13,7 +13,7 @@ bằng chứng được lưu cục bộ trong SQLite/snapshot storage.
 - Camera và trạng thái Camera/Vision/Identity được lưu trong SQLite và tự khôi
   phục khi backend khởi động.
 - Raw MJPEG chạy theo source cadence, độc lập với tốc độ Vision.
-- Production dùng canonical VisionV2 tích hợp trong `src/vision`: YOLO,
+- Production dùng một pipeline canonical trong `src/vision`: YOLO,
   MediaPipe Pose, SDA-GCN năm lớp và InsightFace tùy chọn.
 - Một capacity-one latest-frame slot cho mỗi camera giữ latency bounded khi
   inference chậm; không có queue/backlog trước Vision.
@@ -89,8 +89,8 @@ DATABASE_URL=sqlite:///./data/app.db
 VISION_ENGINE=canonical
 VISION_DEVICE=auto
 VISION_YOLO_PATH=yolov8n.pt
-VISION_CONFIG_PATH=work_dir/fall_detection/joint/config.yaml
-VISION_CHECKPOINT_PATH=work_dir/fall_detection/joint/runs-best_val.pt
+VISION_CONFIG_PATH=../../SDA-GCN/config/production.yaml
+VISION_CHECKPOINT_PATH=../../SDA-GCN/weights/fall-detection-joint.pt
 VISION_MODEL_CACHE_DIR=data/vision-cache
 
 VISION_IDENTITY_ENABLED=false
@@ -112,8 +112,8 @@ Model bắt buộc:
 
 ```text
 src/vision/yolov8n.pt
-src/vision/work_dir/fall_detection/joint/config.yaml
-src/vision/work_dir/fall_detection/joint/runs-best_val.pt
+SDA-GCN/config/production.yaml
+SDA-GCN/weights/fall-detection-joint.pt
 ```
 
 ## Chạy ứng dụng
@@ -309,14 +309,14 @@ P-227/
 ├── database/schema.sql     # SQLite schema
 ├── tests/                  # API/service/Vision regressions
 ├── docs/                   # Tài liệu kỹ thuật
-├── tools/                  # Benchmark/parity utilities
-├── visionv2/               # Standalone reference/oracle; production không import
+├── SDA-GCN/                # Model, preprocessing, config, weight và public runtime
+├── tools/                  # Benchmark utilities
 ├── data/app.db             # Runtime data, không commit
 └── snapshots/              # Event evidence, không commit
 ```
 
-`visionv2/runtimev2` và `visionv2/P-227-thi` là reference/oracle, không phải
-production import path và không được dùng để thay thế `src/vision`.
+`src/vision/sda_gcn.py` là integration boundary duy nhất giữa pipeline và
+subsystem `SDA-GCN/`. Fall confirmation, cooldown và event vẫn thuộc P-227.
 
 ## Privacy và persistence
 

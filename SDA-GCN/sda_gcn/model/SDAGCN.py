@@ -7,7 +7,7 @@ from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
 from torch.autograd import Variable
 
-from src.vision.graph.tools import get_groups
+from sda_gcn.graph.tools import get_groups
 
 
 def import_class(name):

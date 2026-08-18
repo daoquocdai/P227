@@ -1,7 +1,7 @@
 import logging
 import threading
 import time
-from collections import OrderedDict, deque
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +20,9 @@ from src.vision.session import VisionSession
 logger = logging.getLogger(__name__)
 
 VISION_ROOT = Path(__file__).resolve().parent
+SDA_GCN_ROOT = VISION_ROOT.parents[1] / "SDA-GCN"
+DEFAULT_SDA_GCN_CONFIG = SDA_GCN_ROOT / "config" / "production.yaml"
+DEFAULT_SDA_GCN_CHECKPOINT = SDA_GCN_ROOT / "weights" / "fall-detection-joint.pt"
 DEFAULT_INSIGHTFACE_ROOT = Path.home() / ".insightface"
 WINDOW_SIZE = 64
 WINDOW_SECONDS = 2.0
@@ -53,8 +56,8 @@ class CameraContext:
             close()
 
 
-class RuntimeV2VisionPipeline(VisionEngine):
-    """Production copy/adaptation of immutable runtimev2 Vision behavior.
+class CanonicalVisionPipeline(VisionEngine):
+    """Canonical production vision behavior.
 
     Ordered per-camera workers may call the engine concurrently. YOLO tracking
     and MediaPipe Pose remain isolated per camera because both retain stream
@@ -69,8 +72,8 @@ class RuntimeV2VisionPipeline(VisionEngine):
     def __init__(
         self,
         yolo_path: str | Path = VISION_ROOT / "yolov8n.pt",
-        config_path: str | Path = VISION_ROOT / "work_dir" / "fall_detection" / "joint" / "config.yaml",
-        checkpoint_path: str | Path = VISION_ROOT / "work_dir" / "fall_detection" / "joint" / "runs-best_val.pt",
+        config_path: str | Path = DEFAULT_SDA_GCN_CONFIG,
+        checkpoint_path: str | Path = DEFAULT_SDA_GCN_CHECKPOINT,
         model_cache_dir: str | Path = Path("data/vision-cache"),
         known_faces_dir: str | Path = VISION_ROOT / "register face",
         identity_enabled: bool = False,
@@ -103,6 +106,7 @@ class RuntimeV2VisionPipeline(VisionEngine):
         self._detector_model_path = self.yolo_path
         self._detector_device: str | None = None
         self._action_model: Any = None
+        self._sda_gcn_runtime: Any = None
         self._face_app: Any = None
         self._privacy_face_app: Any = None
         self._known_faces: dict[str, np.ndarray] = {}
@@ -327,10 +331,11 @@ class RuntimeV2VisionPipeline(VisionEngine):
                 raise RuntimeError(f"Invalid SDA-GCN input shape: {tuple(data_tensor.shape)}")
             self._record_stage_metric(state, "fall_preprocess", fall_preprocess_started)
             fall_inference_started = time.perf_counter()
-            with deps.torch.inference_mode():
-                output = self._action_model(data_tensor)
-                self._record_stage_metric(state, "fall_inference", fall_inference_started)
-                fall_postprocess_started = time.perf_counter()
+            if self._sda_gcn_runtime is not None:
+                output, probability_tensor, raw_class = self._sda_gcn_runtime.predict(data_tensor, deps.torch)
+            else:  # Test-injected models keep the same lightweight seam.
+                with deps.torch.inference_mode():
+                    output = self._action_model(data_tensor)
                 expected_output = (1, self.OUTPUT_CLASSES)
                 if tuple(output.shape) != expected_output:
                     raise RuntimeError(f"SDA-GCN must return shape {expected_output}, got {tuple(output.shape)}")
@@ -338,9 +343,11 @@ class RuntimeV2VisionPipeline(VisionEngine):
                     raise RuntimeError("SDA-GCN returned non-finite logits")
                 probability_tensor = deps.torch.softmax(output, dim=1).squeeze(0)
                 raw_class = int(deps.torch.argmax(probability_tensor).item())
-                probabilities = [float(value) for value in probability_tensor.detach().cpu().tolist()]
-                logits = [float(value) for value in output.squeeze(0).detach().cpu().tolist()]
-                self._record_stage_metric(state, "fall_postprocess", fall_postprocess_started)
+            self._record_stage_metric(state, "fall_inference", fall_inference_started)
+            fall_postprocess_started = time.perf_counter()
+            probabilities = [float(value) for value in probability_tensor.detach().cpu().tolist()]
+            logits = [float(value) for value in output.squeeze(0).detach().cpu().tolist()]
+            self._record_stage_metric(state, "fall_postprocess", fall_postprocess_started)
             self._record_stage_metric(state, "fall", fall_started)
 
             model_window_index = int(state.get("vision_model_window_index", 0)) + 1
@@ -502,16 +509,7 @@ class RuntimeV2VisionPipeline(VisionEngine):
                 raise VisionInitializationError(f"Missing {label}: {path}")
 
         deps = self._load_dependencies()
-        with self.config_path.open("r", encoding="utf-8") as handle:
-            config = deps.yaml.safe_load(handle)
-        model_args = dict(config.get("model_args") or {})
-        expected = self.EXPECTED_MODEL
-        actual = {name: model_args.get(name) for name in expected}
-        if actual != expected:
-            raise VisionInitializationError(f"Expected SDA-GCN config {expected}, got {actual}")
-        if config.get("test_feeder_args", {}).get("bone") is not self.EXPECTED_BONE_MODALITY:
-            raise VisionInitializationError(f"SDA-GCN config bone modality must be {self.EXPECTED_BONE_MODALITY}")
-        model_args["graph"] = "src.vision.graph.ntu_rgb_d_hierarchy.Graph"
+        sda_gcn_runtime = deps.SdaGcnRuntime(self.config_path, self.checkpoint_path)
 
         try:
             capability_plan = VisionRuntimeResolver.resolve_capability_plan(
@@ -533,19 +531,10 @@ class RuntimeV2VisionPipeline(VisionEngine):
             self.requested_device,
             device,
         )
-        action_model = deps.Model(**model_args).to(device)
         try:
-            weights = deps.torch.load(self.checkpoint_path, map_location=device, weights_only=True)
-        except TypeError:
-            weights = deps.torch.load(self.checkpoint_path, map_location=device)
-        if not isinstance(weights, dict):
-            raise VisionInitializationError("SDA-GCN checkpoint must contain a state_dict mapping")
-        weights = OrderedDict((key.split("module.")[-1], value) for key, value in weights.items())
-        try:
-            action_model.load_state_dict(weights, strict=False)
+            action_model = sda_gcn_runtime.load_pytorch_model(deps.torch, deps.yaml, device)
         except Exception as exc:
             raise VisionInitializationError(f"Invalid SDA-GCN checkpoint: {exc}") from exc
-        action_model.eval()
         action_model, action_diagnostics = VisionRuntimeResolver.resolve_action_model(
             action_model,
             self.checkpoint_path,
@@ -554,6 +543,7 @@ class RuntimeV2VisionPipeline(VisionEngine):
             self.requested_device,
             deps.torch,
         )
+        sda_gcn_runtime.bind_model(action_model)
 
         face_app = None
         known_faces: dict[str, np.ndarray] = {}
@@ -599,6 +589,7 @@ class RuntimeV2VisionPipeline(VisionEngine):
                 }
             )
         self._action_model = action_model
+        self._sda_gcn_runtime = sda_gcn_runtime
         self._face_app = face_app
         self._known_faces = known_faces
 
@@ -662,15 +653,15 @@ class RuntimeV2VisionPipeline(VisionEngine):
             from scipy.interpolate import interp1d
             from ultralytics import YOLO
 
-            from src.vision.extractkpt.extractkpt import (
+            from src.vision.sda_gcn import (
+                SdaGcnRuntime,
+                apply_kalman_filter,
                 clean_out_of_bounds_data,
                 extract_from_crop,
+                interpolate_missing,
+                normalize_pose,
                 normalize_skeleton_dynamic,
             )
-            from src.vision.fusion.interpolate import interpolate_missing
-            from src.vision.fusion.kalman_filter import apply_kalman_filter
-            from src.vision.fusion.normalize_pose import normalize_pose
-            from src.vision.model.SDAGCN import Model
         except ImportError as exc:
             raise VisionInitializationError(f"Missing canonical Vision dependency: {exc}") from exc
         face_analysis = None
@@ -689,7 +680,7 @@ class RuntimeV2VisionPipeline(VisionEngine):
             yaml=yaml,
             FaceAnalysis=face_analysis,
             YOLO=YOLO,
-            Model=Model,
+            SdaGcnRuntime=SdaGcnRuntime,
             interp1d=interp1d,
             clean_out_of_bounds_data=clean_out_of_bounds_data,
             extract_from_crop=extract_from_crop,
@@ -951,7 +942,7 @@ class RuntimeV2VisionPipeline(VisionEngine):
             if source_timestamp - float(missing_since) < FALL_MISSING_PERSON_GRACE_SECONDS:
                 state["vision_fall_state"] = "confirmed"
                 return
-            RuntimeV2VisionPipeline._clear_active_fall(state)
+            CanonicalVisionPipeline._clear_active_fall(state)
         else:
             state["vision_fall_state"] = "normal"
 
@@ -995,7 +986,7 @@ class RuntimeV2VisionPipeline(VisionEngine):
                         and float(non_fall_at) >= float(recovery_started)
                         and source_timestamp - float(recovery_started) >= FALL_RECOVERY_CONFIRM_SECONDS
                     ):
-                        RuntimeV2VisionPipeline._clear_active_fall(state)
+                        CanonicalVisionPipeline._clear_active_fall(state)
                 else:
                     state.pop("vision_recovery_started_at", None)
                     state.pop("vision_recovery_last_movement_at", None)
@@ -1188,5 +1179,3 @@ class RuntimeV2VisionPipeline(VisionEngine):
 
 
 # Compatibility name for external test/tool imports. Production constructs
-# RuntimeV2VisionPipeline explicitly.
-CanonicalVisionPipeline = RuntimeV2VisionPipeline

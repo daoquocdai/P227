@@ -7,14 +7,14 @@ from src.services.stream_service import StreamService
 from src.services.synchronous_vision_manager import SynchronousVisionManager
 from src.services.vision_manager import VisionManager
 from src.vision.adapters.mock import MockVisionEngine
-from src.vision.pipeline import RuntimeV2VisionPipeline
+from src.vision.pipeline import CanonicalVisionPipeline
 
 
 def build_vision_engine(settings, mock_event_frame_ids: set[int] | None = None):
     if settings.vision_engine == "mock":
         return MockVisionEngine(emit_event_on_frame_ids=mock_event_frame_ids)
 
-    return RuntimeV2VisionPipeline(
+    return CanonicalVisionPipeline(
         yolo_path=settings.vision_yolo_path,
         config_path=settings.vision_config_path,
         checkpoint_path=settings.vision_checkpoint_path,
