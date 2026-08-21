@@ -51,6 +51,7 @@ def map_vision_result(result, *, camera_location: str, identity_enabled: bool) -
                 "identity_confidence": item.identity_confidence,
                 "identity_similarity": item.identity_confidence,
                 "identity_face_detected": item.face_bbox is not None,
+                "identity_face_verified": item.identity_face_verified,
             }
             if item.face_bbox is not None:
                 metadata.update(

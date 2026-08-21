@@ -30,7 +30,6 @@ class VisionProductPolicy:
         self._lock = threading.RLock()
         self._last_unknown: dict[tuple[str, int, int], float] = {}
         self._last_fall: dict[tuple[str, int], float] = {}
-        self._last_notification: dict[tuple[str, int], float] = {}
 
     def apply(self, result: VisionResult) -> VisionResult:
         unknown_candidates = [
@@ -38,7 +37,7 @@ class VisionProductPolicy:
             for detection in result.detections
             if detection.track_id is not None
             and detection.metadata.get("identity_state") == "LOCKED_UNKNOWN"
-            and detection.metadata.get("identity_face_detected", False)
+            and detection.metadata.get("identity_face_verified") is True
         ]
         if not result.events and not unknown_candidates:
             return result
@@ -60,14 +59,9 @@ class VisionProductPolicy:
                 continue
             with self._lock:
                 last_emitted = self._last_fall.get(fall_key)
-                last_notification = self._last_notification.get(fall_key)
-                if (last_emitted is not None and now - last_emitted < self._fall_cooldown_seconds) or (
-                    last_notification is not None
-                    and now - last_notification < self._notification_cooldown_seconds
-                ):
+                if last_emitted is not None and now - last_emitted < self._fall_cooldown_seconds:
                     continue
                 self._last_fall[fall_key] = now
-                self._last_notification[fall_key] = now
             accepted_events.append(event)
         result.events[:] = accepted_events
 
@@ -84,14 +78,13 @@ class VisionProductPolicy:
             key = (result.camera_id, source_epoch, track_id)
             with self._lock:
                 last_emitted = self._last_unknown.get(key)
-                last_notification = self._last_notification.get(fall_key)
+                last_fall = self._last_fall.get(fall_key)
                 if (last_emitted is not None and now - last_emitted < self._unknown_cooldown_seconds) or (
-                    last_notification is not None
-                    and now - last_notification < self._notification_cooldown_seconds
+                    last_fall is not None
+                    and now - last_fall < self._notification_cooldown_seconds
                 ):
                     continue
                 self._last_unknown[key] = now
-                self._last_notification[fall_key] = now
             event_id = str(uuid4())
             result.events.append(
                 VisionEvent(

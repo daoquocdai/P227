@@ -14,3 +14,8 @@ def test_services_do_not_import_sda_vision():
                 violations.extend(str(path) for alias in node.names
                                   if alias.name.startswith("sda_vision"))
     assert violations == []
+
+
+def test_sda_session_does_not_emit_product_unknown_event_directly():
+    source = Path("SDA-GCN/sda_vision/session.py").read_text(encoding="utf-8")
+    assert 'emit_event("UNKNOWN_PERSON"' not in source

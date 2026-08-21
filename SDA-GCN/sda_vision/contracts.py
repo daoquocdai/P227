@@ -57,6 +57,7 @@ class VisionDetection:
     identity_name: str | None = None
     identity_person_id: str | None = None
     identity_confidence: float | None = None
+    identity_face_verified: bool | None = None
     face_bbox: tuple[int, int, int, int] | None = None
     association_id: str | int | None = None
 

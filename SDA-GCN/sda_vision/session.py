@@ -269,24 +269,25 @@ class VisionSession:
         print(f"Model warmup    : {self.action_model.model_warmup_ms:.1f} ms\n")
 
     def _start_identity_stage(self):
-        if self.identity_stage is not None or not self.identity_enabled:
-            return
-        print("[*] Initializing Identity worker...")
-        providers, self.face_stage = choose_onnx_providers(
-            self.backend, ort.get_available_providers())
-        stage = IdentityStage(
-            providers, os.path.join(self.base_dir, "register face"),
-            os.path.join(self.base_dir, "work_dir/identity_cache/identity_gallery.npz"),
-            det_size=self.face_det_size, interval=self.identity_interval,
-            rebuild_cache=self.rebuild_face_cache, debug=self.log_level == "debug",
-            identity_debug=self.identity_debug,
-            process_priority=self.identity_process_priority,
-            cpu_affinity=self.identity_cpu_affinity,
-            gallery_mode=self.identity_gallery_mode,
-            gallery_snapshot=self.identity_gallery_snapshot,
-        )
-        stage.start()
-        self.identity_stage = stage
+        with self._control_lock:
+            if self.identity_stage is not None or not self.identity_enabled:
+                return
+            print("[*] Initializing Identity worker...")
+            providers, self.face_stage = choose_onnx_providers(
+                self.backend, ort.get_available_providers())
+            stage = IdentityStage(
+                providers, os.path.join(self.base_dir, "register face"),
+                os.path.join(self.base_dir, "work_dir/identity_cache/identity_gallery.npz"),
+                det_size=self.face_det_size, interval=self.identity_interval,
+                rebuild_cache=self.rebuild_face_cache, debug=self.log_level == "debug",
+                identity_debug=self.identity_debug,
+                process_priority=self.identity_process_priority,
+                cpu_affinity=self.identity_cpu_affinity,
+                gallery_mode=self.identity_gallery_mode,
+                gallery_snapshot=self.identity_gallery_snapshot,
+            )
+            stage.start()
+            self.identity_stage = stage
 
     def _reset_temporal_state(self):
         self.pose_samples.clear()
@@ -318,22 +319,32 @@ class VisionSession:
                 old_identity, self.identity_stage = self.identity_stage, None
         if old_identity is not None:
             old_identity.stop()
+        if enabled and self.identity_enabled and self.action_model is not None:
+            self._start_identity_stage()
 
     def set_identity_enabled(self, enabled: bool):
         enabled = bool(enabled)
         old_identity = None
+        should_start = False
         with self._control_lock:
             if self.identity_enabled == enabled:
-                return
-            self.identity_enabled = enabled
-            self.config.identity_enabled = enabled
-            self._last_identity_event_timestamp = 0.0
-            self._latest_detection = None
-            if not enabled:
-                old_identity, self.identity_stage = self.identity_stage, None
-                self.face_stage = StageSpec("Face", "DISABLED", "", "n/a")
+                should_start = enabled and self.action_model is not None and self.identity_stage is None
+                if not should_start:
+                    return
+            else:
+                self.identity_enabled = enabled
+                self.config.identity_enabled = enabled
+                self._last_identity_event_timestamp = 0.0
+                self._latest_detection = None
+                if not enabled:
+                    old_identity, self.identity_stage = self.identity_stage, None
+                    self.face_stage = StageSpec("Face", "DISABLED", "", "n/a")
+                else:
+                    should_start = self.action_model is not None and self.identity_stage is None
         if old_identity is not None:
             old_identity.stop()
+        if should_start:
+            self._start_identity_stage()
 
     def update_identity_gallery(self, snapshot):
         """Store/broadcast a supplied gallery without blocking the Fall loop."""
@@ -423,8 +434,6 @@ class VisionSession:
                 if result.state == IdentityState.LOCKED_KNOWN:
                     self.emit_event("PERSON_RECOGNIZED", result.confidence, "KNOWN",
                                     result.name, result.person_id)
-                elif result.state == IdentityState.LOCKED_UNKNOWN:
-                    self.emit_event("UNKNOWN_PERSON", 0.9, "UNKNOWN")
                 self._last_identity_event_timestamp = result.timestamp
         name_display = result.state.value
         face_color = (0, 165, 255)
@@ -448,7 +457,8 @@ class VisionSession:
             identity_status=("KNOWN" if result.state == IdentityState.LOCKED_KNOWN else "UNKNOWN"),
             identity_name=result.name, identity_person_id=result.person_id,
             identity_confidence=result.confidence,
-            face_bbox=exact_face_bbox, association_id=track_id)
+            identity_face_verified=result.face_found,
+            face_bbox=exact_face_bbox, association_id=result.association_id)
         
     def detect_fall(self, current_source_time_s):
         if self.config.raw_classifier:

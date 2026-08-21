@@ -33,6 +33,7 @@ def result(*, confidence=0.9, similarity=0.1, state="LOCKED_UNKNOWN"):
                     "identity_similarity": similarity,
                     "identity_state": state,
                     "identity_face_detected": True,
+                    "identity_face_verified": True,
                 },
             )
         ],
@@ -112,9 +113,6 @@ def test_unknown_requires_final_retry_state_and_has_cooldown():
 
     different_track = unknown_result()
     different_track.detections[0].track_id = 8
-    assert not any(event.type == "unknown_person" for event in policy.apply(different_track).events)
-
-    now[0] += 60
     assert sum(event.type == "unknown_person" for event in policy.apply(different_track).events) == 1
 
 
@@ -131,7 +129,7 @@ def test_feature_boundary_clears_unknown_cooldown_for_a_fresh_workflow():
     policy.clear_camera("policy-camera")
     fresh = unknown_result()
     policy.apply(fresh)
-    assert not any(event.type == "unknown_person" for event in fresh.events)
+    assert sum(event.type == "unknown_person" for event in fresh.events) == 1
 
 
 def test_default_cooldown_uses_observation_time_not_processing_wall_clock():
@@ -188,6 +186,27 @@ def test_fall_and_unknown_share_one_minute_notification_slot_per_camera():
     now[0] += 0.1
     after = policy.apply(unknown_result())
     assert [event.type for event in after.events] == ["unknown_person"]
+
+
+def test_prior_unknown_never_suppresses_higher_priority_fall():
+    set_thresholds(stranger=78, fall=72)
+    now = [0.0]
+    policy = VisionProductPolicy(clock=lambda: now[0])
+    assert [event.type for event in policy.apply(unknown_result()).events] == ["unknown_person"]
+    now[0] = 10.0
+    fall = result(similarity=1.0)
+    assert [event.type for event in policy.apply(fall).events] == ["fall_confirmed"]
+
+
+def test_unknown_requires_verified_face_not_exact_frame_face_box():
+    set_thresholds(stranger=78, fall=100)
+    unverified = unknown_result()
+    unverified.detections[0].metadata["identity_face_verified"] = False
+    assert VisionProductPolicy().apply(unverified).events == []
+
+    verified = unknown_result()
+    verified.detections[0].metadata["identity_face_detected"] = False
+    assert [event.type for event in VisionProductPolicy().apply(verified).events] == ["unknown_person"]
 
 
 def test_known_identity_never_creates_unknown_person_event():

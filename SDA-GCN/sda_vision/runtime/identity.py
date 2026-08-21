@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 import multiprocessing as mp
 from pathlib import Path
@@ -46,6 +46,8 @@ class IdentityResult:
     inference_finished_wall_time_s: float | None = None
     person_id: str | None = None
     gallery_version: int | str | None = None
+    face_found: bool | None = None
+    association_id: int | None = None
 
 
 def _replace_latest(target_queue, item):
@@ -250,6 +252,7 @@ def _identity_process(input_queue, result_queue, status_queue, stop_event, ready
             "inference_finished_wall_time_s": finished_wall,
             "source_time_s": job.get("source_time_s"),
             "frame_sequence": job.get("frame_sequence"),
+            "association_id": job.get("association_id"),
             "face_bbox": (tuple(int(round(value)) for value in main_face.bbox)
                           if main_face is not None else None),
         }
@@ -312,6 +315,8 @@ class IdentityStage:
         self.last_attempt_at = 0.0
         self.last_present_at = 0.0
         self.association_bbox = None
+        self.association_id = None
+        self.association_generation = 0
         self.frames_submitted = 0
         self.frames_processed = 0
         self.frames_dropped = 0
@@ -342,16 +347,24 @@ class IdentityStage:
         if bbox is not None:
             if self.association_bbox is not None and self._iou(self.association_bbox, bbox) < 0.15:
                 self.reset()
+            if getattr(self, "association_id", None) is None:
+                self.association_generation = getattr(self, "association_generation", 0) + 1
+                self.association_id = self.association_generation
             self.association_bbox = bbox
             self.last_present_at = now
         elif self.last_present_at and now - self.last_present_at >= self.absent_timeout:
             self.reset()
 
-    def reset(self):
-        self.result = IdentityResult(gallery_version=getattr(self, "gallery_version", None))
+    def reset(self, *, preserve_association=False):
+        association_id = getattr(self, "association_id", None) if preserve_association else None
+        self.result = IdentityResult(
+            gallery_version=getattr(self, "gallery_version", None),
+            association_id=association_id)
         self.failed_attempts = 0
         self.last_attempt_at = 0.0
-        self.association_bbox = None
+        if not preserve_association:
+            self.association_bbox = None
+            self.association_id = None
 
     def _due(self, now):
         state = self.result.state
@@ -374,17 +387,13 @@ class IdentityStage:
             return False
         if not self._due(now):
             return False
-        if self.result.state == IdentityState.LOCKED_UNKNOWN:
-            self.result = IdentityResult(
-                IdentityState.UNVERIFIED, bbox=bbox,
-                gallery_version=self.gallery_version)
-            self.failed_attempts = 0
         self.last_attempt_at = now
         self.frames_submitted += 1
         if _replace_latest(self._inputs, {"crop": crop, "bbox": bbox,
                                          "source_time_s": source_time_s,
                                          "frame_sequence": frame_sequence,
-                                         "gallery_version": self.gallery_version}):
+                                         "gallery_version": self.gallery_version,
+                                         "association_id": self.association_id}):
             self.frames_dropped += 1
         return True
 
@@ -400,6 +409,8 @@ class IdentityStage:
             return self.result
         gallery_version = getattr(self, "gallery_version", None)
         if latest.get("gallery_version") != gallery_version:
+            return self.result
+        if latest.get("association_id") != getattr(self, "association_id", None):
             return self.result
         self.frames_processed += 1
         if self.association_bbox is not None and self._iou(self.association_bbox, latest["bbox"]) < 0.15:
@@ -420,11 +431,12 @@ class IdentityStage:
                 inference_finished_monotonic_s=latest.get("inference_finished_monotonic_s"),
                 inference_started_wall_time_s=latest.get("inference_started_wall_time_s"),
                 inference_finished_wall_time_s=latest.get("inference_finished_wall_time_s"),
-                person_id=latest.get("person_id"), gallery_version=gallery_version)
+                person_id=latest.get("person_id"), gallery_version=gallery_version,
+                face_found=True, association_id=self.association_id)
             self.result = IdentityResult(IdentityState.KNOWN, **common)
             self.result = IdentityResult(IdentityState.LOCKED_KNOWN, **common)
             self.failed_attempts = 0
-        else:
+        elif latest.get("face_found"):
             self.failed_attempts += 1
             state = IdentityState.LOCKED_UNKNOWN if self.failed_attempts >= self.max_unknown_attempts else IdentityState.UNKNOWN
             self.result = IdentityResult(
@@ -439,7 +451,16 @@ class IdentityStage:
                 inference_finished_monotonic_s=latest.get("inference_finished_monotonic_s"),
                 inference_started_wall_time_s=latest.get("inference_started_wall_time_s"),
                 inference_finished_wall_time_s=latest.get("inference_finished_wall_time_s"),
-                gallery_version=gallery_version)
+                gallery_version=gallery_version, face_found=True,
+                association_id=getattr(self, "association_id", None))
+        else:
+            # No usable face is inconclusive: retain the current state and
+            # attempt count, but expose that this inference did not verify a face.
+            self.result = replace(
+                self.result, timestamp=latest["timestamp"], bbox=latest["bbox"],
+                inference_ms=latest["inference_ms"], face_found=False,
+                face_bbox=None, face_bbox_frame_sequence=latest.get("frame_sequence"),
+                association_id=self.association_id)
         return self.result
 
     def update_gallery(self, snapshot):
@@ -447,7 +468,7 @@ class IdentityStage:
             raise RuntimeError("Filesystem Identity gallery cannot accept supplied updates")
         self.gallery_snapshot = snapshot
         self.gallery_version = snapshot.version
-        self.reset()
+        self.reset(preserve_association=True)
         _replace_latest(self._gallery_updates, snapshot)
 
     def poll_status(self):

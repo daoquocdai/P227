@@ -34,6 +34,7 @@ def sda_result(*, sequence=7, epoch=2, events=()):
             "person", 0.9, (10, 20, 100, 200), identity_state="LOCKED_KNOWN",
             identity_status="KNOWN", identity_name="Mai", identity_confidence=0.91,
             identity_person_id="person-1",
+            identity_face_verified=True,
             face_bbox=(30, 40, 60, 80), association_id=3,
         ),), generated_events=events,
         stage_metrics={"effective_fps": 15.0, "total_vision_ms": 48.0},
@@ -55,6 +56,7 @@ def test_result_adapter_keeps_source_space_bbox_and_exact_face_correlation():
     assert detection.metadata["bbox_coordinate_space"] == "source_pixels"
     assert detection.metadata["identity_face_bbox_xyxy"] == (30, 40, 60, 80)
     assert detection.metadata["identity_face_bbox_frame_id"] == mapped.frame_id
+    assert detection.metadata["identity_face_verified"] is True
     assert mapped.metadata["geometry"]["scale"] == 1.0
     assert detection.metadata["identity_person_id"] == "person-1"
 

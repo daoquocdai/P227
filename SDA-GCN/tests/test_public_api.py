@@ -6,6 +6,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -32,6 +33,34 @@ class PublicImportTests(unittest.TestCase):
         self.assertFalse(entry.embedding.flags.writeable)
         with self.assertRaises(ValueError):
             entry.embedding[0] = 2
+
+    def test_post_fall_stability_emits_once_and_movement_clears(self):
+        session = VisionSession.__new__(VisionSession)
+        session.config = SimpleNamespace(raw_classifier=False)
+        still = np.zeros((25, 3), dtype=np.float32)
+        still[2, 0] = 1.0  # non-zero torso scale
+        session.pose_samples = deque([PoseSample(0.0, still.copy())])
+        session.pending_event = {
+            "started_source_time_s": 0.0, "state": "FALL_DETECTED",
+            "anchor_kpts": None, "next_check_source_time_s": 0.0, "conf": 0.9,
+        }
+        session.current_action = ""
+        session.action_color = (0, 0, 0)
+        emitted = []
+        session.emit_event = lambda event_type, confidence: emitted.append((event_type, confidence))
+
+        for timestamp in (2.0, 3.0, 5.0, 7.0, 9.0, 11.0):
+            session.pose_samples.append(PoseSample(timestamp, still.copy()))
+            session.detect_fall(timestamp)
+        self.assertEqual(session.pending_event["state"], "ALERT")
+        self.assertEqual(emitted, [("FALL_CONFIRMED", 0.9)])
+
+        moved = still.copy()
+        moved[5, 0] = 1.0
+        session.pose_samples.append(PoseSample(13.0, moved))
+        session.detect_fall(13.0)
+        self.assertIsNone(session.pending_event)
+        self.assertEqual(len(emitted), 1)
 
     def test_small_public_api_imports(self):
         self.assertTrue(VisionSession)
@@ -139,6 +168,35 @@ class SessionControlTests(unittest.TestCase):
         session.set_inference_enabled(True)
         self.assertEqual(len(session.pose_samples), 0)
         self.assertIsNone(session.pending_event)
+
+    def test_enabling_identity_on_initialized_session_starts_worker(self):
+        session = VisionSession.__new__(VisionSession)
+        session._control_lock = threading.RLock()
+        session.identity_enabled = False
+        session.identity_stage = None
+        session.action_model = object()
+        session.config = SimpleNamespace(identity_enabled=False)
+        session._last_identity_event_timestamp = 1.0
+        session._latest_detection = object()
+        started = []
+        session._start_identity_stage = lambda: started.append(True)
+        session.set_identity_enabled(True)
+        self.assertTrue(session.identity_enabled)
+        self.assertEqual(started, [True])
+
+    def test_reenabling_inference_restarts_desired_identity_worker(self):
+        session = VisionSession.__new__(VisionSession)
+        session._control_lock = threading.RLock()
+        session.inference_enabled = False
+        session.identity_enabled = True
+        session.identity_stage = None
+        session.action_model = object()
+        session.config = SimpleNamespace(inference_enabled=False)
+        session._reset_temporal_state = lambda: None
+        started = []
+        session._start_identity_stage = lambda: started.append(True)
+        session.set_inference_enabled(True)
+        self.assertEqual(started, [True])
 
     def test_source_epoch_reset_clears_fall_pending_state(self):
         session = VisionSession(VisionSessionConfig(inference_enabled=False, preview="none"))

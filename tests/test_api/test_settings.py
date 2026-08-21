@@ -71,7 +71,8 @@ async def test_stranger_threshold_update_changes_live_product_decision_without_r
                     track_id=7,
                     metadata={
                         "identity_state": "LOCKED_UNKNOWN",
-                        "identity_face_detected": True,
+                            "identity_face_detected": True,
+                            "identity_face_verified": True,
                         "identity_similarity": 0.4,
                     },
                 )

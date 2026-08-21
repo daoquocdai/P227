@@ -49,6 +49,8 @@ class IdentityStateTests(unittest.TestCase):
         stage.last_attempt_at = 0.0
         stage.last_present_at = 0.0
         stage.association_bbox = None
+        stage.association_id = None
+        stage.association_generation = 0
         stage.frames_submitted = 0
         stage.frames_processed = 0
         stage.frames_dropped = 0
@@ -73,11 +75,34 @@ class IdentityStateTests(unittest.TestCase):
         stage = self.make_stage()
         for attempt in range(3):
             stage._results.put({"known": False, "confidence": 0.1, "timestamp": attempt,
-                                "bbox": (0, 0, 10, 10), "inference_ms": 10.0})
+                                "bbox": (0, 0, 10, 10), "inference_ms": 10.0,
+                                "face_found": True})
             stage.poll()
         self.assertEqual(stage.result.state, IdentityState.LOCKED_UNKNOWN)
         self.assertFalse(stage._due(10.0))
         self.assertTrue(stage._due(20.0))
+
+    def test_no_face_is_inconclusive_and_never_locks_unknown(self):
+        stage = self.make_stage()
+        for attempt in range(3):
+            stage._results.put({"known": False, "face_found": False,
+                                "confidence": 0.0, "timestamp": attempt,
+                                "bbox": (0, 0, 10, 10), "inference_ms": 10.0})
+            stage.poll()
+        self.assertEqual(stage.result.state, IdentityState.UNVERIFIED)
+        self.assertEqual(stage.failed_attempts, 0)
+        self.assertFalse(stage.result.face_found)
+
+    def test_no_face_preserves_existing_unknown_attempt_count(self):
+        stage = self.make_stage()
+        stage.failed_attempts = 1
+        stage.result = IdentityResult(IdentityState.UNKNOWN, face_found=True)
+        stage._results.put({"known": False, "face_found": False,
+                            "confidence": 0.0, "timestamp": 2.0,
+                            "bbox": (0, 0, 10, 10), "inference_ms": 10.0})
+        stage.poll()
+        self.assertEqual(stage.result.state, IdentityState.UNKNOWN)
+        self.assertEqual(stage.failed_attempts, 1)
 
     def test_bbox_association_change_invalidates_lock(self):
         stage = self.make_stage()
@@ -86,11 +111,41 @@ class IdentityStateTests(unittest.TestCase):
         stage.update_presence((100, 100, 110, 110), now=5.0)
         self.assertEqual(stage.result.state, IdentityState.UNVERIFIED)
 
+    def test_presence_association_is_stable_then_changes_after_absence(self):
+        stage = self.make_stage()
+        stage.update_presence((0, 0, 10, 10), now=1.0)
+        first = stage.association_id
+        stage.update_presence((1, 1, 11, 11), now=2.0)
+        self.assertEqual(stage.association_id, first)
+        stage.update_presence(None, now=4.0)
+        self.assertIsNone(stage.association_id)
+        stage.update_presence((1, 1, 11, 11), now=5.0)
+        self.assertGreater(stage.association_id, first)
+
+    def test_replacement_bbox_starts_new_association(self):
+        stage = self.make_stage()
+        stage.update_presence((0, 0, 10, 10), now=1.0)
+        first = stage.association_id
+        stage.update_presence((100, 100, 110, 110), now=2.0)
+        self.assertGreater(stage.association_id, first)
+
     def test_result_from_old_bbox_cannot_lock_new_person(self):
         stage = self.make_stage()
         stage.association_bbox = (100, 100, 110, 110)
         stage._results.put({"known": True, "name": "Alice", "confidence": 0.9,
                             "timestamp": 2.0, "bbox": (0, 0, 10, 10), "inference_ms": 10.0})
+        stage.poll()
+        self.assertEqual(stage.result.state, IdentityState.UNVERIFIED)
+
+    def test_result_from_old_association_cannot_lock_new_person(self):
+        stage = self.make_stage()
+        stage.association_id = 2
+        stage.association_generation = 2
+        stage.association_bbox = (0, 0, 10, 10)
+        stage._results.put({"known": True, "face_found": True, "person_id": "old",
+                            "name": "Old", "confidence": 0.99, "timestamp": 2.0,
+                            "bbox": (0, 0, 10, 10), "inference_ms": 10.0,
+                            "association_id": 1})
         stage.poll()
         self.assertEqual(stage.result.state, IdentityState.UNVERIFIED)
 
