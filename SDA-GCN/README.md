@@ -1,5 +1,11 @@
 B1: pip install -r requirements
 B2: pip install -e torchlight
+B2.1: từ repository root cài package Vision reusable:
+
+```powershell
+pip install -e .\SDA-GCN
+python -c "import sda_vision; print(sda_vision.__file__)"
+```
 B3; chạy file recognize/capture_data.py để đăng kí khuôn mặt,bấm c để bắt đầu lấy ảnh, c để dừng. Muốn thoát thì bấm q
 Muốn chạy thì chạy file realtime.py.
 
@@ -37,6 +43,27 @@ python realtime.py --source "D:\Videos\fall_test.mp4" --device auto --identity o
 ```
 
 Chỉ dùng `--source-fps 30` khi cần override metadata FPS video bị thiếu/sai.
+
+## Reusable package API
+
+Standalone CLI và tích hợp application dùng chung một implementation trong
+`sda_vision`. Public surface cố ý nhỏ:
+
+```python
+from sda_vision import (
+    VisionCallbacks,
+    VisionDetection,
+    VisionEvent,
+    VisionFrameResult,
+    VisionSession,
+    VisionSessionConfig,
+)
+```
+
+`VisionSession` phát structured result/event qua callback. HTTP event delivery,
+OpenCV window và Flask MJPEG là standalone adapters; core không import FastAPI,
+SQLite hoặc `src.*`. Các module `runtime.*` cũ chỉ là compatibility re-export và
+không chứa implementation thứ hai.
 
 MediaPipe chạy asynchronous. Metric `pose_callback_latency_ms` là thời gian từ
 lúc submit frame tới callback tương ứng; `total_vision_ms` là processing time của
