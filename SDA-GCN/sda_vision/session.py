@@ -16,10 +16,12 @@ warnings.filterwarnings("ignore", message=r"SymbolDatabase.GetPrototype\(\) is d
 import onnxruntime as ort
 from collections import deque
 from pathlib import Path
+import threading
 
 from .callbacks import VisionCallbacks
 from .config import VisionSessionConfig
-from .contracts import FrameTransform, VisionDetection, VisionEvent, VisionFrameResult
+from .contracts import (FrameTransform, VisionDetection, VisionEvent,
+                        VisionFrameResult, VisionSourceFrame)
 from .runtime.hardware import resolve_backend
 from .runtime.inference import ActionInference, StageSpec, choose_onnx_providers, print_diagnostics
 from .runtime.identity import IdentityStage, IdentityState
@@ -107,6 +109,7 @@ class VisionSession:
         self.backend = resolve_backend(config.device)
         self.preview = config.preview
         self.identity_enabled = config.identity_enabled
+        self.inference_enabled = config.inference_enabled
         self.target_vision_fps = config.vision_fps
         self.identity_interval = config.identity_interval
         self.face_det_size = config.face_det_size
@@ -158,35 +161,72 @@ class VisionSession:
         self._frame_transform = None
         self._event_frame_sequence = 0
         self._event_source_time_s = 0.0
+        self._event_source_epoch = 0
         self.latest_result = None
         self._stop_requested = False
+        self._control_lock = threading.RLock()
+        self._active_source_epoch = None
+        self._profile_source_callback = deque(maxlen=4096)
+        self._profile_result_callback = deque(maxlen=4096)
+        self._profile_pose = deque(maxlen=4096)
+        self._profile_sda = deque(maxlen=2048)
+        self._profile_identity = deque(maxlen=1024)
+        self._profile_cycle = deque(maxlen=4096)
+        self._scheduler_deadline_misses = 0
+        self._capture_frames_dropped = 0
 
     def _pose_callback(self, result: vision.PoseLandmarkerResult, output_image: mp.Image, timestamp_ms: int):
         submission = self._pose_submissions.pop(timestamp_ms, None)
         if submission is not None:
             latency = (time.perf_counter() - submission.submitted_perf_counter_s) * 1000.0
             self.pose_inference_ms = latency
+            self._profile_pose.append((time.monotonic(), latency))
             self.pose_store.publish(PosePacket(submission.source_time_s, submission.frame_sequence,
                                                result, latency, submission.frame,
                                                submission.source_frame_index,
-                                               submission.wall_time_utc))
+                                               submission.wall_time_utc,
+                                               submission.source_epoch,
+                                               submission.source_frame))
+
+    def _source_frame_callback(self, packet):
+        callback = self.callbacks.on_source_frame
+        if callback is None:
+            return
+        started = time.perf_counter()
+        callback(VisionSourceFrame(
+            camera_id=self.config.camera_id,
+            frame_sequence=packet.sequence,
+            source_frame_index=packet.source_frame_index,
+            source_epoch=packet.source_epoch,
+            source_time_s=packet.source_time_s,
+            captured_wall_time=packet.wall_time_utc,
+            frame=packet.frame,
+        ))
+        self._profile_source_callback.append(
+            (time.monotonic(), (time.perf_counter() - started) * 1000.0))
+
+    def _record_sda_inference(self):
+        self._profile_sda.append((
+            time.monotonic(),
+            self.action_model.last_inference_ms,
+            self.action_model.last_started_monotonic_s,
+            self.action_model.invocation_count,
+            self.action_model.last_started_wall_time_s,
+            self.action_model.last_finished_wall_time_s,
+        ))
 
     def init_models(self):
-        if self.identity_enabled:
-            print("[*] Đang khởi tạo Identity worker...")
-            providers, self.face_stage = choose_onnx_providers(self.backend, ort.get_available_providers())
-            self.identity_stage = IdentityStage(
-                providers, os.path.join(self.base_dir, "register face"),
-                os.path.join(self.base_dir, "work_dir/identity_cache/identity_gallery.npz"),
-                det_size=self.face_det_size, interval=self.identity_interval,
-                rebuild_cache=self.rebuild_face_cache, debug=self.log_level == "debug",
-                identity_debug=self.identity_debug,
-            )
-            self.identity_stage.start()
-        else:
-            self.face_stage = StageSpec("Face", "DISABLED", "", "n/a")
+        with self._control_lock:
+            if self.action_model is not None:
+                if self.identity_enabled and self.identity_stage is None:
+                    self._start_identity_stage()
+                return
+            if self.identity_enabled:
+                self._start_identity_stage()
+            else:
+                self.face_stage = StageSpec("Face", "DISABLED", "", "n/a")
 
-        print("[*] Đang khởi tạo MediaPipe Pose (LIVE_STREAM mode)...")
+        print("[*] Initializing MediaPipe Pose (LIVE_STREAM mode)...")
         model_path = os.path.join(self.base_dir, 'pose_landmarker_full.task')
         
         base_options = python.BaseOptions(model_asset_path=model_path)
@@ -200,7 +240,7 @@ class VisionSession:
         )
         self.pose_model = vision.PoseLandmarker.create_from_options(options)
 
-        print("[*] Đang khởi tạo SDA-GCN (Fall Detection)...")
+        print("[*] Initializing SDA-GCN (Fall Detection)...")
         config_path = os.path.join(self.base_dir, 'work_dir/fall_detection/fall/config.yaml')
         weights_path = os.path.join(self.base_dir, 'work_dir/fall_detection/fall/runs-best_val.pt')
         
@@ -223,6 +263,69 @@ class VisionSession:
         print(f"Event Callback  : {'ENABLED' if self.callbacks.on_event else 'DISABLED'}\n")
         print(f"Model init      : {self.action_model.model_initialize_ms:.1f} ms")
         print(f"Model warmup    : {self.action_model.model_warmup_ms:.1f} ms\n")
+
+    def _start_identity_stage(self):
+        if self.identity_stage is not None or not self.identity_enabled:
+            return
+        print("[*] Initializing Identity worker...")
+        providers, self.face_stage = choose_onnx_providers(
+            self.backend, ort.get_available_providers())
+        stage = IdentityStage(
+            providers, os.path.join(self.base_dir, "register face"),
+            os.path.join(self.base_dir, "work_dir/identity_cache/identity_gallery.npz"),
+            det_size=self.face_det_size, interval=self.identity_interval,
+            rebuild_cache=self.rebuild_face_cache, debug=self.log_level == "debug",
+            identity_debug=self.identity_debug,
+        )
+        stage.start()
+        self.identity_stage = stage
+
+    def _reset_temporal_state(self):
+        self.pose_samples.clear()
+        self.pending_event = None
+        self.current_action = "Waiting for frames..."
+        self.action_color = (255, 255, 255)
+        self._pose_submissions.clear()
+        self.pose_store.clear()
+        self._last_pose_sequence = 0
+        self._latest_detection = None
+        self.latest_result = None
+        self._pending_generated_events = []
+        self._event_frame_sequence = 0
+        self._event_source_time_s = 0.0
+        self._event_source_epoch = 0
+        self._last_identity_event_timestamp = 0.0
+        if self.identity_stage is not None:
+            self.identity_stage.reset()
+
+    def set_inference_enabled(self, enabled: bool):
+        enabled = bool(enabled)
+        old_identity = None
+        with self._control_lock:
+            if self.inference_enabled == enabled:
+                return
+            self.inference_enabled = enabled
+            self._reset_temporal_state()
+            if not enabled:
+                old_identity, self.identity_stage = self.identity_stage, None
+        if old_identity is not None:
+            old_identity.stop()
+
+    def set_identity_enabled(self, enabled: bool):
+        enabled = bool(enabled)
+        old_identity = None
+        with self._control_lock:
+            if self.identity_enabled == enabled:
+                return
+            self.identity_enabled = enabled
+            self.config.identity_enabled = enabled
+            self._last_identity_event_timestamp = 0.0
+            self._latest_detection = None
+            if not enabled:
+                old_identity, self.identity_stage = self.identity_stage, None
+                self.face_stage = StageSpec("Face", "DISABLED", "", "n/a")
+        if old_identity is not None:
+            old_identity.stop()
         
     def load_known_faces(self, data_dir=None):
         # Identity worker owns model initialization and registered embeddings.
@@ -249,7 +352,8 @@ class VisionSession:
             face_bbox=detection.face_bbox if detection else None,
             metadata={"camera_id": self.config.camera_id,
                       "camera_location": self.config.camera_location,
-                      "source_epoch": self.config.source_epoch},
+                      "source_epoch": getattr(
+                          self, "_event_source_epoch", self.config.source_epoch)},
         )
         self._pending_generated_events.append(event)
         if self.callbacks.on_event:
@@ -258,23 +362,35 @@ class VisionSession:
     def process_person(self, frame, x1, y1, x2, y2, track_id, frame_sequence=None,
                        source_time_s=None, overlay_frame=None):
         overlay_frame = frame if overlay_frame is None else overlay_frame
-        if not self.identity_enabled:
+        stage = self.identity_stage
+        if not self.identity_enabled or stage is None:
             cv2.rectangle(overlay_frame, (x1, y1), (x2, y2), (255, 255, 0), 2)
             self._latest_detection = VisionDetection(
                 "person", bbox=self._frame_transform.bbox_to_source((x1, y1, x2, y2)),
                 identity_state="DISABLED", identity_status="DISABLED")
             return
         crop_frame = frame[y1:y2, x1:x2]
-        processed_before = self.identity_stage.frames_processed
-        previous_state = self.identity_stage.result.state
-        self.identity_stage.submit(crop_frame.copy(), (x1, y1, x2, y2),
-                                   source_time_s=source_time_s, frame_sequence=frame_sequence)
-        result = self.identity_stage.poll()
+        with self._control_lock:
+            stage = self.identity_stage
+            if not self.identity_enabled or stage is None:
+                return
+            processed_before = stage.frames_processed
+            previous_state = stage.result.state
+            stage.submit(crop_frame.copy(), (x1, y1, x2, y2),
+                         source_time_s=source_time_s, frame_sequence=frame_sequence)
+            result = stage.poll()
         if result.state != previous_state and self.log_level in {"debug", "info"}:
             detail = f" | {result.name} | similarity={result.confidence:.2f}" if result.name else ""
-            print(f"[Identity] {previous_state.value} → {result.state.value}{detail}")
-        if self.identity_stage.frames_processed != processed_before:
+            print(f"[Identity] {previous_state.value} -> {result.state.value}{detail}")
+        if stage.frames_processed != processed_before:
             self.current_identity_ms = result.inference_ms
+            self._profile_identity.append((
+                time.monotonic(),
+                result.inference_ms,
+                result.state.value,
+                result.inference_started_wall_time_s,
+                result.inference_finished_wall_time_s,
+            ))
             if result.timestamp != self._last_identity_event_timestamp:
                 if result.state == IdentityState.LOCKED_KNOWN:
                     self.emit_event("PERSON_RECOGNIZED", result.confidence, "KNOWN", result.name)
@@ -291,12 +407,18 @@ class VisionSession:
             face_color = (0, 0, 255)
         cv2.rectangle(overlay_frame, (x1, y1), (x2, y2), face_color, 2)
         cv2.putText(overlay_frame, name_display, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, face_color, 2)
+        exact_face_bbox = None
+        if (result.face_bbox is not None
+                and result.face_bbox_frame_sequence == frame_sequence):
+            fx1, fy1, fx2, fy2 = result.face_bbox
+            exact_face_bbox = self._frame_transform.bbox_to_source(
+                (x1 + fx1, y1 + fy1, x1 + fx2, y1 + fy2))
         self._latest_detection = VisionDetection(
             "person", bbox=self._frame_transform.bbox_to_source((x1, y1, x2, y2)),
             identity_state=result.state.value,
             identity_status=("KNOWN" if result.state == IdentityState.LOCKED_KNOWN else "UNKNOWN"),
             identity_name=result.name, identity_confidence=result.confidence,
-            association_id=track_id)
+            face_bbox=exact_face_bbox, association_id=track_id)
         
     def detect_fall(self, current_source_time_s):
         if self.config.raw_classifier:
@@ -392,6 +514,7 @@ class VisionSession:
                 with torch.inference_mode():
                     output = self.action_model(data_tensor)
                     self.current_sda_gcn_ms = self.action_model.last_inference_ms
+                    self._record_sda_inference()
                     prob = F.softmax(output, dim=1).squeeze()
                     pred_idx = torch.argmax(prob).item()
                     conf = float(prob[pred_idx]) 
@@ -437,6 +560,7 @@ class VisionSession:
         with torch.inference_mode():
             output = self.action_model(data_tensor)
             self.current_sda_gcn_ms = self.action_model.last_inference_ms
+            self._record_sda_inference()
             prob = F.softmax(output, dim=1).squeeze()
             pred_idx = torch.argmax(prob).item()
             conf = float(prob[pred_idx])
@@ -451,7 +575,19 @@ class VisionSession:
             self.pose_samples.popleft()
 
     def run(self):
-        self.frame_source = create_source(self.source_spec, self.source_fps_override)
+        try:
+            self._run()
+        finally:
+            self.shutdown()
+
+    def _run(self):
+        self.frame_source = create_source(
+            self.source_spec, self.source_fps_override,
+            loop_video=self.config.loop_video,
+            reconnect_delay=self.config.stream_reconnect_delay,
+            on_frame=self._source_frame_callback,
+            initial_epoch=self.config.source_epoch,
+        )
         self.frame_source.start()
         metadata = self.frame_source.metadata
         print("\n[Source]")
@@ -476,9 +612,9 @@ class VisionSession:
         if self.preview == "web":
             print("[*] Web preview: http://127.0.0.1:8001/")
         elif self.preview == "window":
-            print("[*] OpenCV preview đã sẵn sàng. Nhấn q để thoát.")
+            print("[*] OpenCV preview ready. Press q to exit.")
         else:
-            print("[*] Preview disabled; Vision inference đang chạy.")
+            print("[*] Preview disabled; Vision inference is running.")
         global latest_frame
         fps_window_started = time.perf_counter()
         fps_window_frames = 0
@@ -495,6 +631,20 @@ class VisionSession:
                 continue
             capture_dropped += max(0, snapshot.sequence - last_capture_sequence - 1) if last_capture_sequence else 0
             last_capture_sequence = snapshot.sequence
+            if self._active_source_epoch != snapshot.source_epoch:
+                self._active_source_epoch = snapshot.source_epoch
+                self._reset_temporal_state()
+            if not self.inference_enabled:
+                continue
+            if self.action_model is None:
+                try:
+                    self.init_models()
+                except Exception:
+                    self.inference_enabled = False
+                    raise
+                continue
+            elif self.identity_enabled and self.identity_stage is None:
+                self._start_identity_stage()
             self._current_packet = snapshot
             self._pending_generated_events = []
             frame = snapshot.frame.copy()
@@ -524,22 +674,28 @@ class VisionSession:
                     print(f"Identity ready  : {gallery['ready_ms']:.0f} ms")
                     self._gallery_status_logged = True
             
-            timestamp_ms = self.pose_timestamp_adapter.convert(snapshot.source_time_s)
+            timestamp_ms = self.pose_timestamp_adapter.convert(
+                snapshot.source_time_s, snapshot.source_epoch)
 
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
             self._pose_submissions[timestamp_ms] = PoseSubmission(
                 snapshot.source_time_s, snapshot.sequence, time.perf_counter(), frame.copy(),
-                snapshot.source_frame_index, snapshot.wall_time_utc)
+                snapshot.source_frame_index, snapshot.wall_time_utc,
+                snapshot.source_epoch, snapshot.frame)
             while len(self._pose_submissions) > 8:
                 self._pose_submissions.pop(next(iter(self._pose_submissions)))
             self.pose_model.detect_async(mp_image, timestamp_ms)
 
             pose_packet = self.pose_store.latest()
-            new_pose_packet = bool(pose_packet and pose_packet.frame_sequence > self._last_pose_sequence)
+            new_pose_packet = bool(
+                pose_packet
+                and pose_packet.source_epoch == self._active_source_epoch
+                and pose_packet.frame_sequence > self._last_pose_sequence)
             if new_pose_packet:
                 self._last_pose_sequence = pose_packet.frame_sequence
                 self._event_frame_sequence = pose_packet.frame_sequence
                 self._event_source_time_s = pose_packet.source_time_s
+                self._event_source_epoch = pose_packet.source_epoch
                 self._latest_detection = None
             if new_pose_packet and pose_packet.result.pose_landmarks:
                 landmarks = pose_packet.result.pose_landmarks[0]
@@ -571,7 +727,7 @@ class VisionSession:
                     self.identity_stage.update_presence(None, pose_packet.source_time_s)
                     if identity_before.state != self.identity_stage.result.state and self.log_level in {"debug", "info"}:
                         label = identity_before.name or identity_before.state.value
-                        print(f"[Identity] {label} left scene → reset")
+                        print(f"[Identity] {label} left scene -> reset")
                 if self.pose_samples:
                     last_kpts = self.pose_samples[-1].keypoints.copy()
                 else:
@@ -595,6 +751,7 @@ class VisionSession:
             cv2.putText(frame, f"Buffer: {len(self.pose_samples)} frames / 2.0s", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
             self.total_vision_ms = (time.perf_counter() - vision_started) * 1000.0
+            self._profile_cycle.append((time.monotonic(), self.total_vision_ms))
             if new_pose_packet:
                 fall_state = self.pending_event["state"] if self.pending_event else "CLEAR"
                 fall_confidence = self.pending_event["conf"] if self.pending_event else None
@@ -602,7 +759,7 @@ class VisionSession:
                     camera_id=self.config.camera_id,
                     frame_sequence=pose_packet.frame_sequence,
                     source_frame_index=pose_packet.source_frame_index,
-                    source_epoch=self.config.source_epoch,
+                    source_epoch=pose_packet.source_epoch,
                     source_time_s=pose_packet.source_time_s,
                     captured_wall_time=pose_packet.wall_time_utc,
                     current_action=self.current_action,
@@ -612,12 +769,32 @@ class VisionSession:
                     generated_events=tuple(self._pending_generated_events),
                     stage_metrics={"pose_callback_latency_ms": self.pose_inference_ms,
                                    "sda_gcn_inference_ms": self.current_sda_gcn_ms,
+                                   "sda_gcn_inference_started_monotonic_s": (
+                                       self.action_model.last_started_monotonic_s
+                                       if self.current_sda_gcn_ms is not None else None),
+                                   "sda_gcn_inference_finished_monotonic_s": (
+                                       self.action_model.last_finished_monotonic_s
+                                       if self.current_sda_gcn_ms is not None else None),
+                                   "sda_gcn_invocation_count": self.action_model.invocation_count,
                                    "identity_inference_ms": self.current_identity_ms,
+                                   "identity_inference_started_monotonic_s": (
+                                       self.identity_stage.result.inference_started_monotonic_s
+                                       if self.current_identity_ms is not None and self.identity_stage else None),
+                                   "identity_inference_finished_monotonic_s": (
+                                       self.identity_stage.result.inference_finished_monotonic_s
+                                       if self.current_identity_ms is not None and self.identity_stage else None),
                                    "total_vision_ms": self.total_vision_ms,
-                                   "effective_fps": self.effective_fps},
+                                   "effective_fps": self.effective_fps,
+                                   "scheduler_deadline_misses": scheduler.deadline_miss_count,
+                                   "capture_frames_dropped": capture_dropped},
                 )
                 if self.callbacks.on_result:
                     self.callbacks.on_result(self.latest_result)
+                if self.callbacks.on_result_frame:
+                    callback_started = time.perf_counter()
+                    self.callbacks.on_result_frame(pose_packet.source_frame, self.latest_result)
+                    self._profile_result_callback.append(
+                        (time.monotonic(), (time.perf_counter() - callback_started) * 1000.0))
             if self.callbacks.on_preview and self.latest_result:
                 self.callbacks.on_preview(frame, self.latest_result)
             fps_window_frames += 1
@@ -653,13 +830,13 @@ class VisionSession:
                 fps_window_frames = 0
                 sda_window_samples.clear()
                 identity_window_samples.clear()
+            self._scheduler_deadline_misses = scheduler.deadline_miss_count
+            self._capture_frames_dropped = capture_dropped
             
         if metadata.kind == SourceKind.VIDEO_FILE:
             final_packet = self.frame_source.store.latest()
             print(f"[Source EOF] source_time={final_packet.source_time_s:.3f}s | "
                   f"playback_wall={self.frame_source.playback_elapsed_s:.3f}s")
-        self.shutdown()
-
     def shutdown(self):
         self._stop_requested = True
         if self.frame_source:
@@ -671,6 +848,25 @@ class VisionSession:
         if self.pose_model:
             self.pose_model.close()
             self.pose_model = None
+        if getattr(self, "action_model", None):
+            self.action_model.close()
+            self.action_model = None
     def request_stop(self):
         self._stop_requested = True
+        source = self.frame_source
+        if source is not None:
+            source.request_stop()
+
+    def performance_profile(self) -> dict:
+        """Return bounded monotonic timing samples without persistent frame data."""
+        return {
+            "source_callback": list(self._profile_source_callback),
+            "result_callback": list(self._profile_result_callback),
+            "pose": list(self._profile_pose),
+            "sda_gcn": list(self._profile_sda),
+            "identity": list(self._profile_identity),
+            "cycle": list(self._profile_cycle),
+            "scheduler_deadline_misses": self._scheduler_deadline_misses,
+            "capture_frames_dropped": self._capture_frames_dropped,
+        }
 

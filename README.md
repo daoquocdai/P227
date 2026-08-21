@@ -58,6 +58,7 @@ python -m venv .venv
 python -m pip install --upgrade pip
 python -m pip install -r requirements/vision-intel.txt
 python -m pip install --no-deps -r requirements/vision-identity.txt
+python -m pip install -e .\SDA-GCN
 cd frontend
 npm.cmd ci
 cd ..

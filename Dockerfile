@@ -17,9 +17,11 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 COPY requirements ./requirements
+COPY SDA-GCN ./SDA-GCN
 RUN python -m pip install --upgrade pip setuptools wheel \
     && python -m pip install -r requirements/vision-cpu.txt \
-    && python -m pip install --no-deps -r requirements/vision-identity.txt
+    && python -m pip install --no-deps -r requirements/vision-identity.txt \
+    && python -m pip install -e ./SDA-GCN
 
 
 FROM python:3.11-slim AS runtime

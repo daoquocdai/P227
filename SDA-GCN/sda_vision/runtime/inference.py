@@ -52,6 +52,11 @@ class ActionInference:
         self.compiled_model = None
         self.input_port = None
         self.last_inference_ms = 0.0
+        self.last_started_monotonic_s = None
+        self.last_finished_monotonic_s = None
+        self.last_started_wall_time_s = None
+        self.last_finished_wall_time_s = None
+        self.invocation_count = 0
         initialized_at = time.perf_counter()
         fingerprint = hashlib.sha256(weights_path.read_bytes())
         for name, value in self.model.state_dict().items():
@@ -62,6 +67,7 @@ class ActionInference:
         self(np.zeros(self.INPUT_SHAPE, dtype=np.float32))
         self.model_warmup_ms = (time.perf_counter() - warmed_at) * 1000.0
         self.last_inference_ms = 0.0
+        self.invocation_count = 0
 
     def _initialize(self, spec: BackendSpec, cache_dir: Path, fingerprint: str) -> StageSpec:
         if spec.backend == "openvino":
@@ -96,6 +102,8 @@ class ActionInference:
 
     def __call__(self, data: np.ndarray | torch.Tensor) -> torch.Tensor:
         started = time.perf_counter()
+        self.last_started_monotonic_s = started
+        self.last_started_wall_time_s = time.time()
         if self.compiled_model is not None:
             array = data.detach().cpu().numpy() if isinstance(data, torch.Tensor) else np.asarray(data)
             result = self.compiled_model({self.input_port: array.astype(np.float32, copy=False)})
@@ -117,8 +125,17 @@ class ActionInference:
                 tensor = tensor.cpu().float()
                 with torch.inference_mode():
                     output = self.model(tensor).float()
-        self.last_inference_ms = (time.perf_counter() - started) * 1000.0
+        self.last_finished_monotonic_s = time.perf_counter()
+        self.last_finished_wall_time_s = time.time()
+        self.last_inference_ms = (self.last_finished_monotonic_s - started) * 1000.0
+        self.invocation_count += 1
         return output
+
+    def close(self) -> None:
+        """Release native accelerator objects deterministically on Windows."""
+        self.input_port = None
+        self.compiled_model = None
+        self.model = None
 
 
 def choose_onnx_providers(spec: BackendSpec, available: list[str]) -> tuple[list, StageSpec]:

@@ -32,9 +32,10 @@ class Settings(BaseSettings):
     # Explicit test/demo control. Empty means the production mock emits no events.
     mock_vision_event_frame_ids: str = ""
 
-    # Production has one canonical vision implementation. Mock is test-only.
-    vision_engine: Literal["canonical", "mock"] = "canonical"
+    # SDA is the production runtime. Canonical remains a temporary legacy/test option.
+    vision_engine: Literal["sda", "canonical", "mock"] = "sda"
     vision_device: str = "auto"
+    vision_fps: float = Field(default=15.0, gt=0)
     vision_yolo_path: Path = VISION_ROOT / "yolov8n.pt"
     vision_config_path: Path = SDA_GCN_ROOT / "config" / "production.yaml"
     vision_checkpoint_path: Path = SDA_GCN_ROOT / "weights" / "fall-detection-joint.pt"
@@ -50,11 +51,11 @@ class Settings(BaseSettings):
     @classmethod
     def validate_vision_device(cls, value: str) -> str:
         normalized = value.strip().lower()
-        if normalized in {"auto", "cpu", "cuda"}:
+        if normalized in {"auto", "cpu", "cuda", "amd", "intel"}:
             return normalized
         if normalized.startswith("cuda:") and normalized[5:].isdigit():
             return normalized
-        raise ValueError("VISION_DEVICE must be auto, cpu, cuda, or cuda:N")
+        raise ValueError("VISION_DEVICE must be auto, cpu, cuda, cuda:N, amd, or intel")
 
     # LLM
     openai_api_key: str = ""

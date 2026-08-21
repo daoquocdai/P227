@@ -46,6 +46,7 @@ install-backend: ## Install Python dependencies into .venv
 	$(PYTHON) -m pip install --upgrade pip
 	$(PYTHON) -m pip install -r $(VISION_REQUIREMENTS)
 	$(PYTHON) -m pip install --no-deps -r $(VISION_IDENTITY_REQUIREMENTS)
+	$(PYTHON) -m pip install -e ./SDA-GCN
 
 install-frontend: ## Install exact frontend dependencies from package-lock.json
 	cd $(FRONTEND_DIR) && $(NPM) ci

@@ -55,6 +55,17 @@ class VisionFrameResult:
 
 
 @dataclass(frozen=True, slots=True)
+class VisionSourceFrame:
+    camera_id: str
+    frame_sequence: int
+    source_frame_index: int | None
+    source_epoch: int
+    source_time_s: float
+    captured_wall_time: datetime | None
+    frame: object
+
+
+@dataclass(frozen=True, slots=True)
 class FrameTransform:
     source_width: int
     source_height: int
@@ -86,4 +97,3 @@ class FrameTransform:
                 max(0, min(self.source_height, mapped[1])),
                 max(0, min(self.source_width, mapped[2])),
                 max(0, min(self.source_height, mapped[3])))
-

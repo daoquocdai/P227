@@ -12,6 +12,9 @@ class VisionSessionConfig:
     camera_id: str = "standalone-camera"
     camera_location: str = "SDA-GCN Standalone"
     source_epoch: int = 0
+    loop_video: bool = False
+    inference_enabled: bool = True
+    stream_reconnect_delay: float = 1.0
     device: str = "auto"
     identity_enabled: bool = True
     vision_fps: float = 15.0
@@ -23,4 +26,3 @@ class VisionSessionConfig:
     preview: str = "none"
     raw_classifier: bool = False
     package_root: Path | None = None
-

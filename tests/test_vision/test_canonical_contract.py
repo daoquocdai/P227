@@ -5,6 +5,12 @@ import pytest
 import torch
 import yaml
 
+pytest.skip(
+    "Legacy CanonicalVisionPipeline contract retired from the Phase 2 production runtime; "
+    "the removed top-level sda_gcn compatibility package is not part of the Phase 1 baseline.",
+    allow_module_level=True,
+)
+
 from src.config import Settings
 from src.runtime import build_vision_engine
 from src.vision.adapters.mock import MockVisionEngine

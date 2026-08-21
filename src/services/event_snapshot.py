@@ -37,6 +37,7 @@ def blur_faces(frame, face_boxes):
 
 
 def _source_person_boxes(result):
+    source_space = result.metadata.get("bbox_coordinate_space") == "source_pixels"
     geometry = result.metadata.get("geometry", {})
     scale = float(geometry.get("scale", 1.0))
     pad_x = float(geometry.get("pad_x", 0.0))
@@ -48,6 +49,9 @@ def _source_person_boxes(result):
         if detection.bbox_xyxy is None:
             continue
         x1, y1, x2, y2 = detection.bbox_xyxy
+        if source_space or detection.metadata.get("bbox_coordinate_space") == "source_pixels":
+            boxes.append((x1, y1, x2, y2, detection))
+            continue
         boxes.append(
             (
                 (x1 - pad_x) / scale,
@@ -185,7 +189,10 @@ def _exact_source_face_boxes(result):
         face_box = metadata.get("identity_face_bbox_xyxy")
         if not isinstance(face_box, (list, tuple)) or len(face_box) != 4:
             continue
-        # InsightFace coordinates are relative to the padded person crop.
+        if metadata.get("identity_face_bbox_coordinate_space") == "source_pixels":
+            boxes.append(tuple(face_box))
+            continue
+        # Legacy InsightFace coordinates are relative to the padded person crop.
         if detection.bbox_xyxy is None:
             continue
         person_x1, person_y1, _, _ = detection.bbox_xyxy

@@ -84,6 +84,7 @@ thiết đã nằm trong profile; tùy chọn này ngăn InsightFace kéo thêm 
 
 ```cmd
 python -m pip install --no-deps -r requirements/vision-identity.txt
+python -m pip install -e .\SDA-GCN
 python -m pip check
 python -m pip list | findstr /I "insightface onnxruntime opencv torch torchvision"
 ```

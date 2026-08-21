@@ -199,7 +199,7 @@ async def test_stream_renders_a_fresh_latest_result_on_a_newer_raw_frame(monkeyp
         rendered_result_ids.append(vision_result.frame_id)
         return frame
 
-    monkeypatch.setattr("src.vision.renderer.render_vision", recording_renderer)
+    monkeypatch.setattr("src.presentation.vision_overlay.render_vision", recording_renderer)
     stream = StreamService(hub, vision=manager, processed_frame_hub=processed_hub)
 
     async def connected():
@@ -286,7 +286,7 @@ async def test_running_stream_hides_identity_immediately_after_camera_gate_is_of
         observed.append(flags["show_identity"])
         return frame
 
-    monkeypatch.setattr("src.vision.renderer.render_vision", recording_renderer)
+    monkeypatch.setattr("src.presentation.vision_overlay.render_vision", recording_renderer)
     stream = StreamService(hub, vision=manager)
 
     async def connected():

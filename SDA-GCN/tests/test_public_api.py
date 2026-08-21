@@ -1,7 +1,13 @@
 import multiprocessing as mp
+from collections import deque
 from pathlib import Path
 import sys
+import tempfile
+import threading
 import unittest
+
+import cv2
+import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -11,6 +17,8 @@ from sda_vision import (VisionCallbacks, VisionDetection, VisionEvent,
 from sda_vision.cli import parse_args
 from sda_vision.contracts import FrameTransform
 from sda_vision.runtime.identity import _replace_latest
+from sda_vision.runtime.identity import IdentityResult, IdentityState
+from sda_vision.runtime.timing import PoseSample
 
 
 class PublicImportTests(unittest.TestCase):
@@ -87,6 +95,83 @@ class ShutdownTests(unittest.TestCase):
         session.shutdown()
         session.shutdown()
         self.assertEqual((source.calls, identity.calls, pose.calls), (1, 1, 1))
+
+
+class SessionControlTests(unittest.TestCase):
+    def test_vision_off_keeps_source_rate_callback_active(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "source.avi"
+            writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), 20, (64, 48))
+            self.assertTrue(writer.isOpened())
+            for index in range(11):
+                writer.write(np.full((48, 64, 3), index, dtype=np.uint8))
+            writer.release()
+            received = []
+            session = VisionSession(
+                VisionSessionConfig(source=str(path), inference_enabled=False, preview="none"),
+                VisionCallbacks(on_source_frame=received.append),
+            )
+            session.run()
+            self.assertEqual(len(received), 11)
+            self.assertEqual(session.frame_count, 0)
+
+    def test_reenable_clears_temporal_state(self):
+        session = VisionSession(VisionSessionConfig(inference_enabled=False, preview="none"))
+        session.pose_samples = deque([PoseSample(1.0, np.ones((25, 3)))])
+        session.pending_event = {"state": "WARNING"}
+        session.set_inference_enabled(True)
+        self.assertEqual(len(session.pose_samples), 0)
+        self.assertIsNone(session.pending_event)
+
+    def test_source_epoch_reset_clears_fall_pending_state(self):
+        session = VisionSession(VisionSessionConfig(inference_enabled=False, preview="none"))
+        session.pose_samples.append(PoseSample(1.0, np.ones((25, 3))))
+        session.pending_event = {"state": "FALL_CONFIRMED"}
+        session._reset_temporal_state()
+        self.assertFalse(session.pose_samples)
+        self.assertIsNone(session.pending_event)
+
+    class FakeIdentity:
+        frames_processed = 1
+        def __init__(self, result):
+            self.result = result
+            self.stopped = False
+        def submit(self, *_args, **_kwargs):
+            return True
+        def poll(self):
+            return self.result
+        def stop(self):
+            self.stopped = True
+
+    def _face_session(self, result):
+        session = VisionSession.__new__(VisionSession)
+        session.identity_enabled = True
+        session.identity_stage = self.FakeIdentity(result)
+        session._control_lock = threading.RLock()
+        session._frame_transform = FrameTransform(1280, 720)
+        session.log_level = "error"
+        session.current_identity_ms = None
+        session._last_identity_event_timestamp = result.timestamp
+        session._latest_detection = None
+        return session
+
+    def test_exact_face_bbox_is_mapped_only_for_matching_frame(self):
+        result = IdentityResult(
+            IdentityState.LOCKED_KNOWN, "Dai", 0.9, 1.0, (100, 100, 500, 600),
+            10.0, 2.0, 7, (10, 20, 110, 120), 7)
+        session = self._face_session(result)
+        frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+        session.process_person(frame, 100, 100, 500, 600, None,
+                               frame_sequence=7, source_time_s=2.0)
+        self.assertEqual(session._latest_detection.face_bbox, (110, 120, 210, 220))
+
+        stale = IdentityResult(
+            IdentityState.LOCKED_KNOWN, "Dai", 0.9, 1.0, (100, 100, 500, 600),
+            10.0, 2.0, 6, (10, 20, 110, 120), 6)
+        session = self._face_session(stale)
+        session.process_person(frame, 100, 100, 500, 600, None,
+                               frame_sequence=7, source_time_s=2.0)
+        self.assertIsNone(session._latest_detection.face_bbox)
 
 
 class WindowsSpawnImportTests(unittest.TestCase):

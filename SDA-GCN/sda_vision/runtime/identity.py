@@ -37,6 +37,12 @@ class IdentityResult:
     inference_ms: float | None = None
     source_time_s: float | None = None
     frame_sequence: int | None = None
+    face_bbox: tuple[int, int, int, int] | None = None
+    face_bbox_frame_sequence: int | None = None
+    inference_started_monotonic_s: float | None = None
+    inference_finished_monotonic_s: float | None = None
+    inference_started_wall_time_s: float | None = None
+    inference_finished_wall_time_s: float | None = None
 
 
 def _replace_latest(target_queue, item):
@@ -117,21 +123,30 @@ def _identity_process(input_queue, result_queue, status_queue, stop_event, ready
         except queue.Empty:
             continue
         started = time.perf_counter()
+        started_wall = time.time()
         faces = app.get(job["crop"])
-        name, score = None, 0.0
+        name, score, main_face = None, 0.0, None
         if faces:
             main_face = max(faces, key=lambda face: (face.bbox[2] - face.bbox[0]) * (face.bbox[3] - face.bbox[1]))
             for candidate, embedding in known.items():
                 candidate_score = _similarity(embedding, main_face.embedding)
                 if candidate_score > score:
                     name, score = candidate, candidate_score
+        finished = time.perf_counter()
+        finished_wall = time.time()
         payload = {
             "known": bool(name is not None and score > threshold),
             "face_found": bool(faces), "name": name, "confidence": score,
             "bbox": job["bbox"], "timestamp": time.monotonic(),
-            "inference_ms": (time.perf_counter() - started) * 1000.0,
+            "inference_ms": (finished - started) * 1000.0,
+            "inference_started_monotonic_s": started,
+            "inference_finished_monotonic_s": finished,
+            "inference_started_wall_time_s": started_wall,
+            "inference_finished_wall_time_s": finished_wall,
             "source_time_s": job.get("source_time_s"),
             "frame_sequence": job.get("frame_sequence"),
+            "face_bbox": (tuple(int(round(value)) for value in main_face.bbox)
+                          if main_face is not None else None),
         }
         if identity_debug:
             print("\n[Identity Match]")
@@ -257,13 +272,13 @@ class IdentityStage:
             return self.result
         if latest["known"]:
             # KNOWN is an explicit successful transition; locking is immediate.
-            self.result = IdentityResult(IdentityState.KNOWN, latest["name"], latest["confidence"], latest["timestamp"], latest["bbox"], latest["inference_ms"], latest.get("source_time_s"), latest.get("frame_sequence"))
-            self.result = IdentityResult(IdentityState.LOCKED_KNOWN, latest["name"], latest["confidence"], latest["timestamp"], latest["bbox"], latest["inference_ms"], latest.get("source_time_s"), latest.get("frame_sequence"))
+            self.result = IdentityResult(IdentityState.KNOWN, latest["name"], latest["confidence"], latest["timestamp"], latest["bbox"], latest["inference_ms"], latest.get("source_time_s"), latest.get("frame_sequence"), latest.get("face_bbox"), latest.get("frame_sequence"), latest.get("inference_started_monotonic_s"), latest.get("inference_finished_monotonic_s"), latest.get("inference_started_wall_time_s"), latest.get("inference_finished_wall_time_s"))
+            self.result = IdentityResult(IdentityState.LOCKED_KNOWN, latest["name"], latest["confidence"], latest["timestamp"], latest["bbox"], latest["inference_ms"], latest.get("source_time_s"), latest.get("frame_sequence"), latest.get("face_bbox"), latest.get("frame_sequence"), latest.get("inference_started_monotonic_s"), latest.get("inference_finished_monotonic_s"), latest.get("inference_started_wall_time_s"), latest.get("inference_finished_wall_time_s"))
             self.failed_attempts = 0
         else:
             self.failed_attempts += 1
             state = IdentityState.LOCKED_UNKNOWN if self.failed_attempts >= self.max_unknown_attempts else IdentityState.UNKNOWN
-            self.result = IdentityResult(state, None, latest["confidence"], latest["timestamp"], latest["bbox"], latest["inference_ms"], latest.get("source_time_s"), latest.get("frame_sequence"))
+            self.result = IdentityResult(state, None, latest["confidence"], latest["timestamp"], latest["bbox"], latest["inference_ms"], latest.get("source_time_s"), latest.get("frame_sequence"), latest.get("face_bbox"), latest.get("frame_sequence"), latest.get("inference_started_monotonic_s"), latest.get("inference_finished_monotonic_s"), latest.get("inference_started_wall_time_s"), latest.get("inference_finished_wall_time_s"))
         return self.result
 
     def poll_status(self):
