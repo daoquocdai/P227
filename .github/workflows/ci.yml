@@ -23,18 +23,20 @@ jobs:
             requirements/dev.txt
             requirements/vision-cpu.txt
             requirements/vision-identity.txt
+            SDA-GCN/pyproject.toml
 
       - name: Install dependencies
         run: |
-          pip install -r requirements/vision-cpu.txt
-          pip install -r requirements/dev.txt
-          pip install --no-deps -r requirements/vision-identity.txt
+          python -m pip install -r requirements/vision-cpu.txt
+          python -m pip install -r requirements/dev.txt
+          python -m pip install --no-deps -r requirements/vision-identity.txt
+          python -m pip install -e ./SDA-GCN
 
       - name: Lint with ruff
-        run: ruff check src/ tests/
+        run: python -m ruff check src tests
 
       - name: Run tests
-        run: pytest tests/ -v --tb=short
+        run: python -m pytest tests/ -v --tb=short
         env:
           APP_ENV: test
           OPENAI_API_KEY: test-key
