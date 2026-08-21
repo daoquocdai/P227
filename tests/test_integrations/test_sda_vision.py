@@ -4,16 +4,16 @@ from types import SimpleNamespace
 
 import numpy as np
 from sda_vision import (
-    VisionDetection as SdaDetection,
-)
-from sda_vision import (
-    VisionEvent as SdaEvent,
-)
-from sda_vision import (
     IdentityGalleryEntry,
     IdentityGallerySnapshot,
     VisionFrameResult,
     VisionSourceFrame,
+)
+from sda_vision import (
+    VisionDetection as SdaDetection,
+)
+from sda_vision import (
+    VisionEvent as SdaEvent,
 )
 
 from src.integrations.sda_vision import (
@@ -27,16 +27,31 @@ from src.services.frame_hub import FrameHub
 
 def sda_result(*, sequence=7, epoch=2, events=()):
     return VisionFrameResult(
-        camera_id="cam", frame_sequence=sequence, source_frame_index=6,
-        source_epoch=epoch, source_time_s=0.2, captured_wall_time=datetime.now(UTC),
-        current_action="Khong nga", fall_state="CLEAR", fall_confidence=None,
-        detections=(SdaDetection(
-            "person", 0.9, (10, 20, 100, 200), identity_state="LOCKED_KNOWN",
-            identity_status="KNOWN", identity_name="Mai", identity_confidence=0.91,
-            identity_person_id="person-1",
-            identity_face_verified=True,
-            face_bbox=(30, 40, 60, 80), association_id=3,
-        ),), generated_events=events,
+        camera_id="cam",
+        frame_sequence=sequence,
+        source_frame_index=6,
+        source_epoch=epoch,
+        source_time_s=0.2,
+        captured_wall_time=datetime.now(UTC),
+        current_action="Khong nga",
+        fall_state="CLEAR",
+        fall_confidence=None,
+        detections=(
+            SdaDetection(
+                "person",
+                0.9,
+                (10, 20, 100, 200),
+                identity_state="LOCKED_KNOWN",
+                identity_status="KNOWN",
+                identity_name="Mai",
+                identity_confidence=0.91,
+                identity_person_id="person-1",
+                identity_face_verified=True,
+                face_bbox=(30, 40, 60, 80),
+                association_id=3,
+            ),
+        ),
+        generated_events=events,
         stage_metrics={"effective_fps": 15.0, "total_vision_ms": 48.0},
     )
 
@@ -63,15 +78,17 @@ def test_result_adapter_keeps_source_space_bbox_and_exact_face_correlation():
 
 def test_registry_broadcasts_latest_gallery_to_active_sessions():
     class Session:
-        def __init__(self): self.snapshots = []
-        def update_identity_gallery(self, snapshot): self.snapshots.append(snapshot)
+        def __init__(self):
+            self.snapshots = []
+
+        def update_identity_gallery(self, snapshot):
+            self.snapshots.append(snapshot)
 
     settings = SimpleNamespace(vision_identity_enabled=False)
     registry = SdaSessionRegistry(FrameHub(), settings=settings)
     session = Session()
     registry._records["cam"] = SimpleNamespace(session=session)
-    snapshot = IdentityGallerySnapshot(
-        4, (IdentityGalleryEntry("person-1", "Mai", np.ones(4)),))
+    snapshot = IdentityGallerySnapshot(4, (IdentityGalleryEntry("person-1", "Mai", np.ones(4)),))
     result = registry.update_identity_gallery(snapshot)
     assert session.snapshots == [snapshot]
     assert registry._identity_gallery is snapshot
@@ -86,11 +103,8 @@ def test_identity_off_strips_identity_facts_and_events():
 
 
 def test_event_adapter_preserves_exact_source_correlation_once():
-    event = SdaEvent(
-        "FALL_CONFIRMED", 0.9, 7, 0.2, person_bbox=(10, 20, 100, 200),
-        metadata={"origin": "sda"})
-    mapped = map_vision_result(
-        sda_result(events=(event,)), camera_location="Kitchen", identity_enabled=True)
+    event = SdaEvent("FALL_CONFIRMED", 0.9, 7, 0.2, person_bbox=(10, 20, 100, 200), metadata={"origin": "sda"})
+    mapped = map_vision_result(sda_result(events=(event,)), camera_location="Kitchen", identity_enabled=True)
     assert len(mapped.events) == 1
     metadata = mapped.events[0].metadata
     assert metadata["frame_id"] == 7
@@ -136,8 +150,7 @@ def test_one_sda_event_is_dispatched_once_off_the_callback_thread(monkeypatch):
     monkeypatch.setattr("src.integrations.sda_vision.attach_event_snapshots", lambda packet, result: None)
     event = SdaEvent("FALL_CONFIRMED", 0.9, 7, 0.2)
     result = map_vision_result(sda_result(events=(event,)), camera_location="Kitchen", identity_enabled=True)
-    packet = map_source_frame(VisionSourceFrame(
-        "cam", 7, 6, 2, 0.2, None, np.zeros((2, 2, 3), np.uint8)))
+    packet = map_source_frame(VisionSourceFrame("cam", 7, 6, 2, 0.2, None, np.zeros((2, 2, 3), np.uint8)))
     worker.start()
     assert worker.submit(packet, result)
     deadline = time.monotonic() + 1
@@ -155,18 +168,30 @@ def test_registry_separates_source_rate_from_result_rate_and_restart_epoch(monke
             self.config, self.callbacks = config, callbacks
             self.identity_enabled = config.identity_enabled
             self._stop_requested = False
+
         def run(self):
             observed_epochs.append(self.config.source_epoch)
             for index in range(30):
                 frame = np.full((2, 2, 3), index, np.uint8)
-                self.callbacks.on_source_frame(VisionSourceFrame(
-                    "cam", index + 1, index, self.config.source_epoch, index / 30, None, frame))
+                self.callbacks.on_source_frame(
+                    VisionSourceFrame("cam", index + 1, index, self.config.source_epoch, index / 30, None, frame)
+                )
                 if index % 2:
-                    self.callbacks.on_result_frame(frame, sda_result(sequence=index + 1, epoch=self.config.source_epoch))
-        def request_stop(self): self._stop_requested = True
-        def shutdown(self): self._stop_requested = True
-        def set_inference_enabled(self, enabled): pass
-        def set_identity_enabled(self, enabled): self.identity_enabled = enabled
+                    self.callbacks.on_result_frame(
+                        frame, sda_result(sequence=index + 1, epoch=self.config.source_epoch)
+                    )
+
+        def request_stop(self):
+            self._stop_requested = True
+
+        def shutdown(self):
+            self._stop_requested = True
+
+        def set_inference_enabled(self, enabled):
+            pass
+
+        def set_identity_enabled(self, enabled):
+            self.identity_enabled = enabled
 
     monkeypatch.setattr("src.integrations.sda_vision.VisionSession", FakeSession)
     settings = SimpleNamespace(vision_identity_enabled=False, vision_device="cpu", vision_fps=15.0, log_level="ERROR")

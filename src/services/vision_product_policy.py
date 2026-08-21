@@ -70,9 +70,7 @@ class VisionProductPolicy:
             metadata = detection.metadata
             track_id = detection.track_id
             assert track_id is not None
-            similarity, mismatch_score = unknown_identity_scores(
-                metadata.get("identity_similarity", 0.0)
-            )
+            similarity, mismatch_score = unknown_identity_scores(metadata.get("identity_similarity", 0.0))
             if mismatch_score < stranger_threshold:
                 continue
             key = (result.camera_id, source_epoch, track_id)
@@ -80,8 +78,7 @@ class VisionProductPolicy:
                 last_emitted = self._last_unknown.get(key)
                 last_fall = self._last_fall.get(fall_key)
                 if (last_emitted is not None and now - last_emitted < self._unknown_cooldown_seconds) or (
-                    last_fall is not None
-                    and now - last_fall < self._notification_cooldown_seconds
+                    last_fall is not None and now - last_fall < self._notification_cooldown_seconds
                 ):
                     continue
                 self._last_unknown[key] = now
@@ -113,7 +110,5 @@ class VisionProductPolicy:
         # on every locked-unknown observation, so it must use the lightweight
         # connection path while still reading thresholds live on every decision.
         with database_connection(initialize=False) as connection:
-            row = connection.execute(
-                "SELECT value_json FROM system_settings WHERE setting_key = 'general'"
-            ).fetchone()
+            row = connection.execute("SELECT value_json FROM system_settings WHERE setting_key = 'general'").fetchone()
         return json.loads(row["value_json"]) if row is not None else {}

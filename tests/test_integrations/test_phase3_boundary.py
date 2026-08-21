@@ -5,14 +5,16 @@ import pytest
 
 from src.runtime import LocalRuntime
 
-
 ROOT = Path(__file__).resolve().parents[2]
 
 
 def sda_settings():
     return SimpleNamespace(
-        vision_engine="sda", vision_identity_enabled=False,
-        vision_device="cpu", vision_fps=15.0, log_level="ERROR",
+        vision_engine="sda",
+        vision_identity_enabled=False,
+        vision_device="cpu",
+        vision_fps=15.0,
+        log_level="ERROR",
         vision_identity_process_priority="normal",
         vision_identity_cpu_affinity=None,
     )
@@ -28,35 +30,24 @@ def test_default_local_runtime_constructs_only_sda_facades(monkeypatch):
 
 def test_sda_initialization_failure_never_falls_back_to_legacy(monkeypatch):
     monkeypatch.setattr("src.runtime.get_settings", sda_settings)
-    legacy_called = False
-
-    def legacy(*_args, **_kwargs):
-        nonlocal legacy_called
-        legacy_called = True
 
     def fail(*_args, **_kwargs):
         raise RuntimeError("SDA unavailable")
 
-    monkeypatch.setattr("src.integrations.legacy_vision.build_legacy_runtime", legacy)
     monkeypatch.setattr("src.integrations.sda_vision.SdaSessionRegistry", fail)
     with pytest.raises(RuntimeError, match="SDA unavailable"):
         LocalRuntime()
-    assert legacy_called is False
 
 
 def test_runtime_has_no_active_legacy_runtime_construction():
     source = (ROOT / "src/runtime.py").read_text(encoding="utf-8")
-    assert "src.services.camera_runtime" not in source
     assert "src.services.synchronous_vision_manager" not in source
-    assert "src.services.vision_manager" not in source
+    assert "legacy_vision" not in source
     assert "CanonicalVisionPipeline" not in source
-    assert "CameraRuntime(" not in source
 
 
 def test_presentation_is_inference_free_and_does_not_import_vision_runtimes():
-    sources = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in (ROOT / "src/presentation").glob("*.py"))
+    sources = "\n".join(path.read_text(encoding="utf-8") for path in (ROOT / "src/presentation").glob("*.py"))
     assert "src.vision" not in sources
     assert "sda_vision" not in sources
     for forbidden in ("FaceAnalysis", "PoseLandmarker", "ActionInference", "detect(", ".get(image"):

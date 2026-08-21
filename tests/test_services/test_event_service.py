@@ -90,9 +90,7 @@ async def test_fall_bypasses_identity_lookup_and_is_broadcast(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("enabled,accepted,broadcasts", [(True, True, 1), (False, False, 0)])
-async def test_unknown_uses_persisted_identity_gate(
-    monkeypatch, enabled, accepted, broadcasts
-):
+async def test_unknown_uses_persisted_identity_gate(monkeypatch, enabled, accepted, broadcasts):
     unknown = event()
     unknown.event_type = "UNKNOWN_PERSON"
     publish = AsyncMock()
@@ -109,9 +107,7 @@ async def test_unknown_uses_persisted_identity_gate(
 
 
 @pytest.mark.asyncio
-async def test_optional_media_insert_failure_preserves_event_alert_and_broadcast(
-    monkeypatch, tmp_path
-):
+async def test_optional_media_insert_failure_preserves_event_alert_and_broadcast(monkeypatch, tmp_path):
     repository = SQLiteEventRepository()
     fall = event()
     fall.snapshot_path = "safe-fall.jpg"

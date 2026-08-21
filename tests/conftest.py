@@ -32,7 +32,7 @@ async def client(preserve_application_database, monkeypatch):
     """Async API client with native AI isolated at the application boundary."""
     monkeypatch.setattr(
         "src.main.LocalRuntime",
-        lambda event_dispatcher, mock_event_frame_ids: LocalRuntime(
+        lambda event_dispatcher: LocalRuntime(
             vision_engine=MockVisionEngine(),
             event_dispatcher=event_dispatcher,
         ),

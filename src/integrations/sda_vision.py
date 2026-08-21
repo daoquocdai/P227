@@ -59,21 +59,25 @@ def map_vision_result(result, *, camera_location: str, identity_enabled: bool) -
                     identity_face_bbox_frame_id=result.frame_sequence,
                     identity_face_bbox_coordinate_space="source_pixels",
                 )
-            detections.append(VisionDetection(
-                label=item.label,
-                confidence=float(item.confidence or 0.0),
-                bbox_xyxy=item.bbox,
-                track_id=track_id,
-                metadata=metadata,
-            ))
+            detections.append(
+                VisionDetection(
+                    label=item.label,
+                    confidence=float(item.confidence or 0.0),
+                    bbox_xyxy=item.bbox,
+                    track_id=track_id,
+                    metadata=metadata,
+                )
+            )
     else:
         for item in result.detections:
-            detections.append(VisionDetection(
-                label=item.label,
-                confidence=float(item.confidence or 0.0),
-                bbox_xyxy=item.bbox,
-                metadata={"bbox_coordinate_space": "source_pixels"},
-            ))
+            detections.append(
+                VisionDetection(
+                    label=item.label,
+                    confidence=float(item.confidence or 0.0),
+                    bbox_xyxy=item.bbox,
+                    metadata={"bbox_coordinate_space": "source_pixels"},
+                )
+            )
 
     events = []
     for item in result.generated_events:
@@ -162,9 +166,17 @@ class SdaEventMediaWorker:
         if not result.events:
             return True
         item = _EventMediaItem(
-            FramePacket(packet.camera_id, packet.frame_id, packet.captured_at, packet.frame,
-                        packet.source_timestamp, packet.source_time_kind, packet.source_epoch,
-                        packet.source_frame_index, packet.discontinuity),
+            FramePacket(
+                packet.camera_id,
+                packet.frame_id,
+                packet.captured_at,
+                packet.frame,
+                packet.source_timestamp,
+                packet.source_time_kind,
+                packet.source_epoch,
+                packet.source_frame_index,
+                packet.discontinuity,
+            ),
             result,
         )
         try:
@@ -174,8 +186,11 @@ class SdaEventMediaWorker:
                 self._max_queue_depth = max(self._max_queue_depth, self._queue.qsize())
             return True
         except queue.Full:
-            logger.error("SDA event-media queue full; delivering semantic event without snapshot camera=%s frame=%s",
-                         result.camera_id, result.frame_id)
+            logger.error(
+                "SDA event-media queue full; delivering semantic event without snapshot camera=%s frame=%s",
+                result.camera_id,
+                result.frame_id,
+            )
             if self._dispatcher is not None:
                 self._dispatcher.dispatch(result)
             return False
@@ -206,11 +221,13 @@ class SdaEventMediaWorker:
                     self._dispatcher.dispatch(result)
                 with self._profile_lock:
                     self._snapshot_samples.append((time.monotonic(), snapshot_elapsed_ms))
-                    self._profile_samples.append(
-                        (time.monotonic(), (time.perf_counter() - started) * 1000.0))
+                    self._profile_samples.append((time.monotonic(), (time.perf_counter() - started) * 1000.0))
             except Exception:
-                logger.exception("SDA downstream event processing failed camera=%s frame=%s",
-                                 item.result.camera_id, item.result.frame_id)
+                logger.exception(
+                    "SDA downstream event processing failed camera=%s frame=%s",
+                    item.result.camera_id,
+                    item.result.frame_id,
+                )
                 if self._dispatcher is not None:
                     self._dispatcher.dispatch(item.result)
             finally:
@@ -273,24 +290,30 @@ class SdaSessionRegistry:
             self._next_epoch[camera_id] = initial_epoch + 1
             identity_gallery = self._identity_gallery
         config = VisionSessionConfig(
-            source=str(source), camera_id=camera_id, camera_location=location or camera_id,
+            source=str(source),
+            camera_id=camera_id,
+            camera_location=location or camera_id,
             source_epoch=initial_epoch,
-            loop_video=bool(loop_video), inference_enabled=inference, identity_enabled=identity,
-            device=self.settings.vision_device, vision_fps=self.settings.vision_fps,
-            identity_process_priority=getattr(
-                self.settings, "vision_identity_process_priority", "normal"),
-            identity_cpu_affinity=getattr(
-                self.settings, "vision_identity_cpu_affinity", None),
-            preview="none", log_level=self.settings.log_level.lower(),
-            identity_gallery_mode="supplied", identity_gallery_snapshot=identity_gallery,
+            loop_video=bool(loop_video),
+            inference_enabled=inference,
+            identity_enabled=identity,
+            device=self.settings.vision_device,
+            vision_fps=self.settings.vision_fps,
+            identity_process_priority=getattr(self.settings, "vision_identity_process_priority", "normal"),
+            identity_cpu_affinity=getattr(self.settings, "vision_identity_cpu_affinity", None),
+            preview="none",
+            log_level=self.settings.log_level.lower(),
+            identity_gallery_mode="supplied",
+            identity_gallery_snapshot=identity_gallery,
         )
         callbacks = VisionCallbacks(
             on_source_frame=lambda frame: self._on_source(camera_id, frame),
             on_result_frame=lambda frame, result: self._on_result(camera_id, frame, result),
         )
         session = VisionSession(config, callbacks)
-        thread = threading.Thread(target=self._run_session, args=(camera_id,),
-                                  name=f"sda-session-{camera_id}", daemon=True)
+        thread = threading.Thread(
+            target=self._run_session, args=(camera_id,), name=f"sda-session-{camera_id}", daemon=True
+        )
         record = _SessionRecord(camera_id, str(source), location or camera_id, session, thread)
         with self._lock:
             self._records[camera_id] = record
@@ -336,17 +359,24 @@ class SdaSessionRegistry:
             if record is None:
                 return
             identity_enabled = self._identity_desired.get(camera_id, record.session.identity_enabled)
-            mapped = map_vision_result(sda_result, camera_location=record.location,
-                                       identity_enabled=identity_enabled)
-            if record.latest_result is None or (
-                mapped.metadata["source_epoch"], mapped.frame_id
-            ) >= (record.latest_result.metadata.get("source_epoch", 0), record.latest_result.frame_id):
+            mapped = map_vision_result(sda_result, camera_location=record.location, identity_enabled=identity_enabled)
+            if record.latest_result is None or (mapped.metadata["source_epoch"], mapped.frame_id) >= (
+                record.latest_result.metadata.get("source_epoch", 0),
+                record.latest_result.frame_id,
+            ):
                 record.latest_result = mapped
             record.processed_frames += 1
         if mapped.events:
-            packet = FramePacket(camera_id, mapped.frame_id, mapped.captured_at, exact_frame,
-                                 mapped.metadata["observation_time"], "media_timeline",
-                                 mapped.metadata["source_epoch"], mapped.metadata["source_frame_index"])
+            packet = FramePacket(
+                camera_id,
+                mapped.frame_id,
+                mapped.captured_at,
+                exact_frame,
+                mapped.metadata["observation_time"],
+                "media_timeline",
+                mapped.metadata["source_epoch"],
+                mapped.metadata["source_frame_index"],
+            )
             self._events.submit(packet, mapped)
 
     def stop_session(self, camera_id: str, remove_frame=True):
@@ -383,9 +413,16 @@ class SdaSessionRegistry:
             record = self._records.get(camera_id)
             if record is not None:
                 record.status, record.error = "error", error
-        return {"camera_id": camera_id, "status": "error", "error": error,
-                "frame_id": -1, "last_frame_at": None, "capture_fps": 0.0,
-                "source_frames_read": 0, "frames_published": 0}
+        return {
+            "camera_id": camera_id,
+            "status": "error",
+            "error": error,
+            "frame_id": -1,
+            "last_frame_at": None,
+            "capture_fps": 0.0,
+            "source_frames_read": 0,
+            "frames_published": 0,
+        }
 
     def camera_status(self, camera_id):
         with self._lock:
@@ -404,10 +441,16 @@ class SdaSessionRegistry:
             times = list(record.capture_times)
             span = times[-1] - times[0] if len(times) > 1 else 0.0
             fps = (len(times) - 1) / span if span > 0 else 0.0
-            return {"camera_id": camera_id, "status": status, "frame_id": record.frame_id,
-                    "last_frame_at": record.last_frame_at, "error": error,
-                    "capture_fps": fps, "source_frames_read": record.source_frames_read,
-                    "frames_published": record.frames_published}
+            return {
+                "camera_id": camera_id,
+                "status": status,
+                "frame_id": record.frame_id,
+                "last_frame_at": record.last_frame_at,
+                "error": error,
+                "capture_fps": fps,
+                "source_frames_read": record.source_frames_read,
+                "frames_published": record.frames_published,
+            }
 
     def vision_status(self, camera_id):
         with self._lock:
@@ -419,24 +462,35 @@ class SdaSessionRegistry:
             processed = 0 if record is None else record.processed_frames
             source = None if record is None else getattr(record.session, "frame_source", None)
             error = None if record is None else (record.error or getattr(source, "error", None))
-            status = "disabled" if not enabled else (
-                "waiting_for_source" if record is None or record.status in {"offline", "ended"}
-                else ("error" if error else "running"))
-            return {"camera_id": camera_id, "enabled": enabled, "status": status,
-                    "processed_frames": processed,
-                    "last_processed_frame_id": None if latest is None else latest.frame_id,
-                    "current_error": error, "identity_enabled": identity,
-                    "realtime": {
-                        "vision_frames_processed": processed,
-                        "vision_frames_offered": 0 if record is None else record.source_frames_read,
-                        "vision_frames_overwritten": 0,
-                        "vision_fps": metrics.get("effective_fps"),
-                        "vision_processing_latency_ms": metrics.get("total_vision_ms"),
-                        "vision_drop_ratio": None,
-                        "pending": 0,
-                        "max_pending": 1,
-                        **metrics,
-                    }}
+            status = (
+                "disabled"
+                if not enabled
+                else (
+                    "waiting_for_source"
+                    if record is None or record.status in {"offline", "ended"}
+                    else ("error" if error else "running")
+                )
+            )
+            return {
+                "camera_id": camera_id,
+                "enabled": enabled,
+                "status": status,
+                "processed_frames": processed,
+                "last_processed_frame_id": None if latest is None else latest.frame_id,
+                "current_error": error,
+                "identity_enabled": identity,
+                "realtime": {
+                    "vision_frames_processed": processed,
+                    "vision_frames_offered": 0 if record is None else record.source_frames_read,
+                    "vision_frames_overwritten": 0,
+                    "vision_fps": metrics.get("effective_fps"),
+                    "vision_processing_latency_ms": metrics.get("total_vision_ms"),
+                    "vision_drop_ratio": None,
+                    "pending": 0,
+                    "max_pending": 1,
+                    **metrics,
+                },
+            }
 
     def is_running(self, camera_id):
         with self._lock:
@@ -477,32 +531,66 @@ class SdaSessionRegistry:
         for session in sessions:
             session.update_identity_gallery(snapshot)
         self._gallery_update_ms = (time.perf_counter() - started) * 1000.0
-        return {"version": snapshot.version, "entries": len(snapshot.entries),
-                "sessions": len(sessions), "update_ms": self._gallery_update_ms}
+        return {
+            "version": snapshot.version,
+            "entries": len(snapshot.entries),
+            "sessions": len(sessions),
+            "update_ms": self._gallery_update_ms,
+        }
 
     def latest_result(self, camera_id):
         with self._lock:
             record = self._records.get(camera_id)
             return None if record is None else record.latest_result
 
+
 class SdaCameraFacade:
-    def __init__(self, registry): self.registry = registry
+    def __init__(self, registry):
+        self.registry = registry
+
     def start(self, camera_id, source, loop_video=True, location=None):
         return self.registry.start_session(camera_id, source, loop_video=loop_video, location=location)
-    def stop(self, camera_id, remove_frame=True): return self.registry.stop_session(camera_id, remove_frame)
-    def stop_all(self): return self.registry.stop_all()
-    def get_status(self, camera_id): return self.registry.camera_status(camera_id)
-    def is_running(self, camera_id): return self.registry.is_running(camera_id)
-    def set_unavailable(self, camera_id, error): return self.registry.set_unavailable(camera_id, error)
+
+    def stop(self, camera_id, remove_frame=True):
+        return self.registry.stop_session(camera_id, remove_frame)
+
+    def stop_all(self):
+        return self.registry.stop_all()
+
+    def get_status(self, camera_id):
+        return self.registry.camera_status(camera_id)
+
+    def is_running(self, camera_id):
+        return self.registry.is_running(camera_id)
+
+    def set_unavailable(self, camera_id, error):
+        return self.registry.set_unavailable(camera_id, error)
 
 
 class SdaVisionFacade:
-    def __init__(self, registry): self.registry = registry
-    def start(self): return self.registry.start()
-    def stop(self): return None
-    def enable(self, camera_id): return self.registry.set_vision_enabled(camera_id, True)
-    def disable(self, camera_id): return self.registry.set_vision_enabled(camera_id, False)
-    def get_status(self, camera_id): return self.registry.vision_status(camera_id)
-    def set_identity_enabled(self, camera_id, enabled): return self.registry.set_identity_enabled(camera_id, enabled)
-    def is_identity_enabled(self, camera_id): return self.registry.identity_enabled(camera_id)
-    def latest_result(self, camera_id): return self.registry.latest_result(camera_id)
+    def __init__(self, registry):
+        self.registry = registry
+
+    def start(self):
+        return self.registry.start()
+
+    def stop(self):
+        return None
+
+    def enable(self, camera_id):
+        return self.registry.set_vision_enabled(camera_id, True)
+
+    def disable(self, camera_id):
+        return self.registry.set_vision_enabled(camera_id, False)
+
+    def get_status(self, camera_id):
+        return self.registry.vision_status(camera_id)
+
+    def set_identity_enabled(self, camera_id, enabled):
+        return self.registry.set_identity_enabled(camera_id, enabled)
+
+    def is_identity_enabled(self, camera_id):
+        return self.registry.identity_enabled(camera_id)
+
+    def latest_result(self, camera_id):
+        return self.registry.latest_result(camera_id)

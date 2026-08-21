@@ -1,8 +1,8 @@
 import asyncio
-from collections import deque
-from collections.abc import Awaitable, Callable
 import threading
 import time
+from collections import deque
+from collections.abc import Awaitable, Callable
 
 import cv2
 
@@ -12,7 +12,6 @@ VISION_OVERLAY_MAX_AGE_SECONDS = 0.75
 
 
 class StreamService:
-
     def __init__(
         self,
         frame_hub: FrameHub,
@@ -23,10 +22,7 @@ class StreamService:
 
         self.frame_hub = frame_hub
 
-        self.jpeg_quality = max(
-            1,
-            min(100, jpeg_quality)
-        )
+        self.jpeg_quality = max(1, min(100, jpeg_quality))
         self.vision = vision
         self.processed_frame_hub = processed_frame_hub
         self._jpeg_lock = threading.Lock()
@@ -41,21 +37,15 @@ class StreamService:
             return None
         return encoded, packet.frame_id
 
-    def mjpeg(
-        self,
-        camera_id: str
-    ):
+    def mjpeg(self, camera_id: str):
 
         last_frame_id = -1
 
         while True:
-
-            packet = (
-                self.frame_hub.wait_for_next(
-                    camera_id=camera_id,
-                    after_frame_id=last_frame_id,
-                    timeout=2.0,
-                )
+            packet = self.frame_hub.wait_for_next(
+                camera_id=camera_id,
+                after_frame_id=last_frame_id,
+                timeout=2.0,
             )
 
             if packet is None:
@@ -67,14 +57,7 @@ class StreamService:
             if jpg is None:
                 continue
 
-            yield (
-                b"--frame\r\n"
-                b"Content-Type: image/jpeg\r\n"
-                b"Cache-Control: no-cache\r\n"
-                b"\r\n"
-                + jpg
-                + b"\r\n"
-            )
+            yield (b"--frame\r\nContent-Type: image/jpeg\r\nCache-Control: no-cache\r\n\r\n" + jpg + b"\r\n")
 
     async def mjpeg_async(
         self,
@@ -118,14 +101,7 @@ class StreamService:
             if encoded is None:
                 continue
 
-            yield (
-                b"--frame\r\n"
-                b"Content-Type: image/jpeg\r\n"
-                b"Cache-Control: no-cache\r\n"
-                b"\r\n"
-                + encoded
-                + b"\r\n"
-            )
+            yield (b"--frame\r\nContent-Type: image/jpeg\r\nCache-Control: no-cache\r\n\r\n" + encoded + b"\r\n")
 
     def _fresh_vision_result(self, packet):
         latest_result = getattr(self.vision, "latest_result", None)

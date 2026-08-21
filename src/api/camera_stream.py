@@ -17,24 +17,15 @@ router = APIRouter(
 
 def get_runtime(request: Request):
 
-    runtime = getattr(
-        request.app.state,
-        "local_runtime",
-        None
-    )
+    runtime = getattr(request.app.state, "local_runtime", None)
 
     if runtime is None:
-
-        raise RuntimeError(
-            "LocalRuntime not initialized"
-        )
+        raise RuntimeError("LocalRuntime not initialized")
 
     return runtime
 
 
-@router.get(
-    "/{camera_id}/stream"
-)
+@router.get("/{camera_id}/stream")
 def stream_camera(
     camera_id: str,
     request: Request,
@@ -42,9 +33,7 @@ def stream_camera(
     identity: bool = True,
 ):
 
-    runtime = get_runtime(
-        request
-    )
+    runtime = get_runtime(request)
 
     try:
         public_id = camera_service.public_id(camera_id)
@@ -63,41 +52,25 @@ def stream_camera(
             show_identity=identity,
             show_fall=True,
         ),
-
-        media_type=(
-            "multipart/x-mixed-replace; boundary=frame"
-        ),
-
+        media_type=("multipart/x-mixed-replace; boundary=frame"),
         headers={
             "Cache-Control": "no-store",
             "Pragma": "no-cache",
-        }
+        },
     )
 
 
-@router.get(
-    "/{camera_id}/runtime/status"
-)
+@router.get("/{camera_id}/runtime/status")
 def runtime_status(
     camera_id: str,
     request: Request,
 ):
 
-    runtime = get_runtime(
-        request
-    )
+    runtime = get_runtime(request)
 
-    camera_status = (
-        runtime.camera.get_status(
-            camera_id
-        )
-    )
+    camera_status = runtime.camera.get_status(camera_id)
 
     if camera_status is None:
-
-        raise HTTPException(
-            status_code=404,
-            detail="Camera not found"
-        )
+        raise HTTPException(status_code=404, detail="Camera not found")
 
     return camera_status

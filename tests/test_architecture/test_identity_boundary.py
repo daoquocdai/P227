@@ -11,8 +11,7 @@ def test_services_do_not_import_sda_vision():
             if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("sda_vision"):
                 violations.append(str(path))
             if isinstance(node, ast.Import):
-                violations.extend(str(path) for alias in node.names
-                                  if alias.name.startswith("sda_vision"))
+                violations.extend(str(path) for alias in node.names if alias.name.startswith("sda_vision"))
     assert violations == []
 
 

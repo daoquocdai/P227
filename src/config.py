@@ -5,9 +5,6 @@ from typing import Literal
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-VISION_ROOT = Path(__file__).resolve().parent / "vision"
-SDA_GCN_ROOT = Path(__file__).resolve().parents[1] / "SDA-GCN"
-
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -29,32 +26,19 @@ class Settings(BaseSettings):
     metrics_collection_interval_seconds: int = Field(default=30, ge=5, le=3600)
     metrics_retention_days: int = Field(default=30, ge=1, le=365)
 
-    # Explicit test/demo control. Empty means the production mock emits no events.
-    mock_vision_event_frame_ids: str = ""
+    # Explicit test/demo control. Empty means no synthetic event IDs.
 
-    # Application Vision settings. SDA is the production runtime; canonical is
-    # an explicit development rollback and is never an automatic fallback.
-    vision_engine: Literal["sda", "canonical", "mock"] = "sda"
+    # SDA is the only production Vision implementation.
+    vision_engine: Literal["sda"] = "sda"
     vision_device: str = "auto"
     vision_fps: float = Field(default=15.0, gt=0)
     vision_identity_enabled: bool = False
     vision_identity_process_priority: Literal["normal", "below_normal"] = "normal"
     vision_identity_cpu_affinity: tuple[int, ...] | None = None
 
-    # Temporary enrollment compatibility settings. Phase 4 will replace the
-    # legacy encoder behind FaceEmbeddingEncoder without changing PersonService.
+    # SDA-backed enrollment encoder settings.
     vision_identity_provider: Literal["auto", "cpu", "cuda", "directml"] = "auto"
     vision_insightface_root: Path = Path.home() / ".insightface"
-
-    # Explicit legacy/canonical rollback settings. Production SDA does not read
-    # these paths; SDA owns its own models, assets, and cache layout.
-    vision_yolo_path: Path = VISION_ROOT / "yolov8n.pt"
-    vision_config_path: Path = SDA_GCN_ROOT / "config" / "production.yaml"
-    vision_checkpoint_path: Path = SDA_GCN_ROOT / "weights" / "fall-detection-joint.pt"
-    vision_model_cache_dir: Path = Path("data/vision-cache")
-    vision_known_faces_dir: Path = VISION_ROOT / "register face"
-    vision_temporal_target_sample_rate: float = Field(default=5.0, gt=0)
-    vision_temporal_buffer_capacity: int = Field(default=8, ge=2, multiple_of=2)
 
     @field_validator("vision_device")
     @classmethod

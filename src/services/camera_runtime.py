@@ -41,16 +41,13 @@ class CameraRuntimeState:
 
 
 class CameraRuntime:
-
     def __init__(
         self,
         frame_hub: FrameHub,
         reconnect_delay: float = 1.0,
-        vision_sample_buffer=None,
         vision_processor=None,
     ):
         self.frame_hub = frame_hub
-        self.vision_sample_buffer = vision_sample_buffer
         self.vision_processor = vision_processor
 
         self.reconnect_delay = reconnect_delay
@@ -71,13 +68,10 @@ class CameraRuntime:
     ):
 
         with self._lock:
-
             existing = self._threads.get(camera_id)
 
             if existing and existing.is_alive():
-                raise RuntimeError(
-                    f"Camera {camera_id} already running"
-                )
+                raise RuntimeError(f"Camera {camera_id} already running")
 
             source = self._normalize_source(source)
 
@@ -126,7 +120,6 @@ class CameraRuntime:
             thread.join(timeout=3)
 
         with self._lock:
-
             state = self._states.get(camera_id)
 
             if state:
@@ -139,9 +132,6 @@ class CameraRuntime:
 
         if remove_frame:
             self.frame_hub.remove(camera_id)
-
-        if self.vision_sample_buffer is not None:
-            self.vision_sample_buffer.clear(camera_id, reason="camera_stopped")
 
         return self.get_status(camera_id)
 
@@ -156,7 +146,6 @@ class CameraRuntime:
     def get_status(self, camera_id: str):
 
         with self._lock:
-
             state = self._states.get(camera_id)
 
             if state is None:
@@ -196,21 +185,14 @@ class CameraRuntime:
     @staticmethod
     def _is_file(source):
 
-        return (
-            isinstance(source, str)
-            and Path(source).is_file()
-        )
+        return isinstance(source, str) and Path(source).is_file()
 
     @staticmethod
     def _open_capture(source):
 
         # Webcam Windows
         if isinstance(source, int) and os.name == "nt":
-
-            cap = cv2.VideoCapture(
-                source,
-                cv2.CAP_DSHOW
-            )
+            cap = cv2.VideoCapture(source, cv2.CAP_DSHOW)
 
             if cap.isOpened():
                 return cap
@@ -251,12 +233,7 @@ class CameraRuntime:
         is_file = self._is_file(source)
 
         while not stop_event.is_set():
-
-            self._set_state(
-                camera_id,
-                status="connecting",
-                error=None
-            )
+            self._set_state(camera_id, status="connecting", error=None)
 
             cap = self._open_capture(source)
 
@@ -264,18 +241,11 @@ class CameraRuntime:
                 self._captures[camera_id] = cap
 
             if not cap.isOpened():
-
-                self._set_state(
-                    camera_id,
-                    status="offline",
-                    error=f"Cannot open source: {source}"
-                )
+                self._set_state(camera_id, status="offline", error=f"Cannot open source: {source}")
 
                 cap.release()
 
-                stop_event.wait(
-                    self.reconnect_delay
-                )
+                stop_event.wait(self.reconnect_delay)
 
                 continue
 
@@ -284,37 +254,23 @@ class CameraRuntime:
 
             # Quan trọng với video file:
             # OpenCV nếu không throttle sẽ đọc nhanh hết file.
-            source_fps = cap.get(
-                cv2.CAP_PROP_FPS
-            )
+            source_fps = cap.get(cv2.CAP_PROP_FPS)
 
             if source_fps <= 0:
                 source_fps = 30.0
 
-            frame_interval = (
-                1.0 / source_fps
-                if is_file
-                else 0
-            )
+            frame_interval = 1.0 / source_fps if is_file else 0
 
             playback_start = time.monotonic()
 
             try:
-
                 while not stop_event.is_set():
-
                     ok, frame = cap.read()
 
                     if not ok:
-
                         if is_file:
-
                             if loop_video:
-
-                                cap.set(
-                                    cv2.CAP_PROP_POS_FRAMES,
-                                    0
-                                )
+                                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
                                 playback_start = time.monotonic()
 
@@ -323,18 +279,11 @@ class CameraRuntime:
 
                                 continue
 
-                            self._set_state(
-                                camera_id,
-                                status="ended"
-                            )
+                            self._set_state(camera_id, status="ended")
 
                             return
 
-                        self._set_state(
-                            camera_id,
-                            status="offline",
-                            error="Frame read failed"
-                        )
+                        self._set_state(camera_id, status="offline", error="Frame read failed")
 
                         break
 
@@ -343,7 +292,6 @@ class CameraRuntime:
                     source_frames_read += 1
 
                     if is_file:
-
                         now = time.monotonic()
 
                         source_position = frame_in_epoch * frame_interval
@@ -365,11 +313,7 @@ class CameraRuntime:
                     capture_times.append(captured_at)
                     capture_span = capture_times[-1] - capture_times[0] if len(capture_times) > 1 else 0.0
                     capture_fps = (len(capture_times) - 1) / capture_span if capture_span > 0 else 0.0
-                    source_timestamp = (
-                        frame_in_epoch / source_fps
-                        if is_file
-                        else time.monotonic()
-                    )
+                    source_timestamp = frame_in_epoch / source_fps if is_file else time.monotonic()
 
                     packet = FramePacket(
                         camera_id=camera_id,
@@ -387,8 +331,6 @@ class CameraRuntime:
                     frames_published += 1
                     if self.vision_processor is not None:
                         self.vision_processor(packet)
-                    if self.vision_sample_buffer is not None:
-                        self.vision_sample_buffer.offer(packet)
 
                     self._set_state(
                         camera_id,
@@ -402,17 +344,9 @@ class CameraRuntime:
                     )
 
             except Exception as exc:
+                logger.exception("Camera %s failed", camera_id)
 
-                logger.exception(
-                    "Camera %s failed",
-                    camera_id
-                )
-
-                self._set_state(
-                    camera_id,
-                    status="error",
-                    error=str(exc)
-                )
+                self._set_state(camera_id, status="error", error=str(exc))
 
             finally:
                 cap.release()
@@ -421,34 +355,17 @@ class CameraRuntime:
                         self._captures.pop(camera_id, None)
 
             if not is_file:
+                stop_event.wait(self.reconnect_delay)
 
-                stop_event.wait(
-                    self.reconnect_delay
-                )
+        self._set_state(camera_id, status="offline")
 
-        self._set_state(
-            camera_id,
-            status="offline"
-        )
-
-    def _set_state(
-        self,
-        camera_id,
-        **changes
-    ):
+    def _set_state(self, camera_id, **changes):
 
         with self._lock:
-
-            state = self._states.get(
-                camera_id
-            )
+            state = self._states.get(camera_id)
 
             if state is None:
                 return
 
             for key, value in changes.items():
-                setattr(
-                    state,
-                    key,
-                    value
-                )
+                setattr(state, key, value)

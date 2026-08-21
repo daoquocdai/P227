@@ -5,12 +5,7 @@ line-length = 120
 select = ["E", "F", "I", "N", "W", "UP"]
 ignore = ["E501"]
 
-# Preserve established mathematical notation and checkpoint-facing class names in
-# the canonical model implementation. These exceptions are naming/style-only.
 [lint.per-file-ignores]
-"SDA-GCN/sda_gcn/graph/*.py" = ["E741", "N803", "N806", "UP032"]
-"SDA-GCN/sda_gcn/preprocessing/*.py" = ["N803", "N806"]
-"SDA-GCN/sda_gcn/model/SDAGCN.py" = ["E721", "F401", "N801", "N803", "N806", "N999", "UP008"]
 "tests/test_api/test_camera_vision.py" = ["N802"]
 "tests/test_services/test_camera_runtime.py" = ["N802"]
 "tests/test_services/test_vision_manager.py" = ["N802"]

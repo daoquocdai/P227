@@ -3,28 +3,29 @@
 from pathlib import Path
 
 from sda_vision import (
-    FaceEncoder, FaceEncoderConfig, FaceEncodingError,
-    IdentityGalleryEntry, IdentityGallerySnapshot,
+    FaceEncoder,
+    FaceEncoderConfig,
+    FaceEncodingError,
+    IdentityGalleryEntry,
+    IdentityGallerySnapshot,
 )
 
+from src.config import get_settings
 from src.services.face_embedding_encoder import FaceEnrollmentError
 from src.services.face_gallery_provider import AppFaceGallerySnapshot
-from src.config import get_settings
 
 
 def to_sda_gallery(snapshot: AppFaceGallerySnapshot) -> IdentityGallerySnapshot:
     return IdentityGallerySnapshot(
         snapshot.revision,
-        tuple(IdentityGalleryEntry(entry.person_id, entry.name, entry.embedding)
-              for entry in snapshot.entries),
+        tuple(IdentityGalleryEntry(entry.person_id, entry.name, entry.embedding) for entry in snapshot.entries),
     )
 
 
 class SdaFaceEmbeddingEncoder:
     def __init__(self, insightface_root: Path, provider: str = "auto"):
         device = {"directml": "amd"}.get(provider.strip().lower(), provider.strip().lower())
-        self._encoder = FaceEncoder(FaceEncoderConfig(
-            insightface_root=insightface_root, device=device))
+        self._encoder = FaceEncoder(FaceEncoderConfig(insightface_root=insightface_root, device=device))
 
     def extract(self, image_bytes: bytes):
         try:
@@ -44,4 +45,5 @@ class SdaGalleryPublisher:
 
 _settings = get_settings()
 sda_face_embedding_encoder = SdaFaceEmbeddingEncoder(
-    _settings.vision_insightface_root, _settings.vision_identity_provider)
+    _settings.vision_insightface_root, _settings.vision_identity_provider
+)

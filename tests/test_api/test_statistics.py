@@ -27,7 +27,12 @@ def _insert_alert(occurred_at: datetime, *, alert_type="fall", action=None, note
             """INSERT INTO events
                (id, camera_id, event_type, occurred_at, ai_model_name, ai_model_version, ai_confidence)
                VALUES (?, ?, ?, ?, 'test', '1', .9)""",
-            (event_id, BUILTIN_VIDEO_CAMERA_ID, "fall_suspected" if alert_type == "fall" else "person_detected", timestamp),
+            (
+                event_id,
+                BUILTIN_VIDEO_CAMERA_ID,
+                "fall_suspected" if alert_type == "fall" else "person_detected",
+                timestamp,
+            ),
         )
         connection.execute(
             "INSERT INTO alerts (id, event_id, alert_type, severity, created_at) VALUES (?, ?, ?, 'high', ?)",
@@ -110,9 +115,7 @@ async def test_statistics_periods_custom_validation_and_empty_state(client):
         )
         assert valid.status_code == 200
         assert (await client.get("/api/v1/statistics?period=custom")).status_code == 422
-        naive = await client.get(
-            "/api/v1/statistics?period=custom&start=2026-08-01T00:00:00&end=2026-08-02T00:00:00"
-        )
+        naive = await client.get("/api/v1/statistics?period=custom&start=2026-08-01T00:00:00&end=2026-08-02T00:00:00")
         assert naive.status_code == 422
     finally:
         app.dependency_overrides.pop(require_admin, None)
@@ -251,7 +254,7 @@ async def test_current_camera_card_uses_runtime_while_trend_uses_persisted_sampl
                     "vision_frames_overwritten": 8,
                     "vision_fps": 14.63,
                     "vision_processing_latency_ms": 72.58,
-                    "vision_drop_ratio": .2,
+                    "vision_drop_ratio": 0.2,
                     "pending": 0,
                     "max_pending": 1,
                 },
@@ -269,7 +272,7 @@ async def test_current_camera_card_uses_runtime_while_trend_uses_persisted_sampl
     assert current["raw_fps"] == 29.97
     assert current["vision_fps"] == 14.63
     assert current["vision_processing_latency_ms"] == 72.58
-    assert current["vision_drop_ratio"] == .2
+    assert current["vision_drop_ratio"] == 0.2
     assert current["pending"] == 0
     assert current["max_pending"] == 1
     assert [row["vision_fps"] for row in history] == [9.5, 10.5]
@@ -285,11 +288,7 @@ def test_vietnam_midnight_bucketing_and_period_units():
         (local_start + timedelta(hours=2)).astimezone(UTC),
         period="custom",
     )
-    totals = {
-        row["bucket_start"]: row["total"]
-        for row in result["alert_timeline"]
-        if row["alert_type"] == "fall"
-    }
+    totals = {row["bucket_start"]: row["total"] for row in result["alert_timeline"] if row["alert_type"] == "fall"}
     assert result["alert_bucket"]["unit"] == "hour"
     assert totals == {
         "2026-08-15T00:00:00+07:00": 1,

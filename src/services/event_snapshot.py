@@ -220,9 +220,7 @@ def attach_event_snapshots(packet, result, privacy_face_detector=None) -> None:
         try:
             if event.type in {"fall_confirmed", "unknown_person"}:
                 if privacy_result is None:
-                    privacy_result = _privacy_boxes(
-                        packet.frame, result, exact_face_boxes, privacy_face_detector
-                    )
+                    privacy_result = _privacy_boxes(packet.frame, result, exact_face_boxes, privacy_face_detector)
                 face_boxes, privacy_method = privacy_result
                 event.metadata["snapshot_privacy_method"] = privacy_method
             else:

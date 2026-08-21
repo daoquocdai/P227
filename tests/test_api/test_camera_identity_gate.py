@@ -43,9 +43,7 @@ def test_identity_config_update_merges_unrelated_settings():
     camera_service.set_identity_enabled(camera_id, False)
 
     with database_connection() as connection:
-        row = connection.execute(
-            "SELECT config_json FROM camera_sources WHERE camera_id = ?", (camera_id,)
-        ).fetchone()
+        row = connection.execute("SELECT config_json FROM camera_sources WHERE camera_id = ?", (camera_id,)).fetchone()
     assert json.loads(row["config_json"]) == {
         "vision_enabled": True,
         "identity_enabled": False,

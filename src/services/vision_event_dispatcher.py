@@ -44,9 +44,7 @@ class VisionEventAdapter:
             source_identity = f"vision:{uuid5(NAMESPACE_URL, canonical)}"
 
         camera_location = str(
-            metadata.get("camera_location")
-            or result.metadata.get("camera_location")
-            or result.camera_id
+            metadata.get("camera_location") or result.metadata.get("camera_location") or result.camera_id
         )
         domain_metadata = dict(metadata)
         domain_metadata.update(
@@ -122,8 +120,7 @@ class ThreadsafeVisionEventDispatcher:
                 "last_event_error": values.get("last_event_error"),
                 "delivery_latency_ms": values.get("delivery_latency_ms"),
                 "delivery_latency_mean_ms": (
-                    values.get("delivery_latency_total_ms", 0.0)
-                    / values.get("delivery_latency_count", 1)
+                    values.get("delivery_latency_total_ms", 0.0) / values.get("delivery_latency_count", 1)
                     if values.get("delivery_latency_count", 0)
                     else None
                 ),
@@ -162,9 +159,7 @@ class ThreadsafeVisionEventDispatcher:
             self._record_drop(event.camera_id, str(exc))
             return
         scheduled_at = time.perf_counter()
-        delivery.add_done_callback(
-            lambda future: self._delivery_done(event, future, scheduled_at)
-        )
+        delivery.add_done_callback(lambda future: self._delivery_done(event, future, scheduled_at))
 
     def _delivery_done(
         self,
@@ -177,7 +172,9 @@ class ThreadsafeVisionEventDispatcher:
             future.result()
         except Exception as exc:  # noqa: BLE001 - persistence failures are isolated from Vision
             self._record_error(event.camera_id, exc)
-            logger.error("Vision event delivery failed camera=%s event=%s error=%s", event.camera_id, event.event_id, exc)
+            logger.error(
+                "Vision event delivery failed camera=%s event=%s error=%s", event.camera_id, event.event_id, exc
+            )
             return
         with self._lock:
             stats = self._stats.setdefault(event.camera_id, {})
@@ -185,13 +182,14 @@ class ThreadsafeVisionEventDispatcher:
             elapsed_ms = (time.perf_counter() - scheduled_at) * 1000
             stats["delivery_latency_ms"] = elapsed_ms
             stats["delivery_latency_count"] = stats.get("delivery_latency_count", 0) + 1
-            stats["delivery_latency_total_ms"] = (
-                stats.get("delivery_latency_total_ms", 0.0) + elapsed_ms
-            )
-            stats["delivery_latency_max_ms"] = max(
-                stats.get("delivery_latency_max_ms", 0.0), elapsed_ms
-            )
-        logger.info("Vision business event emitted camera=%s type=%s event=%s", event.camera_id, event.event_type, event.event_id)
+            stats["delivery_latency_total_ms"] = stats.get("delivery_latency_total_ms", 0.0) + elapsed_ms
+            stats["delivery_latency_max_ms"] = max(stats.get("delivery_latency_max_ms", 0.0), elapsed_ms)
+        logger.info(
+            "Vision business event emitted camera=%s type=%s event=%s",
+            event.camera_id,
+            event.event_type,
+            event.event_id,
+        )
 
     def _record_drop(self, camera_id: str, message: str) -> None:
         with self._lock:

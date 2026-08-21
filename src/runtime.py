@@ -4,30 +4,17 @@ from src.services.frame_hub import FrameHub
 from src.services.stream_service import StreamService
 
 
-def build_vision_engine(settings, mock_event_frame_ids: set[int] | None = None):
-    # Explicit development rollback/test factory; never a production fallback.
-    from src.integrations.legacy_vision import build_legacy_vision_engine
-
-    return build_legacy_vision_engine(settings, mock_event_frame_ids)
-
-
 class LocalRuntime:
-
     def __init__(
         self,
         vision_engine=None,
         event_dispatcher=None,
-        mock_event_frame_ids: set[int] | None = None,
     ):
 
         settings = get_settings()
-        engine = vision_engine
-
         self.frame_hub = FrameHub()
         self.processed_frame_hub = FrameHub()
-        self.vision_sample_buffer = None
-
-        if settings.vision_engine == "sda" and vision_engine is None:
+        if vision_engine is None:
             from src.integrations.sda_vision import SdaCameraFacade, SdaSessionRegistry, SdaVisionFacade
 
             self.sda = SdaSessionRegistry(
@@ -35,8 +22,9 @@ class LocalRuntime:
                 settings=settings,
                 event_dispatcher=event_dispatcher,
             )
-            from src.services.face_gallery_provider import face_gallery_coordinator
             from src.integrations.sda_identity import SdaGalleryPublisher
+            from src.services.face_gallery_provider import face_gallery_coordinator
+
             self._face_gallery_coordinator = face_gallery_coordinator
             self._sda_gallery_publisher = SdaGalleryPublisher(self.sda)
             self._face_gallery_coordinator.set_publisher(self._sda_gallery_publisher)
@@ -44,14 +32,13 @@ class LocalRuntime:
             self.camera = SdaCameraFacade(self.sda)
             self.vision = SdaVisionFacade(self.sda)
         else:
-            from src.integrations.legacy_vision import build_legacy_runtime
+            # Explicit model-free test seam; production always uses SDA.
+            from src.services.camera_runtime import CameraRuntime
+            from src.services.vision_manager import VisionManager
 
-            self.camera, self.vision = build_legacy_runtime(
-                self.frame_hub,
-                settings=settings,
-                engine=engine,
-                event_dispatcher=event_dispatcher,
-                mock_event_frame_ids=mock_event_frame_ids,
+            self.camera = CameraRuntime(self.frame_hub)
+            self.vision = VisionManager(
+                frame_hub=self.frame_hub, engine=vision_engine, event_dispatcher=event_dispatcher
             )
         self.stream = StreamService(
             self.frame_hub,
@@ -111,7 +98,9 @@ class LocalRuntime:
         return self.vision.get_status(public_id)
 
     def restart_camera_if_enabled(self, camera_id: str) -> None:
-        desired = next(item for item in camera_service.desired_states() if item["id"] == camera_service.public_id(camera_id))
+        desired = next(
+            item for item in camera_service.desired_states() if item["id"] == camera_service.public_id(camera_id)
+        )
         if not desired["camera_enabled"]:
             return
         public_id = desired["id"]

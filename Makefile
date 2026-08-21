@@ -47,6 +47,7 @@ install-backend: ## Install Python dependencies into .venv
 	$(PYTHON) -m pip install -r $(VISION_REQUIREMENTS)
 	$(PYTHON) -m pip install --no-deps -r $(VISION_IDENTITY_REQUIREMENTS)
 	$(PYTHON) -m pip install -e ./SDA-GCN
+	$(PYTHON) -m pip install -r requirements/dev.txt
 
 install-frontend: ## Install exact frontend dependencies from package-lock.json
 	cd $(FRONTEND_DIR) && $(NPM) ci
@@ -71,7 +72,6 @@ lint: ## Run Ruff lint checks
 
 format: ## Format Python and apply safe Ruff fixes
 	$(PYTHON) -m ruff format $(PYTHON_PATHS)
-	$(PYTHON) -m ruff check --fix $(PYTHON_PATHS)
 
 format-check: ## Verify Python formatting without changing files
 	$(PYTHON) -m ruff format --check $(PYTHON_PATHS)

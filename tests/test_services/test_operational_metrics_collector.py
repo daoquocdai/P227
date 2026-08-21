@@ -36,7 +36,7 @@ class FakeVisionRuntime:
                 "vision_frames_overwritten": 2 if offered else 0,
                 "vision_fps": 14.5,
                 "vision_processing_latency_ms": 71.2,
-                "vision_drop_ratio": .1,
+                "vision_drop_ratio": 0.1,
                 "pending": 1,
                 "max_pending": 1,
             },
@@ -55,15 +55,13 @@ def test_collector_persists_truthful_hub_and_current_camera_metrics():
     collector.sample_once()
     with database_connection() as connection:
         hub = connection.execute("SELECT * FROM hub_metrics").fetchone()
-        camera = connection.execute(
-            "SELECT * FROM operational_camera_metrics ORDER BY camera_id LIMIT 1"
-        ).fetchone()
+        camera = connection.execute("SELECT * FROM operational_camera_metrics ORDER BY camera_id LIMIT 1").fetchone()
     assert hub["process_rss_mb"] > 0
     assert hub["host_memory_total_mb"] > 0
     assert camera["raw_fps"] == 29.8
     assert camera["vision_fps"] == 14.5
     assert camera["vision_processing_latency_ms"] == 71.2
-    assert camera["vision_drop_ratio"] == .1
+    assert camera["vision_drop_ratio"] == 0.1
     assert camera["max_pending"] == 1
 
 
@@ -73,9 +71,7 @@ def test_collector_represents_camera_and_vision_off_without_fake_zeroes():
     runtime.vision.enabled = False
     OperationalMetricsCollector(runtime).sample_once()
     with database_connection() as connection:
-        row = connection.execute(
-            "SELECT * FROM operational_camera_metrics ORDER BY camera_id LIMIT 1"
-        ).fetchone()
+        row = connection.execute("SELECT * FROM operational_camera_metrics ORDER BY camera_id LIMIT 1").fetchone()
     assert row["camera_status"] == "offline"
     assert row["raw_fps"] is None
     assert row["vision_status"] == "disabled"
@@ -108,7 +104,7 @@ def test_collector_does_not_run_database_bootstrap_or_password_hashing(monkeypat
 
 
 def test_start_is_idempotent_sample_failure_isolated_and_stop_safe():
-    collector = OperationalMetricsCollector(FakeRuntime(), interval_seconds=.01)
+    collector = OperationalMetricsCollector(FakeRuntime(), interval_seconds=0.01)
     calls = 0
 
     def fail_once():
@@ -124,7 +120,7 @@ def test_start_is_idempotent_sample_failure_isolated_and_stop_safe():
     assert collector._thread is first
     deadline = time.time() + 1
     while calls < 2 and time.time() < deadline:
-        time.sleep(.01)
+        time.sleep(0.01)
     collector.stop()
     collector.stop()
     assert calls >= 2
@@ -160,9 +156,13 @@ def test_retention_deletes_only_old_operational_samples():
     OperationalMetricsCollector(FakeRuntime(), retention_days=30).sample_once()
     with database_connection() as connection:
         assert connection.execute("SELECT count(*) FROM hub_metrics WHERE measured_at = ?", (old,)).fetchone()[0] == 0
-        assert connection.execute(
-            "SELECT count(*) FROM operational_camera_metrics WHERE measured_at = ?", (old,)
-        ).fetchone()[0] == 0
-        assert connection.execute(
-            "SELECT count(*) FROM inference_metrics WHERE id = ?", (inference_id,)
-        ).fetchone()[0] == 1
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM operational_camera_metrics WHERE measured_at = ?", (old,)
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute("SELECT count(*) FROM inference_metrics WHERE id = ?", (inference_id,)).fetchone()[0]
+            == 1
+        )

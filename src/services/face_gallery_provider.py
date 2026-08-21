@@ -38,7 +38,8 @@ class SqliteFaceGalleryProvider:
                           fp.embedding_dimension
                    FROM face_profiles fp JOIN persons p ON p.id = fp.person_id
                    WHERE fp.is_active = 1 AND p.is_active = 1
-                   ORDER BY p.display_name, fp.created_at""").fetchall()
+                   ORDER BY p.display_name, fp.created_at"""
+            ).fetchall()
         for row in rows:
             raw = row["embedding"]
             try:
@@ -56,13 +57,13 @@ class SqliteFaceGalleryProvider:
             if embedding.size != dimension or not np.isfinite(embedding).all():
                 skipped += 1
                 continue
-            entries.append(AppFaceGalleryEntry(
-                row["person_id"], row["display_name"], embedding.copy()))
+            entries.append(AppFaceGalleryEntry(row["person_id"], row["display_name"], embedding.copy()))
         snapshot = AppFaceGallerySnapshot(version, tuple(entries))
         if skipped:
             logger.warning("Skipped %d invalid SQLite Identity embedding row(s)", skipped)
         return snapshot, {
-            "entries": len(entries), "skipped": skipped,
+            "entries": len(entries),
+            "skipped": skipped,
             "load_ms": (time.perf_counter() - started) * 1000.0,
         }
 

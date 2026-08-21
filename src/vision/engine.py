@@ -6,7 +6,6 @@ from src.vision.session import VisionSession
 
 
 class VisionEngine(ABC):
-
     def start(self):
         pass
 

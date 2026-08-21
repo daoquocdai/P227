@@ -39,12 +39,7 @@ async def lifespan(app: FastAPI):
     consumer = asyncio.create_task(vision_event_sink.consume(), name="vision-event-consumer")
     dispatcher = ThreadsafeVisionEventDispatcher(vision_event_sink)
     dispatcher.start(asyncio.get_running_loop())
-    mock_event_frame_ids = {
-        int(value.strip())
-        for value in settings.mock_vision_event_frame_ids.split(",")
-        if value.strip()
-    }
-    runtime = LocalRuntime(event_dispatcher=dispatcher, mock_event_frame_ids=mock_event_frame_ids)
+    runtime = LocalRuntime(event_dispatcher=dispatcher)
     app.state.local_runtime = runtime
     app.state.vision_event_dispatcher = dispatcher
     runtime.start()

@@ -50,9 +50,7 @@ def unknown_result(**kwargs):
 
 def set_thresholds(stranger, fall):
     with database_connection() as connection:
-        row = connection.execute(
-            "SELECT value_json FROM system_settings WHERE setting_key = 'general'"
-        ).fetchone()
+        row = connection.execute("SELECT value_json FROM system_settings WHERE setting_key = 'general'").fetchone()
         values = json.loads(row["value_json"])
         values.update(stranger_threshold=stranger, fall_threshold=fall)
         connection.execute(
@@ -63,14 +61,10 @@ def set_thresholds(stranger, fall):
 
 def test_product_thresholds_gate_below_and_accept_equal_confidence():
     set_thresholds(stranger=80, fall=80)
-    below = VisionProductPolicy(notification_cooldown_seconds=0).apply(
-        result(confidence=0.79, similarity=0.21)
-    )
+    below = VisionProductPolicy(notification_cooldown_seconds=0).apply(result(confidence=0.79, similarity=0.21))
     assert below.events == []
 
-    equal = VisionProductPolicy(notification_cooldown_seconds=0).apply(
-        result(confidence=0.80, similarity=0.20)
-    )
+    equal = VisionProductPolicy(notification_cooldown_seconds=0).apply(result(confidence=0.80, similarity=0.20))
     assert {event.type for event in equal.events} == {"fall_confirmed", "unknown_person"}
 
 
@@ -84,9 +78,7 @@ def test_product_thresholds_gate_below_and_accept_equal_confidence():
         (1.25, 0.0),
     ],
 )
-def test_unknown_mismatch_score_is_one_minus_clamped_cosine_similarity(
-    similarity, expected_mismatch
-):
+def test_unknown_mismatch_score_is_one_minus_clamped_cosine_similarity(similarity, expected_mismatch):
     set_thresholds(stranger=0, fall=100)
     vision_result = result(confidence=0.0, similarity=similarity)
 
@@ -101,9 +93,7 @@ def test_unknown_requires_final_retry_state_and_has_cooldown():
     set_thresholds(stranger=78, fall=72)
     now = [100.0]
     policy = VisionProductPolicy(unknown_cooldown_seconds=60, clock=lambda: now[0])
-    assert not any(
-        event.type == "unknown_person" for event in policy.apply(unknown_result(state="PENDING")).events
-    )
+    assert not any(event.type == "unknown_person" for event in policy.apply(unknown_result(state="PENDING")).events)
     assert sum(event.type == "unknown_person" for event in policy.apply(unknown_result()).events) == 1
     assert not any(event.type == "unknown_person" for event in policy.apply(unknown_result()).events)
     now[0] += 59.9
@@ -279,7 +269,9 @@ def test_exact_frame_snapshot_reaches_database_and_unknown_is_blurred(tmp_path, 
         ).fetchone()
     assert tuple(fall_media) == ("fall", fall.metadata["snapshot_path"])
     assert tuple(unknown_media) == ("unknown_person", 1, unknown.metadata["snapshot_path"])
-    snapshot_urls = {alert["snapshot_url"] for alert in alerts if alert["event_id"] in {"policy-fall", unknown.metadata["event_id"]}}
+    snapshot_urls = {
+        alert["snapshot_url"] for alert in alerts if alert["event_id"] in {"policy-fall", unknown.metadata["event_id"]}
+    }
     assert snapshot_urls == {
         f"/snapshots/{fall.metadata['snapshot_path']}",
         f"/snapshots/{unknown.metadata['snapshot_path']}",
@@ -295,7 +287,9 @@ def test_blur_faces_changes_only_clipped_valid_face_rois():
     assert count == 1
     assert np.any(output[:9, :8] != frame[:9, :8])
     assert np.array_equal(output[10:, 10:], frame[10:, 10:])
-    assert np.array_equal(frame[10:, 10:], np.indices((20, 20)).sum(axis=0).astype(np.uint8)[10:, 10:, None].repeat(3, axis=2) * 8)
+    assert np.array_equal(
+        frame[10:, 10:], np.indices((20, 20)).sum(axis=0).astype(np.uint8)[10:, 10:, None].repeat(3, axis=2) * 8
+    )
 
 
 def test_fall_snapshot_uses_one_shot_privacy_detector_for_stale_face_bbox(tmp_path, monkeypatch):
@@ -421,9 +415,7 @@ def test_pose_head_fallback_uses_exact_frame_geometry_for_horizontal_subject():
         },
     )
 
-    boxes, method = event_snapshot._privacy_boxes(
-        np.zeros((100, 100, 3), dtype=np.uint8), vision_result, [], None
-    )
+    boxes, method = event_snapshot._privacy_boxes(np.zeros((100, 100, 3), dtype=np.uint8), vision_result, [], None)
 
     assert method == "pose_head_roi"
     x1, _y1, x2, _y2 = boxes[0]
@@ -455,10 +447,13 @@ def test_event_service_rechecks_persisted_identity_gate_before_db_and_notificati
     accepted = asyncio.run(EventService().create(request))
     assert accepted.accepted is False
     with database_connection() as connection:
-        assert connection.execute(
-            "SELECT 1 FROM events WHERE id = ?",
-            (stable_uuid(unknown.metadata["event_id"], "event"),),
-        ).fetchone() is None
+        assert (
+            connection.execute(
+                "SELECT 1 FROM events WHERE id = ?",
+                (stable_uuid(unknown.metadata["event_id"], "event"),),
+            ).fetchone()
+            is None
+        )
 
 
 def test_product_policy_live_settings_read_skips_database_bootstrap(monkeypatch):

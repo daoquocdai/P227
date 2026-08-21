@@ -16,8 +16,7 @@ class FaceProfileNotFoundError(Exception):
 
 
 class PersonService:
-    def __init__(self, encoder: FaceEmbeddingEncoder | None = None,
-                 gallery_coordinator=None) -> None:
+    def __init__(self, encoder: FaceEmbeddingEncoder | None = None, gallery_coordinator=None) -> None:
         self._face_encoder = encoder or sda_face_embedding_encoder
         self._gallery_coordinator = gallery_coordinator or face_gallery_coordinator
 
