@@ -50,6 +50,18 @@ class AlertResponse(BaseModel):
     created_at: str
     updated_at: str
     is_read: bool
+    agent_status: Literal["queued", "running", "completed", "failed", "skipped"] | None = None
+    agent_verdict: Literal["CONFIRMED_ALERT", "UNCERTAIN", "DUPLICATE"] | None = None
+    agent_severity: Literal["low", "medium", "high", "critical"] | None = None
+    agent_reason_summary: str | None = None
+    incident_id: str | None = None
+    incident_status: Literal["OPEN", "ACKNOWLEDGED", "RESOLVED_SAFE"] | None = None
+    occurrence_count: int = 1
+    first_seen_at: str
+    last_seen_at: str
+    incident_version: int | None = None
+    acknowledged_at: str | None = None
+    resolved_at: str | None = None
 
 
 EventType = Literal[
@@ -88,3 +100,10 @@ class VisionEventAccepted(BaseModel):
     accepted: bool = True
     duplicate: bool = False
     status: AlertStatus
+    incident_id: str | None = None
+    incident_version: int | None = None
+    occurrence_count: int | None = None
+    alert_created: bool = False
+    incident_updated: bool = False
+    suppressed: bool = False
+    agent_review_required: bool = False

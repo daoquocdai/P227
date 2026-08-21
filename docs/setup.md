@@ -53,8 +53,8 @@ DATABASE_URL=sqlite:///./data/app.db
 VISION_ENGINE=canonical
 VISION_DEVICE=auto
 VISION_YOLO_PATH=yolov8n.pt
-VISION_CONFIG_PATH=work_dir/fall_detection/joint/config.yaml
-VISION_CHECKPOINT_PATH=work_dir/fall_detection/joint/runs-best_val.pt
+VISION_CONFIG_PATH=../../SDA-GCN/config/production.yaml
+VISION_CHECKPOINT_PATH=../../SDA-GCN/weights/fall-detection-joint.pt
 VISION_MODEL_CACHE_DIR=data/vision-cache
 
 VISION_IDENTITY_ENABLED=false
@@ -75,8 +75,8 @@ Fall pipeline cần:
 
 ```text
 src/vision/yolov8n.pt
-src/vision/work_dir/fall_detection/joint/config.yaml
-src/vision/work_dir/fall_detection/joint/runs-best_val.pt
+SDA-GCN/config/production.yaml
+SDA-GCN/weights/fall-detection-joint.pt
 ```
 
 Identity cần:

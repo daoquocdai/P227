@@ -1,8 +1,7 @@
 # Kiến trúc kỹ thuật GuardianCam Local Hub
 
-Tài liệu này mô tả production runtime hiện tại. `visionv2/runtimev2` và
-`visionv2/P-227-thi` là standalone reference/oracle; production không import hai
-tree này.
+Tài liệu này mô tả production runtime hiện tại. Repository có một pipeline tại
+`src/vision` và một subsystem classifier có thể thay thế tại `SDA-GCN`.
 
 ## 1. Process và dependency direction
 
@@ -17,7 +16,7 @@ FastAPI lifespan
       ├── SynchronousVisionManager
       │   ├── LatestFrameSlot per camera
       │   ├── VisionSession per camera
-      │   ├── canonical RuntimeV2VisionPipeline
+      │   ├── CanonicalVisionPipeline
       │   └── processed FrameHub
       └── StreamService
 ```
@@ -153,7 +152,9 @@ Identity behavior:
 - minimum interval 1 giây observation time;
 - face miss update cadence timestamp nhưng không tăng confirmation count;
 - cache/retry độc lập theo track;
-- Unknown cooldown 30 giây observation time theo camera/epoch/track.
+- Unknown cooldown 60 giây observation time theo camera/epoch/track.
+- Fall cooldown 60 giây observation time theo camera/epoch, ngoài cơ chế chỉ
+  phát một cảnh báo trong cùng một fall incident của pipeline.
 
 Product mismatch score:
 
@@ -269,14 +270,27 @@ Frontend data flow:
 | Media DB insert failure | Event/alert transaction sống; media omitted |
 | SSE disconnect | Persistence không đổi; client reconnect |
 
-## 12. Intentional non-goals
+## 12. SDA-GCN boundary
+
+```text
+Camera -> FrameHub -> src/vision (YOLO + pose)
+       -> src/vision/sda_gcn.py -> SDA-GCN/sda_gcn.SdaGcnRuntime
+       -> class probabilities -> P-227 confirmation/cooldown/event flow
+```
+
+SDA-GCN owns model inference and model-specific NTU-25 preprocessing. P-227 owns
+source-time windows, pending/confirmation state, cooldown, database, snapshots,
+and frontend delivery. Retraining is: train -> export -> replace
+`SDA-GCN/weights/fall-detection-joint.pt` -> run vision tests -> restart P-227.
+
+## 13. Intentional non-goals
 
 - không queue/backlog vô hạn;
 - không capture/model theo viewer;
 - không cloud video upload mặc định;
 - không LLM trên critical detection path;
 - không runtime retraining;
-- không import legacy hoặc standalone oracle vào production.
+- chỉ import SDA-GCN qua public integration boundary `src/vision/sda_gcn.py`.
 
 Xem thêm [architecture_diagram.md](architecture_diagram.md), [api.md](api.md),
 [setup.md](setup.md) và [testing.md](testing.md).

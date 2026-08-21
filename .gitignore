@@ -43,6 +43,7 @@ htmlcov/
 
 frontend/.env
 frontend/.env.*
+frontend/public/videos/
 !frontend/.env.example
 
 *.pem
@@ -101,15 +102,14 @@ src/vision/demo/**/*.npy
 
 # Training runs and generated reports. Release checkpoints already tracked by
 # Git remain tracked; these rules prevent accidental addition of new artifacts.
-src/vision/work_dir/**/runs/
-src/vision/work_dir/**/*_matrix.csv
-src/vision/work_dir/**/log.txt
+SDA-GCN/work_dir/
+SDA-GCN/data/
 
 # Generated/optimized model exports and framework caches
-src/vision/**/*.onnx
-src/vision/**/*.engine
-src/vision/**/*.tflite
-src/vision/**/*.mlpackage
+SDA-GCN/**/*.onnx
+SDA-GCN/**/*.engine
+SDA-GCN/**/*.tflite
+SDA-GCN/**/*.mlpackage
 /.cache/
 /runs/
 /weights/
@@ -138,9 +138,5 @@ compose.override.yml
 Thumbs.db
 Desktop.ini
 $RECYCLE.BIN/
-/visionv2/*
-!/visionv2/runtimev2/
-!/visionv2/runtimev2/**
-/visionv2/runtimev2/.cache/
-/visionv2/runtimev2/__pycache__/
-/visionv2/runtimev2/**/__pycache__/
+/tests/.tmp/
+/data/vision-cache/

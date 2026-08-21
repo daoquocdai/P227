@@ -1,5 +1,3 @@
-from collections import OrderedDict
-from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -10,8 +8,8 @@ import yaml
 from src.config import Settings
 from src.runtime import build_vision_engine
 from src.vision.adapters.mock import MockVisionEngine
-from src.vision.model.SDAGCN import Model
 from src.vision.pipeline import CanonicalVisionPipeline
+from src.vision.sda_gcn import DEFAULT_CHECKPOINT_PATH, DEFAULT_CONFIG_PATH, SdaGcnRuntime
 from src.vision.session import VisionSession
 from tests.test_vision.test_pipeline import FakeActionModel, FakeClock, make_dependencies, packet
 
@@ -38,7 +36,7 @@ def make_pipeline(tmp_path, predicted_class: int) -> CanonicalVisionPipeline:
     )
     engine._dependencies = make_dependencies()
     engine._device = torch.device("cpu")
-    engine._action_model = FiveClassModel([predicted_class])
+    engine._action_model = FiveClassModel([predicted_class] * 10)
     engine._initialized = True
     engine.test_clock = clock
     return engine
@@ -77,22 +75,20 @@ def test_canonical_model_contract_and_joint_input():
 
 
 def test_canonical_checkpoint_strict_load_and_forward_contract():
-    root = Path(__file__).resolve().parents[2] / "src" / "vision"
-    config_path = root / "work_dir" / "fall_detection" / "joint" / "config.yaml"
-    checkpoint_path = root / "work_dir" / "fall_detection" / "joint" / "runs-best_val.pt"
+    config_path = DEFAULT_CONFIG_PATH
+    checkpoint_path = DEFAULT_CHECKPOINT_PATH
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     model_args = dict(config["model_args"])
-    model_args["graph"] = "src.vision.graph.ntu_rgb_d_hierarchy.Graph"
-    model = Model(**model_args)
-    weights = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-    weights = OrderedDict((key.split("module.")[-1], value) for key, value in weights.items())
-    model.load_state_dict(weights, strict=True)
-    model.eval()
+    assert model_args["graph"] == "sda_gcn.graph.ntu_rgb_d_hierarchy.Graph"
+    runtime = SdaGcnRuntime(config_path, checkpoint_path)
+    runtime.load_pytorch_model(torch, yaml, torch.device("cpu"))
 
     model_input = torch.zeros((1, 3, 64, 25, 1), dtype=torch.float32)
     with torch.inference_mode():
-        output = model(model_input)
+        output, probabilities, predicted_class = runtime.predict(model_input, torch)
     assert tuple(output.shape) == (1, 5)
+    assert tuple(probabilities.shape) == (5,)
+    assert predicted_class in range(5)
 
 
 @pytest.mark.parametrize("predicted_class", [0, 2, 3, 4])

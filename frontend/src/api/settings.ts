@@ -10,7 +10,7 @@ export interface SettingsData { general:GeneralSettingsData; notifications:Notif
 export const getSettings = () => apiClient<SettingsData>("/settings");
 export const saveGeneral = (data:GeneralSettingsData) => apiClient<GeneralSettingsData>("/settings/general",{method:"PATCH",body:JSON.stringify(data)});
 export const saveNotifications = (data:NotificationSettingsData) => apiClient<NotificationSettingsData>("/settings/notifications",{method:"PATCH",body:JSON.stringify(data)});
-export const createSettingsUser = (data:{name:string;email:string;role:"admin"|"caregiver"}) => apiClient<SettingsUser>("/settings/users",{method:"POST",body:JSON.stringify(data)});
+export const createSettingsUser = (data:{name:string;email:string;password:string;role:"admin"|"caregiver"}) => apiClient<SettingsUser>("/settings/users",{method:"POST",body:JSON.stringify(data)});
 export const setSettingsUserActive = (id:string,active:boolean) => apiClient<SettingsUser>(`/settings/users/${encodeURIComponent(id)}`,{method:"PATCH",body:JSON.stringify({active})});
 export const setUserPermission = (id:string,key:PermissionKey,granted:boolean) => apiClient<SettingsUser>(`/settings/users/${encodeURIComponent(id)}/permissions/${key}`,{method:"PATCH",body:JSON.stringify({granted})});
 export const setSettingsCameraActive = (id:string,active:boolean) => apiClient<SettingsData>(`/settings/cameras/${encodeURIComponent(id)}`,{method:"PATCH",body:JSON.stringify({active})});

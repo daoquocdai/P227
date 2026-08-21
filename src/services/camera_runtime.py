@@ -13,6 +13,8 @@ from src.services.frame_hub import FrameHub
 
 logger = logging.getLogger(__name__)
 
+FILE_PLAYBACK_STOP_POLL_SECONDS = 0.01
+
 
 @dataclass
 class CameraRuntimeState:
@@ -217,6 +219,22 @@ class CameraRuntime:
 
         return cv2.VideoCapture(source)
 
+    @staticmethod
+    def _wait_until(deadline: float, stop_event: threading.Event) -> bool:
+        """Pace file playback precisely while remaining promptly stoppable.
+
+        ``Event.wait(frame_interval)`` has visibly coarse timing on Windows and
+        produces alternating short/long publish intervals at 30 FPS. Python's
+        monotonic sleep uses the high-resolution timer; short slices retain
+        prompt shutdown without reintroducing the coarse event wait.
+        """
+        while not stop_event.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return True
+            time.sleep(min(remaining, FILE_PLAYBACK_STOP_POLL_SECONDS))
+        return False
+
     def _capture_loop(
         self,
         camera_id,
@@ -331,10 +349,11 @@ class CameraRuntime:
                         source_position = frame_in_epoch * frame_interval
                         wait_time = playback_start + source_position - now
 
-                        if wait_time > 0:
-                            stop_event.wait(
-                                wait_time
-                            )
+                        if wait_time > 0 and not self._wait_until(
+                            playback_start + source_position,
+                            stop_event,
+                        ):
+                            break
 
                         # Do not publish a stale decoded frame merely to catch
                         # up; the next loop reads toward the current position.

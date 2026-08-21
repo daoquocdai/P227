@@ -9,7 +9,13 @@ import pytest
 import torch
 
 from src.models.frame import FramePacket
-from src.vision.pipeline import CanonicalVisionPipeline, VisionInitializationError
+from src.vision.pipeline import (
+    FALL_LABEL,
+    FALL_MISSING_PERSON_GRACE_SECONDS,
+    FALL_RECOVERY_CONFIRM_SECONDS,
+    CanonicalVisionPipeline,
+    VisionInitializationError,
+)
 from src.vision.session import VisionSession
 
 
@@ -68,6 +74,8 @@ class FakePose:
         self.kwargs = kwargs
         self.closed = False
         self.keypoints = np.full((25, 3), 0.1, dtype=np.float32)
+        self.keypoints[0, :2] = (0.8, 0.5)
+        self.keypoints[20, :2] = (0.2, 0.5)
         self.raise_error = False
         self.__class__.instances.append(self)
 
@@ -124,7 +132,9 @@ def make_dependencies(preprocessing_calls=None):
         assert axis == 0 and kind == "linear" and fill_value == "extrapolate"
 
         def interpolate(new_axis):
-            return np.stack([np.interp(new_axis, old_axis, values[:, column]) for column in range(values.shape[1])], axis=1)
+            return np.stack(
+                [np.interp(new_axis, old_axis, values[:, column]) for column in range(values.shape[1])], axis=1
+            )
 
         return interpolate
 
@@ -250,7 +260,11 @@ def test_time_window_is_resampled_to_64_joint_frames(tmp_path):
     assert len(engine._action_model.calls) == 3
     assert tuple(engine._action_model.calls[0].shape) == (1, 3, 64, 25, 1)
     assert [name for name, _shape in preprocessing_calls] == [
-        "clean", "dynamic", "pose", "interpolate", "kalman",
+        "clean",
+        "dynamic",
+        "pose",
+        "interpolate",
+        "kalman",
     ] * 3
     assert all(shape == (64, 25, 3) for _name, shape in preprocessing_calls)
     assert model_result.metadata["window_source_time_span"] >= 2.0
@@ -278,21 +292,37 @@ def test_normal_prediction_has_no_event(tmp_path):
     assert result.events == []
 
 
-def test_pending_resets_on_later_normal_window(tmp_path):
+def test_normal_window_cancels_transient_fall_before_confirmation(tmp_path):
     engine, clock = make_engine(tmp_path, classes=[1, 0])
     session = VisionSession("cam01")
-    process_range(engine, session, 1, 127)
-    assert session.state["vision_fall_state"] == "pending"
+    engine.process(packet("cam01", 1), session)
+    engine._contexts["cam01"].pose.keypoints[0, :2] = (0.5, 0.8)
+    engine._contexts["cam01"].pose.keypoints[20, :2] = (0.5, 0.2)
+    process_range(engine, session, 2, 127)
+    assert session.state["vision_fall_state"] == "normal"
 
     clock.value = 0.5
-    process_range(engine, session, 128, 191)
+    results = process_range(engine, session, 128, 191)
 
     assert session.state["vision_fall_state"] == "normal"
     assert session.state.get("vision_incident_id") is None
+    assert not any(result.events for result in results)
+
+
+def test_one_non_fall_window_between_fall_windows_does_not_hide_real_fall(tmp_path):
+    engine, _ = make_engine(tmp_path, classes=[1, 0, 1, 1, 1, 1])
+    session = VisionSession("cam01")
+
+    results = process_range(engine, session, 1, 191)
+    results.append(engine.process(packet("cam01", 192, source_timestamp=6.4), session))
+
+    events = [event for result in results for event in result.events]
+    assert [event.type for event in events] == ["fall_confirmed"]
+    assert session.state["vision_fall_state"] == "confirmed"
 
 
 def test_pending_resets_on_movement(tmp_path):
-    engine, _ = make_engine(tmp_path, classes=[1])
+    engine, _ = make_engine(tmp_path, classes=[1] * 10)
     session = VisionSession("cam01")
     process_range(engine, session, 1, 127)
     engine._contexts["cam01"].pose.keypoints = np.full((25, 3), 0.8, dtype=np.float32)
@@ -305,7 +335,7 @@ def test_pending_resets_on_movement(tmp_path):
 
 
 def test_confirmation_emits_exactly_one_stable_event_then_new_episode_after_recovery(tmp_path):
-    engine, _ = make_engine(tmp_path, classes=[1, 1])
+    engine, _ = make_engine(tmp_path, classes=[1] * 10)
     session = VisionSession("cam01")
     pending = process_range(engine, session, 1, 127)[-1]
     assert pending.metadata["fall_state"] == "pending"
@@ -328,8 +358,11 @@ def test_confirmation_emits_exactly_one_stable_event_then_new_episode_after_reco
     engine._contexts["cam01"].pose.keypoints = np.full((25, 3), 0.8, dtype=np.float32)
     engine.process(packet("cam01", 132, source_timestamp=6.7), session)
     engine.process(packet("cam01", 133, source_timestamp=6.8), session)
-    assert session.state.get("vision_incident_id") is None
+    assert session.state.get("vision_incident_id") == "incident-1"
+    assert session.state["vision_fall_state"] in {"confirmed", "recovery_pending"}
 
+    engine._contexts["cam01"].pose.keypoints[0, :2] = (0.8, 0.5)
+    engine._contexts["cam01"].pose.keypoints[20, :2] = (0.2, 0.5)
     engine._action_model.classes = [1] * 10
     second_events = []
     for frame_id in range(134, 301):
@@ -348,9 +381,63 @@ def test_confirmation_emits_exactly_one_stable_event_then_new_episode_after_reco
     assert [event.metadata["incident_id"] for event in second_events] == ["incident-2"]
 
 
+def active_fall_state():
+    return {
+        "vision_current_action": FALL_LABEL,
+        "vision_fall_state": "confirmed",
+        "vision_incident_id": "stable-episode",
+        "vision_last_raw_kpts": np.zeros((25, 3), dtype=np.float32),
+        "vision_pending_decisions": [],
+    }
+
+
+def test_active_fall_ignores_repeated_mature_non_fall_decisions():
+    engine = object.__new__(CanonicalVisionPipeline)
+    state = active_fall_state()
+    for source_time in (4.0, 8.0, 12.0):
+        state["vision_pending_decisions"] = [{"created_at": source_time - 3.1, "is_fall": False, "cancelled": False}]
+        assert engine._advance_decisions(state, source_time, int(source_time)) == []
+        assert state["vision_current_action"] == FALL_LABEL
+        assert state["vision_incident_id"] == "stable-episode"
+
+
+def test_active_fall_stationary_pose_and_one_movement_spike_do_not_recover():
+    state = active_fall_state()
+    CanonicalVisionPipeline._observe_movement(state, np.full((25, 3), 0.2, dtype=np.float32), 1.0)
+    assert state["vision_fall_state"] == "recovery_pending"
+    CanonicalVisionPipeline._observe_movement(state, np.full((25, 3), 0.2, dtype=np.float32), 2.0)
+    assert state["vision_current_action"] == FALL_LABEL
+    assert state["vision_fall_state"] == "confirmed"
+
+
+def test_sustained_movement_plus_non_fall_recovers_after_source_time_hold():
+    engine = object.__new__(CanonicalVisionPipeline)
+    state = active_fall_state()
+    CanonicalVisionPipeline._observe_movement(state, np.full((25, 3), 0.2, dtype=np.float32), 1.0)
+    state["vision_pending_decisions"] = [{"created_at": 0.0, "is_fall": False, "cancelled": False}]
+    engine._advance_decisions(state, 3.1, 1)
+    CanonicalVisionPipeline._observe_movement(
+        state,
+        np.full((25, 3), 0.4, dtype=np.float32),
+        1.0 + FALL_RECOVERY_CONFIRM_SECONDS,
+    )
+    assert state["vision_current_action"] == "Khong nga"
+    assert state["vision_incident_id"] is None
+
+
+def test_temporary_person_loss_keeps_episode_then_prolonged_loss_resets():
+    state = active_fall_state()
+    CanonicalVisionPipeline._reset_for_no_person(state, 10.0)
+    CanonicalVisionPipeline._reset_for_no_person(state, 10.0 + FALL_MISSING_PERSON_GRACE_SECONDS - 0.1)
+    assert state["vision_incident_id"] == "stable-episode"
+    CanonicalVisionPipeline._reset_for_no_person(state, 10.0 + FALL_MISSING_PERSON_GRACE_SECONDS)
+    assert state["vision_current_action"] == "Khong nga"
+    assert state["vision_incident_id"] is None
+
+
 def test_fall_transition_depends_on_source_time_not_processing_clock(tmp_path):
     clock = FakeClock()
-    engine, _ = make_engine(tmp_path, classes=[1], clock=clock)
+    engine, _ = make_engine(tmp_path, classes=[1] * 10, clock=clock)
     session = VisionSession("cam")
     process_range(engine, session, 1, 127)
     clock.value = 50_000.0
@@ -362,7 +449,7 @@ def test_fall_transition_depends_on_source_time_not_processing_clock(tmp_path):
 
 
 def test_source_discontinuity_resets_only_continuity_dependent_state(tmp_path):
-    engine, _ = make_engine(tmp_path, classes=[1])
+    engine, _ = make_engine(tmp_path, classes=[1] * 10)
     session = VisionSession("cam01")
     pending = process_range(engine, session, 1, 127)[-1]
     assert pending.metadata["fall_state"] == "pending"
@@ -463,8 +550,7 @@ def test_failed_face_scans_do_not_consume_unknown_confirmation_observations(tmp_
 
     class FaceApp:
         responses = [[], [], [], [], []] + [
-            [SimpleNamespace(bbox=np.array([1, 1, 8, 8]), embedding=np.ones(4))]
-            for _ in range(5)
+            [SimpleNamespace(bbox=np.array([1, 1, 8, 8]), embedding=np.ones(4))] for _ in range(5)
         ]
 
         def get(self, _crop):
@@ -582,4 +668,3 @@ def test_source_discontinuity_preserves_identity_control_plane_and_resets_retry_
     assert state["vision_source_epoch"] == 5
     assert "vision_face_cache" not in state
     assert "vision_pending_decisions" not in state
-

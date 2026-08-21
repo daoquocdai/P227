@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from src.models.schemas import (
@@ -21,13 +22,14 @@ class EventService:
     def __init__(self, repository: SQLiteEventRepository | None = None) -> None:
         self._repository = repository or SQLiteEventRepository()
         self._lock = asyncio.Lock()
+        self._agent_enqueue: Callable[[str, str, str, str, int], bool] | None = None
+
+    def set_agent_enqueue(self, callback: Callable[[str, str, str, str, int], bool] | None) -> None:
+        self._agent_enqueue = callback
 
     async def create(self, event: VisionEventRequest) -> VisionEventAccepted:
         async with self._lock:
-            if (
-                event.event_type == "UNKNOWN_PERSON"
-                and camera_service.identity_enabled_state(event.camera_id) is False
-            ):
+            if event.event_type == "UNKNOWN_PERSON" and camera_service.identity_enabled_state(event.camera_id) is False:
                 return VisionEventAccepted(
                     id=event.event_id,
                     event_id=event.event_id,
@@ -35,11 +37,14 @@ class EventService:
                     status="resolved",
                 )
             result = self._repository.create(event, self._description(event))
-            alert = (
-                self._repository.get_alert(result.id) if result.status == "pending" and not result.duplicate else None
-            )
+            alert = self._repository.get_alert(result.id) if (result.alert_created or result.incident_updated) else None
         if alert:
-            await alert_broadcaster.publish({"type": "alert_created", "alert": alert})
+            message_type = "alert_created" if result.alert_created else "alert_updated"
+            await alert_broadcaster.publish({"type": message_type, "alert": alert})
+            if self._agent_enqueue is not None and result.agent_review_required and result.incident_id:
+                self._agent_enqueue(
+                    result.incident_id, event.event_id, result.id, event.event_type, result.incident_version or 1
+                )
         return result
 
     async def list_alerts(self) -> list[dict]:
@@ -59,7 +64,10 @@ class EventService:
     async def review(self, alert_id: str, review: AlertReviewRequest) -> dict:
         async with self._lock:
             alert = self._repository.review(alert_id, review)
-        await alert_broadcaster.publish({"type": "alert_updated", "alert": alert})
+        message_type = (
+            "alert_resolved" if review.status in {"safe", "resolved", "false_alarm"} else "alert_acknowledged"
+        )
+        await alert_broadcaster.publish({"type": message_type, "alert": alert})
         return alert
 
     async def confirm_legacy(self, alert_id: str, feedback: str) -> None:
