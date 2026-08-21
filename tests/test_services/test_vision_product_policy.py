@@ -4,6 +4,7 @@ import time
 import numpy as np
 import pytest
 
+from src.config import get_settings
 from src.database import database_connection
 from src.models.frame import FramePacket
 from src.models.vision import VisionDetection, VisionEvent, VisionResult
@@ -292,10 +293,11 @@ def test_blur_faces_changes_only_clipped_valid_face_rois():
     )
 
 
-def test_fall_snapshot_uses_one_shot_privacy_detector_for_stale_face_bbox(tmp_path, monkeypatch):
+@pytest.mark.parametrize("event_type", ["unknown_person", "fall_confirmed"])
+def test_sensitive_snapshot_uses_one_shot_privacy_detector_for_stale_face_bbox(tmp_path, monkeypatch, event_type):
     monkeypatch.setattr(event_snapshot, "SNAPSHOT_ROOT", tmp_path)
     vision_result = result()
-    vision_result.events = [VisionEvent("fall_confirmed", 0.9, {})]
+    vision_result.events = [VisionEvent(event_type, 0.9, {})]
     vision_result.detections[0].metadata.update(
         identity_face_bbox_xyxy=[1, 1, 5, 5],
         identity_face_bbox_frame_id=vision_result.frame_id - 1,
@@ -357,6 +359,8 @@ def test_fall_event_without_a_safe_face_omits_snapshot(tmp_path, monkeypatch):
     monkeypatch.setattr(event_snapshot, "SNAPSHOT_ROOT", tmp_path)
     vision_result = result()
     vision_result.events = [VisionEvent("fall_confirmed", 0.9, {})]
+    vision_result.detections[0].bbox_xyxy = None
+    vision_result.detections[0].metadata = {}
     packet = FramePacket(
         vision_result.camera_id,
         vision_result.frame_id,
@@ -367,7 +371,192 @@ def test_fall_event_without_a_safe_face_omits_snapshot(tmp_path, monkeypatch):
     event_snapshot.attach_event_snapshots(packet, vision_result, lambda _frame: [])
 
     assert "snapshot_path" not in vision_result.events[0].metadata
+    assert vision_result.events[0].metadata["snapshot_privacy_method"] == "no_safe_snapshot"
     assert list(tmp_path.iterdir()) == []
+
+
+def test_unknown_detector_miss_uses_conservative_current_person_blur(tmp_path, monkeypatch):
+    monkeypatch.setattr(event_snapshot, "SNAPSHOT_ROOT", tmp_path)
+    vision_result = result()
+    vision_result.events = [VisionEvent("unknown_person", 0.9, {})]
+    vision_result.metadata["geometry"] = {"scale": 1.0, "pad_x": 0, "pad_y": 0}
+    vision_result.detections[0].bbox_xyxy = (4, 5, 18, 22)
+    vision_result.detections[0].metadata = {}
+    packet = FramePacket(
+        vision_result.camera_id,
+        vision_result.frame_id,
+        vision_result.captured_at,
+        np.indices((24, 24)).sum(axis=0).astype(np.uint8)[..., None].repeat(3, axis=2) * 8,
+    )
+
+    event_snapshot.attach_event_snapshots(packet, vision_result, lambda _frame: [])
+
+    event = vision_result.events[0]
+    assert event.metadata["snapshot_privacy_method"] == "conservative_person_blur"
+    assert event.metadata["snapshot_blurred"] is True
+    assert event.metadata["snapshot_blurred_faces"] == 0
+    assert event.metadata["snapshot_blurred_regions"] == 1
+    assert (tmp_path / event.metadata["snapshot_path"]).is_file()
+
+
+def test_unknown_stale_face_bbox_is_not_used_on_current_event_frame(tmp_path, monkeypatch):
+    monkeypatch.setattr(event_snapshot, "SNAPSHOT_ROOT", tmp_path)
+    vision_result = result()
+    vision_result.events = [VisionEvent("unknown_person", 0.9, {})]
+    vision_result.metadata["geometry"] = {"scale": 1.0, "pad_x": 0, "pad_y": 0}
+    vision_result.detections[0].bbox_xyxy = (2, 2, 20, 22)
+    vision_result.detections[0].metadata.update(
+        identity_face_bbox_xyxy=(3, 3, 8, 8),
+        identity_face_bbox_frame_id=vision_result.frame_id - 1,
+    )
+    packet = FramePacket(
+        vision_result.camera_id,
+        vision_result.frame_id,
+        vision_result.captured_at,
+        np.indices((24, 24)).sum(axis=0).astype(np.uint8)[..., None].repeat(3, axis=2) * 8,
+    )
+
+    event_snapshot.attach_event_snapshots(packet, vision_result, lambda _frame: [])
+
+    event = vision_result.events[0]
+    assert event.metadata["snapshot_privacy_method"] == "conservative_person_blur"
+    assert event.metadata["snapshot_blurred_regions"] == 1
+
+
+def _unsafe_event_result(event_type):
+    vision_result = result()
+    vision_result.events = [VisionEvent(event_type, 0.9, {"event_id": f"debug-{event_type}", "track_id": 7})]
+    vision_result.detections[0].bbox_xyxy = None
+    vision_result.detections[0].metadata = {}
+    return vision_result
+
+
+def _event_packet(vision_result):
+    return FramePacket(
+        vision_result.camera_id,
+        vision_result.frame_id,
+        vision_result.captured_at,
+        np.indices((24, 24)).sum(axis=0).astype(np.uint8)[..., None].repeat(3, axis=2) * 8,
+    )
+
+
+def test_debug_bypass_saves_exact_unblurred_unknown_frame(tmp_path, monkeypatch):
+    monkeypatch.setattr(event_snapshot, "SNAPSHOT_ROOT", tmp_path)
+    vision_result = _unsafe_event_result("unknown_person")
+    packet = _event_packet(vision_result)
+
+    event_snapshot.attach_event_snapshots(
+        packet,
+        vision_result,
+        lambda _frame: [],
+        allow_unblurred_event_snapshot=True,
+    )
+
+    event = vision_result.events[0]
+    assert (tmp_path / event.metadata["snapshot_path"]).is_file()
+    assert event.metadata["snapshot_blurred"] is False
+    assert event.metadata["snapshot_privacy_bypass"] is True
+    assert event.metadata["snapshot_privacy_method"] == "unblurred_debug_bypass"
+
+
+def test_debug_enabled_still_prefers_blurred_unknown_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setattr(event_snapshot, "SNAPSHOT_ROOT", tmp_path)
+    vision_result = _unsafe_event_result("unknown_person")
+    packet = _event_packet(vision_result)
+
+    event_snapshot.attach_event_snapshots(
+        packet,
+        vision_result,
+        lambda _frame: [(2, 2, 12, 12)],
+        allow_unblurred_event_snapshot=True,
+    )
+
+    event = vision_result.events[0]
+    assert event.metadata["snapshot_blurred"] is True
+    assert event.metadata["snapshot_privacy_bypass"] is False
+    assert event.metadata["snapshot_privacy_method"] == "full_frame_detector"
+
+
+@pytest.mark.parametrize("event_type", ["unknown_person", "fall_confirmed"])
+def test_debug_bypass_snapshot_persists_for_sensitive_event(event_type, tmp_path, monkeypatch):
+    monkeypatch.setenv("VISION_ALLOW_UNBLURRED_EVENT_SNAPSHOT", "true")
+    get_settings.cache_clear()
+    monkeypatch.setattr(event_snapshot, "SNAPSHOT_ROOT", tmp_path)
+    monkeypatch.setattr("src.services.media_paths.SNAPSHOT_ROOT", tmp_path)
+    vision_result = _unsafe_event_result(event_type)
+    packet = _event_packet(vision_result)
+    event_snapshot.attach_event_snapshots(
+        packet,
+        vision_result,
+        lambda _frame: [],
+        allow_unblurred_event_snapshot=True,
+    )
+    event = vision_result.events[0]
+
+    adapted = VisionEventAdapter().adapt(vision_result)[0]
+    import asyncio
+
+    accepted = asyncio.run(EventService().create(adapted))
+    assert accepted.accepted is True
+    with database_connection() as connection:
+        media = connection.execute(
+            "SELECT relative_path, is_blurred, subject_type FROM media_assets WHERE event_id = ?",
+            (stable_uuid(event.metadata["event_id"], "event"),),
+        ).fetchone()
+    assert media is not None
+    assert tuple(media) == (
+        event.metadata["snapshot_path"],
+        0,
+        "fall" if event_type == "fall_confirmed" else "scene",
+    )
+
+
+def test_repository_rejects_bypass_metadata_when_setting_is_false(tmp_path, monkeypatch):
+    monkeypatch.setenv("VISION_ALLOW_UNBLURRED_EVENT_SNAPSHOT", "false")
+    get_settings.cache_clear()
+    monkeypatch.setattr(event_snapshot, "SNAPSHOT_ROOT", tmp_path)
+    monkeypatch.setattr("src.services.media_paths.SNAPSHOT_ROOT", tmp_path)
+    vision_result = _unsafe_event_result("fall_confirmed")
+    packet = _event_packet(vision_result)
+    event_snapshot.attach_event_snapshots(
+        packet,
+        vision_result,
+        lambda _frame: [],
+        allow_unblurred_event_snapshot=True,
+    )
+
+    import asyncio
+
+    asyncio.run(EventService().create(VisionEventAdapter().adapt(vision_result)[0]))
+    with database_connection() as connection:
+        metadata = json.loads(connection.execute("SELECT metadata_json FROM events").fetchone()["metadata_json"])
+        assert connection.execute("SELECT 1 FROM media_assets").fetchone() is None
+    assert metadata["snapshot_path"] is None
+
+
+@pytest.mark.parametrize("event_type", ["unknown_person", "fall_confirmed"])
+def test_secure_default_persists_alert_but_omits_unsafe_snapshot(event_type, tmp_path, monkeypatch):
+    monkeypatch.setenv("VISION_ALLOW_UNBLURRED_EVENT_SNAPSHOT", "false")
+    get_settings.cache_clear()
+    monkeypatch.setattr(event_snapshot, "SNAPSHOT_ROOT", tmp_path)
+    monkeypatch.setattr("src.services.media_paths.SNAPSHOT_ROOT", tmp_path)
+    vision_result = _unsafe_event_result(event_type)
+    event_snapshot.attach_event_snapshots(
+        _event_packet(vision_result),
+        vision_result,
+        lambda _frame: [],
+    )
+    assert "snapshot_path" not in vision_result.events[0].metadata
+
+    import asyncio
+
+    accepted = asyncio.run(EventService().create(VisionEventAdapter().adapt(vision_result)[0]))
+    assert accepted.accepted is True
+    assert asyncio.run(EventService().list_alerts())[0]["snapshot_url"] is None
+    with database_connection() as connection:
+        assert connection.execute("SELECT 1 FROM events").fetchone()
+        assert connection.execute("SELECT 1 FROM alerts").fetchone()
+        assert connection.execute("SELECT 1 FROM media_assets").fetchone() is None
 
 
 def test_rotated_crop_boxes_map_back_to_original_frame_coordinates():

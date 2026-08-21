@@ -174,6 +174,7 @@ class VisionSession:
         self._current_packet = None
         self._latest_detection = None
         self._pending_generated_events = []
+        self._pending_fall_diagnostics = []
         self._frame_transform = None
         self._event_frame_sequence = 0
         self._event_source_time_s = 0.0
@@ -329,6 +330,7 @@ class VisionSession:
         self._latest_detection = None
         self.latest_result = None
         self._pending_generated_events = []
+        self._pending_fall_diagnostics = []
         self._event_frame_sequence = 0
         self._event_source_time_s = 0.0
         self._event_source_epoch = 0
@@ -406,11 +408,11 @@ class VisionSession:
         throttle_key = f"{event_type}_{identity_name}"
         now = time.monotonic()
         if now - self.last_sent_time.get(throttle_key, 0) < 5.0:
-            return
+            return False
         self.last_sent_time[throttle_key] = now
         
         if not self._event_frame_sequence:
-            return
+            return False
         detection = self._latest_detection
         event = VisionEvent(
             event_type=event_type,
@@ -430,6 +432,20 @@ class VisionSession:
         self._pending_generated_events.append(event)
         if self.callbacks.on_event:
             self.callbacks.on_event(event)
+        return True
+
+    def _record_fall_diagnostic(self, source_time_s, **values):
+        source_epoch = getattr(self, "_event_source_epoch", getattr(self.config, "source_epoch", 0))
+        diagnostic = {
+            "source_time_s": float(source_time_s),
+            "source_epoch": int(source_epoch),
+            **values,
+        }
+        if not hasattr(self, "_pending_fall_diagnostics"):
+            self._pending_fall_diagnostics = []
+        self._pending_fall_diagnostics.append(diagnostic)
+        if getattr(self, "log_level", "info") == "debug":
+            print(f"[Fall Debug] {diagnostic}")
 
     def process_person(self, frame, x1, y1, x2, y2, track_id, frame_sequence=None,
                        source_time_s=None, overlay_frame=None):
@@ -510,57 +526,110 @@ class VisionSession:
                 torso_len = 1e-5
 
             # Hàm kiểm tra chuyển động chống pha loãng tín hiệu
-            def has_moved(current, anchor, torso_length):
+            def movement_check(current, anchor, torso_length):
                 # Tính khoảng cách xê dịch của toàn bộ 25 khớp
                 diff = np.linalg.norm(current - anchor, axis=1) 
                 
                 # Màng lọc 1: Loại bỏ nhiễu tĩnh (< 15% torso)
                 moved_joints = diff[diff > 0.15 * torso_length]
-                
+                avg_movement = float(np.mean(moved_joints)) if len(moved_joints) else 0.0
                 # Màng lọc 2: Chốt hành động (Ít nhất 1 khớp xê dịch mạnh > 40% torso)
-                if len(moved_joints) >= 1:
-                    avg_movement = np.mean(moved_joints)
-                    if avg_movement > 0.40 * torso_length:
-                        return True
-                return False
+                moved = bool(len(moved_joints) >= 1 and avg_movement > 0.40 * torso_length)
+                return moved, avg_movement, len(moved_joints)
 
             # DÒNG THỜI GIAN CUỐN CHIẾU
             if elapsed >= 2.0 and event["state"] == "FALL_DETECTED":
+                previous_state = event["state"]
                 event["anchor_kpts"] = current_kpts
                 event["state"] = "WARNING_PENDING"
                 event["next_check_source_time_s"] = event["started_source_time_s"] + 3.0
+                self._record_fall_diagnostic(
+                    current_source_time_s, current_action=self.current_action,
+                    top_predicted_class=event.get("top_predicted_class", "Fall"),
+                    fall_class_probability=event.get("fall_class_probability", event["conf"]),
+                    pending_state=event["state"], state_transition=f"{previous_state}->WARNING_PENDING",
+                    elapsed=elapsed, movement_gate_result=None, movement_amount=None,
+                    torso_reference=float(torso_len), cancellation_reason=None,
+                    fall_confirmed_emitted=False, emitted_confidence=None)
                 
             elif event["state"] == "WARNING_PENDING" and current_source_time_s >= event["next_check_source_time_s"]:
-                if has_moved(current_kpts, event["anchor_kpts"], torso_len):
+                moved, movement_amount, moved_joints = movement_check(
+                    current_kpts, event["anchor_kpts"], torso_len)
+                if moved:
                     self.pending_event = None # Khớp xê dịch mạnh -> Bẻ lái hủy
+                    transition = "WARNING_PENDING->CLEAR"
+                    cancellation_reason = "movement_gate"
                 else:
                     event["state"] = "WARNING"
+                    transition = "WARNING_PENDING->WARNING"
+                    cancellation_reason = None
                     self.current_action = "Co the nga (Cho...)"
                     self.action_color = (0, 165, 255) # Cam
                     event["anchor_kpts"] = current_kpts
                     event["next_check_source_time_s"] = event["started_source_time_s"] + 5.0
+                self._record_fall_diagnostic(
+                    current_source_time_s, current_action=self.current_action,
+                    top_predicted_class=event.get("top_predicted_class", "Fall"),
+                    fall_class_probability=event.get("fall_class_probability", event["conf"]),
+                    pending_state=(event["state"] if self.pending_event else "CLEAR"),
+                    state_transition=transition, elapsed=elapsed, movement_gate_result=moved,
+                    movement_amount=movement_amount, moved_joints=moved_joints,
+                    torso_reference=float(torso_len), cancellation_reason=cancellation_reason,
+                    fall_confirmed_emitted=False, emitted_confidence=None)
                     
             elif event["state"] == "WARNING" and current_source_time_s >= event["next_check_source_time_s"]:
-                if has_moved(current_kpts, event["anchor_kpts"], torso_len):
+                moved, movement_amount, moved_joints = movement_check(
+                    current_kpts, event["anchor_kpts"], torso_len)
+                if moved:
                     self.pending_event = None
+                    transition = "WARNING->CLEAR"
+                    cancellation_reason = "movement_gate"
+                    emitted = False
                 else:
                     event["state"] = "ALERT"
+                    transition = "WARNING->ALERT"
+                    cancellation_reason = None
                     self.current_action = f"Nga! ({event['conf']:.2f})"
                     self.action_color = (0, 0, 255) # Đỏ
                     
                     # Phát API cảnh báo (Gửi duy nhất 1 lần ở Giây thứ 5.0)
-                    self.emit_event("FALL_CONFIRMED", event["conf"])
+                    emitted = self.emit_event("FALL_CONFIRMED", event["conf"]) is not False
                     
                     event["anchor_kpts"] = current_kpts
                     event["next_check_source_time_s"] = current_source_time_s + 2.0
+                self._record_fall_diagnostic(
+                    current_source_time_s, current_action=self.current_action,
+                    top_predicted_class=event.get("top_predicted_class", "Fall"),
+                    fall_class_probability=event.get("fall_class_probability", event["conf"]),
+                    pending_state=(event["state"] if self.pending_event else "CLEAR"),
+                    state_transition=transition, elapsed=elapsed, movement_gate_result=moved,
+                    movement_amount=movement_amount, moved_joints=moved_joints,
+                    torso_reference=float(torso_len), cancellation_reason=cancellation_reason,
+                    fall_confirmed_emitted=emitted,
+                    emitted_confidence=(event["conf"] if emitted else None))
                     
             elif event["state"] == "ALERT" and current_source_time_s >= event["next_check_source_time_s"]:
                 # Cuốn chiếu kiểm tra mỗi 2 giây
-                if has_moved(current_kpts, event["anchor_kpts"], torso_len):
+                moved, movement_amount, moved_joints = movement_check(
+                    current_kpts, event["anchor_kpts"], torso_len)
+                if moved:
                     self.pending_event = None
+                    transition = "ALERT->CLEAR"
+                    cancellation_reason = "movement_gate"
                 else:
                     event["anchor_kpts"] = current_kpts
                     event["next_check_source_time_s"] = current_source_time_s + 2.0
+                    transition = "ALERT->ALERT"
+                    cancellation_reason = None
+                self._record_fall_diagnostic(
+                    current_source_time_s, current_action=self.current_action,
+                    top_predicted_class=event.get("top_predicted_class", "Fall"),
+                    fall_class_probability=event.get("fall_class_probability", event["conf"]),
+                    pending_state=(event["state"] if self.pending_event else "CLEAR"),
+                    state_transition=transition, elapsed=elapsed, movement_gate_result=moved,
+                    movement_amount=movement_amount, moved_joints=moved_joints,
+                    torso_reference=float(torso_len), cancellation_reason=cancellation_reason,
+                    fall_confirmed_emitted=False, emitted_confidence=None)
 
             # Khôi phục trạng thái an toàn nếu bị hủy
             if self.pending_event is None:
@@ -591,6 +660,18 @@ class VisionSession:
                     prob = F.softmax(output, dim=1).squeeze()
                     pred_idx = torch.argmax(prob).item()
                     conf = float(prob[pred_idx]) 
+                    fall_probability = float(prob[0])
+                    action_names = {0: "Fall", 1: "Dung", 2: "Cui", 3: "Ngoi", 4: "Nam"}
+                    top_predicted_class = action_names.get(pred_idx, f"class_{pred_idx}")
+                    self._record_fall_diagnostic(
+                        current_source_time_s, current_action=self.current_action,
+                        top_predicted_class=top_predicted_class,
+                        fall_class_probability=fall_probability,
+                        pending_state="FALL_DETECTED" if pred_idx == 0 else "CLEAR",
+                        state_transition="CLEAR->FALL_DETECTED" if pred_idx == 0 else None,
+                        elapsed=0.0, movement_gate_result=None, movement_amount=None,
+                        torso_reference=None, cancellation_reason=None,
+                        fall_confirmed_emitted=False, emitted_confidence=None)
                     
                     if pred_idx == 0: # AI Báo Ngã
                         # Cơ chế Lock-out: Bỏ sự kiện vào hàng chờ
@@ -599,12 +680,13 @@ class VisionSession:
                             "state": "FALL_DETECTED",
                             "anchor_kpts": None,
                             "next_check_source_time_s": 0,
-                            "conf": conf
+                            "conf": conf,
+                            "top_predicted_class": top_predicted_class,
+                            "fall_class_probability": fall_probability,
                         }
                         self.current_action = f"Phat hien nga ({conf:.2f}) - Kiem tra..."
                         self.action_color = (0, 255, 255) # Vàng
                     else:
-                        action_names = {1: "Dung", 2: "Cui", 3: "Ngoi", 4: "Nam"}
                         action_name = action_names.get(pred_idx, "Khong xac dinh")
                         self.current_action = f"{action_name} ({conf:.2f})"
                         self.action_color = (0, 255, 0) # Xanh
@@ -828,6 +910,7 @@ class VisionSession:
                     self.action_color = (0, 255, 0)
 
             self.current_sda_gcn_ms = None
+            self._pending_fall_diagnostics = []
             if self.pose_samples:
                 self.detect_fall(self.pose_samples[-1].source_time_s)
             if self.current_sda_gcn_ms is not None:
@@ -855,6 +938,7 @@ class VisionSession:
                     fall_confidence=fall_confidence,
                     detections=((self._latest_detection,) if self._latest_detection else ()),
                     generated_events=tuple(self._pending_generated_events),
+                    fall_diagnostics=tuple(self._pending_fall_diagnostics),
                     stage_metrics={"pose_callback_latency_ms": self.pose_inference_ms,
                                    "sda_gcn_inference_ms": self.current_sda_gcn_ms,
                                    "sda_gcn_inference_started_monotonic_s": (

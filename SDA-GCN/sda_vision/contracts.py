@@ -90,6 +90,7 @@ class VisionFrameResult:
     detections: tuple[VisionDetection, ...] = ()
     generated_events: tuple[VisionEvent, ...] = ()
     stage_metrics: dict[str, float | None] = field(default_factory=dict)
+    fall_diagnostics: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

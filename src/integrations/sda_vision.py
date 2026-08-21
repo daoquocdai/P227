@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import logging
-import queue
 import threading
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from uuid import uuid4
 
@@ -12,9 +11,13 @@ from sda_vision import IdentityGallerySnapshot, VisionCallbacks, VisionSession, 
 
 from src.models.frame import FramePacket
 from src.models.vision import VisionDetection, VisionEvent, VisionResult
-from src.services.event_snapshot import attach_event_snapshots
+from src.services.event_snapshot import MediaPipePrivacyFaceDetector, attach_event_snapshots
 from src.services.frame_hub import FrameHub
-from src.services.vision_product_policy import VisionProductPolicy
+from src.services.vision_product_policy import (
+    VisionProductPolicy,
+    needs_product_policy,
+    unknown_product_policy_candidates,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +132,7 @@ def map_vision_result(result, *, camera_location: str, identity_enabled: bool) -
             "current_action": result.current_action,
             "fall_state": result.fall_state,
             "fall_confidence": result.fall_confidence,
+            "fall_diagnostics": list(result.fall_diagnostics),
             "stage_metrics": stage_metrics,
         },
     )
@@ -138,22 +142,41 @@ def map_vision_result(result, *, camera_location: str, identity_enabled: bool) -
 class _EventMediaItem:
     packet: FramePacket
     result: VisionResult
+    candidate_key: tuple[str, int, int] | None = None
 
 
 class SdaEventMediaWorker:
     """Bounded handoff for policy, privacy JPEG, and event persistence."""
 
-    def __init__(self, dispatcher=None, capacity: int = 32):
+    def __init__(self, dispatcher=None, capacity: int = 32, *, allow_unblurred_event_snapshot: bool = False):
         self._dispatcher = dispatcher
         self._policy = VisionProductPolicy()
-        self._queue: queue.Queue[_EventMediaItem] = queue.Queue(maxsize=capacity)
+        self._allow_unblurred_event_snapshot = allow_unblurred_event_snapshot
+        try:
+            self._privacy_face_detector = MediaPipePrivacyFaceDetector()
+        except Exception:
+            logger.exception("Could not initialize snapshot-only CPU privacy face detector")
+            self._privacy_face_detector = None
+        self._capacity = capacity
+        self._work_available = threading.Condition()
+        self._semantic_queue: deque[_EventMediaItem] = deque()
+        self._unknown_pending: OrderedDict[tuple[str, int, int], _EventMediaItem] = OrderedDict()
+        self._unknown_inflight: set[tuple[str, int, int]] = set()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._profile_lock = threading.Lock()
         self._profile_samples: deque[tuple[float, float]] = deque(maxlen=512)
         self._snapshot_samples: deque[tuple[float, float]] = deque(maxlen=512)
         self._submitted = 0
+        self._product_policy_candidates = 0
+        self._product_policy_events_created = 0
+        self._no_event_after_policy = 0
         self._max_queue_depth = 0
+        self._submitted_semantic_events = 0
+        self._submitted_policy_candidates = 0
+        self._coalesced_policy_candidates = 0
+        self._processed_policy_candidates = 0
+        self._queue_full_drops = 0
 
     def start(self):
         if self._thread and self._thread.is_alive():
@@ -163,8 +186,16 @@ class SdaEventMediaWorker:
         self._thread.start()
 
     def submit(self, packet: FramePacket, result: VisionResult) -> bool:
-        if not result.events:
+        if not needs_product_policy(result):
             return True
+        candidates = unknown_product_policy_candidates(result)
+        candidate_key = None
+        if not result.events and len(candidates) == 1:
+            candidate_key = (
+                result.camera_id,
+                int(result.metadata.get("source_epoch", 0)),
+                candidates[0].track_id,
+            )
         item = _EventMediaItem(
             FramePacket(
                 packet.camera_id,
@@ -178,48 +209,115 @@ class SdaEventMediaWorker:
                 packet.discontinuity,
             ),
             result,
+            candidate_key,
         )
-        try:
-            self._queue.put_nowait(item)
+        with self._work_available:
+            if candidate_key is not None:
+                with self._profile_lock:
+                    self._submitted_policy_candidates += 1
+                    self._product_policy_candidates += len(candidates)
+                if candidate_key in self._unknown_inflight:
+                    with self._profile_lock:
+                        self._coalesced_policy_candidates += 1
+                    return True
+                if candidate_key in self._unknown_pending:
+                    self._unknown_pending[candidate_key] = item
+                    self._unknown_pending.move_to_end(candidate_key)
+                    with self._profile_lock:
+                        self._coalesced_policy_candidates += 1
+                    return True
+                if len(self._unknown_pending) >= self._capacity:
+                    with self._profile_lock:
+                        self._queue_full_drops += 1
+                    return False
+                self._unknown_pending[candidate_key] = item
+            else:
+                if len(self._semantic_queue) >= self._capacity:
+                    with self._profile_lock:
+                        self._queue_full_drops += 1
+                    logger.error(
+                        "SDA semantic event-media queue full; delivering event without snapshot camera=%s frame=%s",
+                        result.camera_id,
+                        result.frame_id,
+                    )
+                    if self._dispatcher is not None:
+                        self._dispatcher.dispatch(result)
+                    return False
+                self._semantic_queue.append(item)
+                with self._profile_lock:
+                    self._submitted_semantic_events += len(result.events)
+                    self._product_policy_candidates += len(candidates)
+            depth = len(self._semantic_queue) + len(self._unknown_pending)
             with self._profile_lock:
                 self._submitted += 1
-                self._max_queue_depth = max(self._max_queue_depth, self._queue.qsize())
+                self._max_queue_depth = max(self._max_queue_depth, depth)
+            self._work_available.notify()
             return True
-        except queue.Full:
-            logger.error(
-                "SDA event-media queue full; delivering semantic event without snapshot camera=%s frame=%s",
-                result.camera_id,
-                result.frame_id,
-            )
-            if self._dispatcher is not None:
-                self._dispatcher.dispatch(result)
-            return False
 
     def clear_camera(self, camera_id: str):
         self._policy.clear_camera(camera_id)
+        with self._work_available:
+            for key in [key for key in self._unknown_pending if key[0] == camera_id]:
+                self._unknown_pending.pop(key, None)
 
     def stop(self):
         self._stop.set()
+        with self._work_available:
+            self._work_available.notify_all()
         thread = self._thread
         if thread and thread.is_alive():
             thread.join(timeout=5.0)
         self._thread = None
+        detector = self._privacy_face_detector
+        if detector is not None:
+            try:
+                detector.close()
+            except Exception:
+                logger.exception("Could not close snapshot-only CPU privacy face detector")
+            self._privacy_face_detector = None
 
     def _run(self):
-        while not self._stop.is_set() or not self._queue.empty():
-            try:
-                item = self._queue.get(timeout=0.2)
-            except queue.Empty:
-                continue
+        while True:
+            with self._work_available:
+                self._work_available.wait_for(
+                    lambda: self._stop.is_set() or self._semantic_queue or self._unknown_pending,
+                    timeout=0.2,
+                )
+                if self._semantic_queue:
+                    item = self._semantic_queue.popleft()
+                elif self._unknown_pending:
+                    key, item = self._unknown_pending.popitem(last=False)
+                    self._unknown_inflight.add(key)
+                elif self._stop.is_set():
+                    break
+                else:
+                    continue
             try:
                 started = time.perf_counter()
+                if item.candidate_key is not None:
+                    with self._profile_lock:
+                        self._processed_policy_candidates += 1
+                event_count_before_policy = len(item.result.events)
                 result = self._policy.apply(item.result)
+                events_created = max(0, len(result.events) - event_count_before_policy)
+                if not result.events:
+                    with self._profile_lock:
+                        self._product_policy_events_created += events_created
+                        self._no_event_after_policy += 1
+                        self._profile_samples.append((time.monotonic(), (time.perf_counter() - started) * 1000.0))
+                    continue
                 snapshot_started = time.perf_counter()
-                attach_event_snapshots(item.packet, result)
+                attach_event_snapshots(
+                    item.packet,
+                    result,
+                    self._privacy_face_detector,
+                    allow_unblurred_event_snapshot=self._allow_unblurred_event_snapshot,
+                )
                 snapshot_elapsed_ms = (time.perf_counter() - snapshot_started) * 1000.0
                 if self._dispatcher is not None:
                     self._dispatcher.dispatch(result)
                 with self._profile_lock:
+                    self._product_policy_events_created += events_created
                     self._snapshot_samples.append((time.monotonic(), snapshot_elapsed_ms))
                     self._profile_samples.append((time.monotonic(), (time.perf_counter() - started) * 1000.0))
             except Exception:
@@ -231,16 +329,27 @@ class SdaEventMediaWorker:
                 if self._dispatcher is not None:
                     self._dispatcher.dispatch(item.result)
             finally:
-                self._queue.task_done()
+                if item.candidate_key is not None:
+                    with self._work_available:
+                        self._unknown_inflight.discard(item.candidate_key)
 
     def profile(self) -> dict:
         with self._profile_lock:
             return {
                 "submitted": self._submitted,
+                "event_media_submitted": self._submitted,
+                "product_policy_candidates": self._product_policy_candidates,
+                "product_policy_events_created": self._product_policy_events_created,
+                "event_media_no_event_after_policy": self._no_event_after_policy,
+                "submitted_semantic_events": self._submitted_semantic_events,
+                "submitted_policy_candidates": self._submitted_policy_candidates,
+                "coalesced_policy_candidates": self._coalesced_policy_candidates,
+                "processed_policy_candidates": self._processed_policy_candidates,
+                "queue_full_drops": self._queue_full_drops,
                 "max_queue_depth": self._max_queue_depth,
                 "samples": list(self._profile_samples),
                 "snapshot_samples": list(self._snapshot_samples),
-                "current_queue_depth": self._queue.qsize(),
+                "current_queue_depth": len(self._semantic_queue) + len(self._unknown_pending),
             }
 
 
@@ -267,7 +376,10 @@ class SdaSessionRegistry:
     def __init__(self, frame_hub: FrameHub, *, settings, event_dispatcher=None):
         self.frame_hub = frame_hub
         self.settings = settings
-        self._events = SdaEventMediaWorker(event_dispatcher)
+        self._events = SdaEventMediaWorker(
+            event_dispatcher,
+            allow_unblurred_event_snapshot=getattr(settings, "vision_allow_unblurred_event_snapshot", False),
+        )
         self._lock = threading.RLock()
         self._records: dict[str, _SessionRecord] = {}
         self._vision_desired: dict[str, bool] = {}
@@ -366,7 +478,7 @@ class SdaSessionRegistry:
             ):
                 record.latest_result = mapped
             record.processed_frames += 1
-        if mapped.events:
+        if needs_product_policy(mapped):
             packet = FramePacket(
                 camera_id,
                 mapped.frame_id,

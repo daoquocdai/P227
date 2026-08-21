@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     vision_identity_enabled: bool = False
     vision_identity_process_priority: Literal["normal", "below_normal"] = "normal"
     vision_identity_cpu_affinity: tuple[int, ...] | None = None
+    vision_allow_unblurred_event_snapshot: bool = False
 
     # SDA-backed enrollment encoder settings.
     vision_identity_provider: Literal["auto", "cpu", "cuda", "directml"] = "auto"

@@ -9,6 +9,48 @@ from src.services.media_paths import SNAPSHOT_ROOT, valid_snapshot_name
 logger = logging.getLogger(__name__)
 
 
+class MediaPipePrivacyFaceDetector:
+    """Snapshot-only CPU face detector backed by the installed MediaPipe model."""
+
+    def __init__(self) -> None:
+        self._detector = None
+
+    def __call__(self, frame):
+        from mediapipe.python._framework_bindings import resource_util
+        from mediapipe.python.solutions.face_detection import FaceDetection
+
+        try:
+            if self._detector is None:
+                self._detector = FaceDetection(model_selection=1, min_detection_confidence=0.5)
+            output = self._detector.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        finally:
+            # Legacy Solutions sets a process-global package resource root.
+            # Restore it so later MediaPipe Tasks sessions accept absolute paths.
+            resource_util.set_resource_dir("")
+        height, width = frame.shape[:2]
+        boxes = []
+        for detection in output.detections or ():
+            detected = detection.location_data.relative_bounding_box
+            box = _clip_box(
+                (
+                    detected.xmin * width,
+                    detected.ymin * height,
+                    (detected.xmin + detected.width) * width,
+                    (detected.ymin + detected.height) * height,
+                ),
+                width,
+                height,
+            )
+            if box is not None:
+                boxes.append(box)
+        return boxes
+
+    def close(self) -> None:
+        if self._detector is not None:
+            self._detector.close()
+            self._detector = None
+
+
 def blur_faces(frame, face_boxes):
     """Copy a frame and blur only valid, clipped face ROIs."""
     output = frame.copy()
@@ -164,14 +206,30 @@ def _privacy_boxes(frame, result, exact_boxes, detector):
     if exact_boxes:
         return exact_boxes, "exact_face_bbox"
     if detector is not None:
-        boxes = detector(frame)
+
+        def safe_detect(candidate):
+            try:
+                return detector(candidate)
+            except Exception:
+                logger.exception("Snapshot-only CPU privacy detector failed")
+                return []
+
+        boxes = safe_detect(frame)
         if boxes:
             return boxes, "full_frame_detector"
-        boxes, method = _detect_in_person_crops(frame, result, detector)
+        boxes, method = _detect_in_person_crops(frame, result, safe_detect)
         if boxes:
             return boxes, method
     boxes = _pose_head_boxes(frame, result)
-    return (boxes, "pose_head_roi") if boxes else ([], "no_safe_snapshot")
+    if boxes:
+        return boxes, "pose_head_roi"
+    height, width = frame.shape[:2]
+    person_boxes = []
+    for x1, y1, x2, y2, _detection in _source_person_boxes(result):
+        clipped = _clip_box((x1, y1, x2, y2), width, height)
+        if clipped is not None:
+            person_boxes.append(clipped)
+    return (person_boxes, "conservative_person_blur") if person_boxes else ([], "no_safe_snapshot")
 
 
 def _exact_source_face_boxes(result):
@@ -208,7 +266,13 @@ def _exact_source_face_boxes(result):
     return boxes
 
 
-def attach_event_snapshots(packet, result, privacy_face_detector=None) -> None:
+def attach_event_snapshots(
+    packet,
+    result,
+    privacy_face_detector=None,
+    *,
+    allow_unblurred_event_snapshot: bool = False,
+) -> None:
     """Save evidence from the exact FramePacket paired with the event result."""
     if not result.events:
         return
@@ -222,17 +286,25 @@ def attach_event_snapshots(packet, result, privacy_face_detector=None) -> None:
                 if privacy_result is None:
                     privacy_result = _privacy_boxes(packet.frame, result, exact_face_boxes, privacy_face_detector)
                 face_boxes, privacy_method = privacy_result
-                event.metadata["snapshot_privacy_method"] = privacy_method
             else:
                 face_boxes = exact_face_boxes
+                privacy_method = "exact_face_bbox" if exact_face_boxes else "no_safe_snapshot"
             frame, blurred_faces = blur_faces(packet.frame, face_boxes)
+            event.metadata["snapshot_privacy_method"] = privacy_method
+            event.metadata["snapshot_privacy_bypass"] = False
+            if privacy_method == "conservative_person_blur":
+                event.metadata["snapshot_blurred_regions"] = blurred_faces
+                event.metadata["snapshot_blurred_faces"] = 0
             # Never persist an unblurred Unknown-person image. A locked identity
             # may carry a face bbox cached from an earlier frame; in that case
             # keep delivering the event, but omit unsafe visual evidence.
-            if event.type == "unknown_person" and blurred_faces == 0:
-                continue
-            if event.type == "fall_confirmed" and blurred_faces == 0:
-                continue
+            if event.type in {"unknown_person", "fall_confirmed"} and blurred_faces == 0:
+                if not allow_unblurred_event_snapshot:
+                    continue
+                frame = packet.frame.copy()
+                privacy_method = "unblurred_debug_bypass"
+                event.metadata["snapshot_privacy_method"] = privacy_method
+                event.metadata["snapshot_privacy_bypass"] = True
             ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
             if not ok:
                 raise RuntimeError("OpenCV could not encode the event snapshot")
@@ -247,7 +319,8 @@ def attach_event_snapshots(packet, result, privacy_face_detector=None) -> None:
             temporary.replace(destination)
             event.metadata["snapshot_path"] = filename
             event.metadata["snapshot_blurred"] = blurred_faces > 0
-            event.metadata["snapshot_blurred_faces"] = blurred_faces
+            if privacy_method != "conservative_person_blur":
+                event.metadata["snapshot_blurred_faces"] = blurred_faces
         except Exception:  # noqa: BLE001 - evidence failure must not stop event delivery
             logger.exception(
                 "Could not persist Vision event snapshot camera=%s frame=%s",

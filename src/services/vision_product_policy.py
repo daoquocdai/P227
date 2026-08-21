@@ -1,15 +1,36 @@
 import json
+import logging
 import threading
 from uuid import uuid4
 
 from src.database import database_connection
-from src.models.vision import VisionEvent, VisionResult
+from src.models.vision import VisionDetection, VisionEvent, VisionResult
+
+logger = logging.getLogger(__name__)
 
 
 def unknown_identity_scores(value: object) -> tuple[float, float]:
     """Return clamped cosine similarity and its UI mismatch score."""
     similarity = max(0.0, min(1.0, float(value)))
     return similarity, 1.0 - similarity
+
+
+def unknown_product_policy_candidates(result: VisionResult) -> list[VisionDetection]:
+    """Return verified, associated detections that ProductPolicy may classify as unknown."""
+    return [
+        detection
+        for detection in result.detections
+        if (
+            detection.track_id is not None
+            and detection.metadata.get("identity_state") == "LOCKED_UNKNOWN"
+            and detection.metadata.get("identity_face_verified") is True
+        )
+    ]
+
+
+def needs_product_policy(result: VisionResult) -> bool:
+    """Return whether a result can produce a business event in ProductPolicy."""
+    return bool(result.events) or bool(unknown_product_policy_candidates(result))
 
 
 class VisionProductPolicy:
@@ -32,14 +53,8 @@ class VisionProductPolicy:
         self._last_fall: dict[tuple[str, int], float] = {}
 
     def apply(self, result: VisionResult) -> VisionResult:
-        unknown_candidates = [
-            detection
-            for detection in result.detections
-            if detection.track_id is not None
-            and detection.metadata.get("identity_state") == "LOCKED_UNKNOWN"
-            and detection.metadata.get("identity_face_verified") is True
-        ]
-        if not result.events and not unknown_candidates:
+        unknown_candidates = unknown_product_policy_candidates(result)
+        if not needs_product_policy(result):
             return result
         general = self._general_settings()
         fall_threshold = float(general.get("fall_threshold", 72)) / 100.0
@@ -56,13 +71,31 @@ class VisionProductPolicy:
                 accepted_events.append(event)
                 continue
             if event.confidence < fall_threshold:
+                logger.debug(
+                    "Fall event rejected camera=%s confidence=%.4f threshold=%.4f decision=below_threshold",
+                    result.camera_id,
+                    event.confidence,
+                    fall_threshold,
+                )
                 continue
             with self._lock:
                 last_emitted = self._last_fall.get(fall_key)
                 if last_emitted is not None and now - last_emitted < self._fall_cooldown_seconds:
+                    logger.debug(
+                        "Fall event rejected camera=%s confidence=%.4f threshold=%.4f decision=cooldown",
+                        result.camera_id,
+                        event.confidence,
+                        fall_threshold,
+                    )
                     continue
                 self._last_fall[fall_key] = now
             accepted_events.append(event)
+            logger.debug(
+                "Fall event accepted camera=%s confidence=%.4f threshold=%.4f decision=emit",
+                result.camera_id,
+                event.confidence,
+                fall_threshold,
+            )
         result.events[:] = accepted_events
 
         stranger_threshold = float(general.get("stranger_threshold", 78)) / 100.0
@@ -72,6 +105,16 @@ class VisionProductPolicy:
             assert track_id is not None
             similarity, mismatch_score = unknown_identity_scores(metadata.get("identity_similarity", 0.0))
             if mismatch_score < stranger_threshold:
+                logger.debug(
+                    "Unknown candidate rejected camera=%s track=%s state=%s verified=true "
+                    "similarity=%.4f mismatch=%.4f threshold=%.4f decision=below_threshold",
+                    result.camera_id,
+                    track_id,
+                    metadata.get("identity_state"),
+                    similarity,
+                    mismatch_score,
+                    stranger_threshold,
+                )
                 continue
             key = (result.camera_id, source_epoch, track_id)
             with self._lock:
@@ -80,6 +123,16 @@ class VisionProductPolicy:
                 if (last_emitted is not None and now - last_emitted < self._unknown_cooldown_seconds) or (
                     last_fall is not None and now - last_fall < self._notification_cooldown_seconds
                 ):
+                    logger.debug(
+                        "Unknown candidate rejected camera=%s track=%s state=%s verified=true "
+                        "similarity=%.4f mismatch=%.4f threshold=%.4f decision=cooldown",
+                        result.camera_id,
+                        track_id,
+                        metadata.get("identity_state"),
+                        similarity,
+                        mismatch_score,
+                        stranger_threshold,
+                    )
                     continue
                 self._last_unknown[key] = now
             event_id = str(uuid4())
@@ -95,6 +148,16 @@ class VisionProductPolicy:
                         "stranger_confidence": mismatch_score,
                     },
                 )
+            )
+            logger.debug(
+                "Unknown candidate accepted camera=%s track=%s state=%s verified=true "
+                "similarity=%.4f mismatch=%.4f threshold=%.4f decision=emit",
+                result.camera_id,
+                track_id,
+                metadata.get("identity_state"),
+                similarity,
+                mismatch_score,
+                stranger_threshold,
             )
         return result
 
