@@ -20,12 +20,14 @@ jobs:
           cache: pip
           cache-dependency-path: |
             requirements/base.txt
+            requirements/dev.txt
             requirements/vision-cpu.txt
             requirements/vision-identity.txt
 
       - name: Install dependencies
         run: |
           pip install -r requirements/vision-cpu.txt
+          pip install -r requirements/dev.txt
           pip install --no-deps -r requirements/vision-identity.txt
 
       - name: Lint with ruff
