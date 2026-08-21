@@ -17,6 +17,7 @@ from sda_vision.runtime.identity import (
     validate_cpu_affinity,
     validate_process_priority,
 )
+from sda_vision import IdentityGalleryEntry, IdentityGallerySnapshot
 from runtime.pipeline import FixedRateScheduler, LatestFrameStore
 from runtime.source import FramePacket
 
@@ -92,6 +93,33 @@ class IdentityStateTests(unittest.TestCase):
                             "timestamp": 2.0, "bbox": (0, 0, 10, 10), "inference_ms": 10.0})
         stage.poll()
         self.assertEqual(stage.result.state, IdentityState.UNVERIFIED)
+
+    def test_gallery_update_resets_locked_state_and_discards_stale_result(self):
+        stage = self.make_stage()
+        stage.gallery_mode = "supplied"
+        stage.gallery_version = 1
+        stage._gallery_updates = queue.Queue(maxsize=1)
+        stage.result = IdentityResult(IdentityState.LOCKED_KNOWN, "Old", 0.9,
+                                      gallery_version=1)
+        snapshot = IdentityGallerySnapshot(
+            2, (IdentityGalleryEntry("p2", "New", np.ones(4)),))
+        stage.update_gallery(snapshot)
+        self.assertEqual(stage.result.state, IdentityState.UNVERIFIED)
+        stage._results.put({"known": True, "person_id": "p1", "name": "Old",
+                            "confidence": 0.99, "timestamp": 2.0,
+                            "bbox": (0, 0, 10, 10), "inference_ms": 10.0,
+                            "gallery_version": 1})
+        stage.poll()
+        self.assertEqual(stage.result.state, IdentityState.UNVERIFIED)
+
+    def test_gallery_update_queue_is_latest_only(self):
+        stage = self.make_stage()
+        stage.gallery_mode = "supplied"
+        stage.gallery_version = 0
+        stage._gallery_updates = queue.Queue(maxsize=1)
+        stage.update_gallery(IdentityGallerySnapshot(1))
+        stage.update_gallery(IdentityGallerySnapshot(2))
+        self.assertEqual(stage._gallery_updates.get_nowait().version, 2)
 
 
 class IdentityIsolationTests(unittest.TestCase):

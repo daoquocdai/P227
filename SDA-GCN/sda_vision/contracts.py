@@ -6,9 +6,43 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
+import numpy as np
+
 
 class BBoxCoordinateSpace(str, Enum):
     SOURCE_PIXELS = "source_pixels"
+
+
+@dataclass(frozen=True, slots=True)
+class IdentityGalleryEntry:
+    person_id: str
+    name: str
+    embedding: np.ndarray
+
+    def __post_init__(self):
+        person_id = self.person_id.strip()
+        name = self.name.strip()
+        embedding = np.asarray(self.embedding, dtype=np.float32).reshape(-1).copy()
+        if not person_id or not name:
+            raise ValueError("Identity gallery person_id and name must be non-empty")
+        if embedding.size == 0 or not np.isfinite(embedding).all():
+            raise ValueError("Identity gallery embedding must be non-empty and finite")
+        object.__setattr__(self, "person_id", person_id)
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "embedding", embedding)
+
+
+@dataclass(frozen=True, slots=True)
+class IdentityGallerySnapshot:
+    version: int | str
+    entries: tuple[IdentityGalleryEntry, ...] = ()
+
+    def __post_init__(self):
+        entries = tuple(self.entries)
+        dimensions = {entry.embedding.size for entry in entries}
+        if len(dimensions) > 1:
+            raise ValueError("Identity gallery embeddings must use one dimension")
+        object.__setattr__(self, "entries", entries)
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,6 +54,7 @@ class VisionDetection:
     identity_state: str | None = None
     identity_status: str | None = None
     identity_name: str | None = None
+    identity_person_id: str | None = None
     identity_confidence: float | None = None
     face_bbox: tuple[int, int, int, int] | None = None
     association_id: str | int | None = None
@@ -33,6 +68,7 @@ class VisionEvent:
     source_time_s: float
     identity_state: str | None = None
     identity_name: str | None = None
+    identity_person_id: str | None = None
     person_bbox: tuple[int, int, int, int] | None = None
     face_bbox: tuple[int, int, int, int] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)

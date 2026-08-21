@@ -3,7 +3,8 @@ from uuid import uuid4
 
 from src.database import database_connection
 from src.services.face_embedding_encoder import FaceEmbeddingEncoder
-from src.services.face_identity_service import FaceGallery, face_gallery, face_identity_service
+from src.services.face_gallery_provider import face_gallery_coordinator
+from src.services.face_identity_service import face_identity_service
 
 
 class PersonNotFoundError(Exception):
@@ -16,9 +17,9 @@ class FaceProfileNotFoundError(Exception):
 
 class PersonService:
     def __init__(self, encoder: FaceEmbeddingEncoder | None = None,
-                 gallery: FaceGallery | None = None) -> None:
+                 gallery_coordinator=None) -> None:
         self._face_encoder = encoder or face_identity_service
-        self._face_gallery = gallery or getattr(self._face_encoder, "gallery", face_gallery)
+        self._gallery_coordinator = gallery_coordinator or face_gallery_coordinator
 
     def list_people(self) -> list[dict[str, Any]]:
         with database_connection() as connection:
@@ -75,7 +76,7 @@ class PersonService:
             )
             if updated.rowcount == 0:
                 raise PersonNotFoundError(person_id)
-        self._face_gallery.reload()
+        self._gallery_coordinator.refresh_after_commit()
         return self.get_person(person_id)
 
     def add_face(self, person_id: str, image_bytes: bytes, angle: str) -> dict[str, Any]:
@@ -90,7 +91,7 @@ class PersonService:
                    VALUES (?, ?, 'buffalo_l', 'insightface-v1', ?, ?, ?, 1, ?)""",
                 (face_id, person_id, embedding.tobytes(), embedding.size, quality, angle),
             )
-        self._face_gallery.reload()
+        self._gallery_coordinator.refresh_after_commit()
         return self.get_person(person_id)
 
     def delete_face(self, person_id: str, face_id: str) -> dict[str, Any]:
@@ -100,7 +101,7 @@ class PersonService:
             )
             if deleted.rowcount == 0:
                 raise FaceProfileNotFoundError(face_id)
-        self._face_gallery.reload()
+        self._gallery_coordinator.refresh_after_commit()
         return self.get_person(person_id)
 
     @staticmethod

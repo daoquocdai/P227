@@ -1,11 +1,16 @@
 """Small public API for reusable SDA-GCN Vision sessions."""
 from .callbacks import VisionCallbacks
 from .config import VisionSessionConfig
-from .contracts import (BBoxCoordinateSpace, VisionDetection, VisionEvent,
+from .face_encoder import (FaceEncoder, FaceEncoderConfig, FaceEncodingError,
+                           FaceEncodingResult)
+from .contracts import (BBoxCoordinateSpace, IdentityGalleryEntry,
+                        IdentityGallerySnapshot, VisionDetection, VisionEvent,
                         VisionFrameResult, VisionSourceFrame)
 
 __all__ = [
-    "BBoxCoordinateSpace", "VisionCallbacks", "VisionDetection", "VisionEvent",
+    "BBoxCoordinateSpace", "FaceEncoder", "FaceEncoderConfig", "FaceEncodingError",
+    "FaceEncodingResult", "IdentityGalleryEntry", "IdentityGallerySnapshot",
+    "VisionCallbacks", "VisionDetection", "VisionEvent",
     "VisionFrameResult", "VisionSession", "VisionSessionConfig", "VisionSourceFrame",
 ]
 

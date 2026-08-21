@@ -10,6 +10,8 @@ from sda_vision import (
     VisionEvent as SdaEvent,
 )
 from sda_vision import (
+    IdentityGalleryEntry,
+    IdentityGallerySnapshot,
     VisionFrameResult,
     VisionSourceFrame,
 )
@@ -31,6 +33,7 @@ def sda_result(*, sequence=7, epoch=2, events=()):
         detections=(SdaDetection(
             "person", 0.9, (10, 20, 100, 200), identity_state="LOCKED_KNOWN",
             identity_status="KNOWN", identity_name="Mai", identity_confidence=0.91,
+            identity_person_id="person-1",
             face_bbox=(30, 40, 60, 80), association_id=3,
         ),), generated_events=events,
         stage_metrics={"effective_fps": 15.0, "total_vision_ms": 48.0},
@@ -53,6 +56,24 @@ def test_result_adapter_keeps_source_space_bbox_and_exact_face_correlation():
     assert detection.metadata["identity_face_bbox_xyxy"] == (30, 40, 60, 80)
     assert detection.metadata["identity_face_bbox_frame_id"] == mapped.frame_id
     assert mapped.metadata["geometry"]["scale"] == 1.0
+    assert detection.metadata["identity_person_id"] == "person-1"
+
+
+def test_registry_broadcasts_latest_gallery_to_active_sessions():
+    class Session:
+        def __init__(self): self.snapshots = []
+        def update_identity_gallery(self, snapshot): self.snapshots.append(snapshot)
+
+    settings = SimpleNamespace(vision_identity_enabled=False)
+    registry = SdaSessionRegistry(FrameHub(), settings=settings)
+    session = Session()
+    registry._records["cam"] = SimpleNamespace(session=session)
+    snapshot = IdentityGallerySnapshot(
+        4, (IdentityGalleryEntry("person-1", "Mai", np.ones(4)),))
+    result = registry.update_identity_gallery(snapshot)
+    assert session.snapshots == [snapshot]
+    assert registry._identity_gallery is snapshot
+    assert result["sessions"] == 1
 
 
 def test_identity_off_strips_identity_facts_and_events():

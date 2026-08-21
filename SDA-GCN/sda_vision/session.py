@@ -118,6 +118,8 @@ class VisionSession:
         self.identity_debug = config.identity_debug
         self.identity_process_priority = config.identity_process_priority
         self.identity_cpu_affinity = config.identity_cpu_affinity
+        self.identity_gallery_mode = config.identity_gallery_mode
+        self.identity_gallery_snapshot = config.identity_gallery_snapshot
         self.source_spec = parse_source(config.source)
         self.source_fps_override = config.source_fps
         self.identity_stage = None
@@ -280,6 +282,8 @@ class VisionSession:
             identity_debug=self.identity_debug,
             process_priority=self.identity_process_priority,
             cpu_affinity=self.identity_cpu_affinity,
+            gallery_mode=self.identity_gallery_mode,
+            gallery_snapshot=self.identity_gallery_snapshot,
         )
         stage.start()
         self.identity_stage = stage
@@ -330,12 +334,31 @@ class VisionSession:
                 self.face_stage = StageSpec("Face", "DISABLED", "", "n/a")
         if old_identity is not None:
             old_identity.stop()
+
+    def update_identity_gallery(self, snapshot):
+        """Store/broadcast a supplied gallery without blocking the Fall loop."""
+        with self._control_lock:
+            if self.identity_gallery_mode != "supplied":
+                raise RuntimeError("This Vision session uses the filesystem gallery")
+            self.identity_gallery_snapshot = snapshot
+            self.config.identity_gallery_snapshot = snapshot
+            stage = self.identity_stage
+            self._last_identity_event_timestamp = 0.0
+            self._latest_detection = None
+            self._pending_generated_events = [
+                event for event in self._pending_generated_events
+                if event.event_type.strip().lower() not in {
+                    "unknown_person", "person_recognized"}
+            ]
+            if stage is not None:
+                stage.update_gallery(snapshot)
         
     def load_known_faces(self, data_dir=None):
         # Identity worker owns model initialization and registered embeddings.
         return
 
-    def emit_event(self, event_type, confidence=0.9, identity_status="UNKNOWN", identity_name=None):
+    def emit_event(self, event_type, confidence=0.9, identity_status="UNKNOWN",
+                   identity_name=None, identity_person_id=None):
         throttle_key = f"{event_type}_{identity_name}"
         now = time.monotonic()
         if now - self.last_sent_time.get(throttle_key, 0) < 5.0:
@@ -352,6 +375,7 @@ class VisionSession:
             source_time_s=self._event_source_time_s,
             identity_state=identity_status,
             identity_name=identity_name,
+            identity_person_id=identity_person_id,
             person_bbox=detection.bbox if detection else None,
             face_bbox=detection.face_bbox if detection else None,
             metadata={"camera_id": self.config.camera_id,
@@ -397,7 +421,8 @@ class VisionSession:
             ))
             if result.timestamp != self._last_identity_event_timestamp:
                 if result.state == IdentityState.LOCKED_KNOWN:
-                    self.emit_event("PERSON_RECOGNIZED", result.confidence, "KNOWN", result.name)
+                    self.emit_event("PERSON_RECOGNIZED", result.confidence, "KNOWN",
+                                    result.name, result.person_id)
                 elif result.state == IdentityState.LOCKED_UNKNOWN:
                     self.emit_event("UNKNOWN_PERSON", 0.9, "UNKNOWN")
                 self._last_identity_event_timestamp = result.timestamp
@@ -421,7 +446,8 @@ class VisionSession:
             "person", bbox=self._frame_transform.bbox_to_source((x1, y1, x2, y2)),
             identity_state=result.state.value,
             identity_status=("KNOWN" if result.state == IdentityState.LOCKED_KNOWN else "UNKNOWN"),
-            identity_name=result.name, identity_confidence=result.confidence,
+            identity_name=result.name, identity_person_id=result.person_id,
+            identity_confidence=result.confidence,
             face_bbox=exact_face_bbox, association_id=track_id)
         
     def detect_fall(self, current_source_time_s):

@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from .contracts import IdentityGallerySnapshot
+
 
 @dataclass(slots=True)
 class VisionSessionConfig:
@@ -25,6 +27,8 @@ class VisionSessionConfig:
     identity_debug: bool = False
     identity_process_priority: str = "normal"
     identity_cpu_affinity: tuple[int, ...] | None = None
+    identity_gallery_mode: str = "filesystem"
+    identity_gallery_snapshot: IdentityGallerySnapshot | None = None
     preview: str = "none"
     raw_classifier: bool = False
     package_root: Path | None = None

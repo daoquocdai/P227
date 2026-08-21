@@ -134,6 +134,16 @@ endpoint nghĩa là backend không listen, không phải một API riêng trả 
 
 ## Kiến trúc runtime
 
+### Nguồn Identity gallery
+
+FastAPI tích hợp dùng SQLite `persons` và `face_profiles` làm source of truth.
+Backend phát snapshot có version gồm `person_id`, tên và embedding tới các SDA
+session khi startup và sau mutation Family; runtime không giữ ảnh enrollment.
+
+CLI standalone `SDA-GCN/realtime.py` vẫn dùng `register face/` và NPZ cache.
+Integrated session luôn chọn supplied-gallery rõ ràng và không fallback sang
+filesystem, kể cả khi SQLite gallery rỗng.
+
 ```mermaid
 flowchart LR
     SOURCE[Webcam / Video / RTSP] --> SDA[sda_vision source + 15 Hz Vision]

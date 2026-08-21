@@ -22,7 +22,6 @@ from src.config import get_settings
 from src.database import initialize_database
 from src.runtime import LocalRuntime
 from src.services.event_service import event_service, vision_event_sink
-from src.services.face_identity_service import face_gallery
 from src.services.operational_metrics_collector import OperationalMetricsCollector
 from src.services.vision_event_dispatcher import ThreadsafeVisionEventDispatcher
 
@@ -36,7 +35,6 @@ async def lifespan(app: FastAPI):
     alert_agent.start()
     event_service.set_agent_enqueue(alert_agent.enqueue)
     app.state.alert_agent = alert_agent
-    face_gallery.reload()
     vision_event_sink.start()
     consumer = asyncio.create_task(vision_event_sink.consume(), name="vision-event-consumer")
     dispatcher = ThreadsafeVisionEventDispatcher(vision_event_sink)

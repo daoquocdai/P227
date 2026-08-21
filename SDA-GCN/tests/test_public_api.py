@@ -13,7 +13,8 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from sda_vision import (VisionCallbacks, VisionDetection, VisionEvent,
+from sda_vision import (IdentityGalleryEntry, IdentityGallerySnapshot,
+                        VisionCallbacks, VisionDetection, VisionEvent,
                         VisionFrameResult, VisionSession, VisionSessionConfig)
 from sda_vision.cli import parse_args
 from sda_vision.contracts import FrameTransform
@@ -190,6 +191,19 @@ class WindowsSpawnImportTests(unittest.TestCase):
         process.join(10)
         self.assertEqual(process.exitcode, 0)
         self.assertEqual(output.get(timeout=1), {"ok": True})
+        output.close()
+
+    def test_supplied_gallery_contract_survives_windows_spawn(self):
+        context = mp.get_context("spawn")
+        output = context.Queue(maxsize=1)
+        snapshot = IdentityGallerySnapshot(
+            7, (IdentityGalleryEntry("person-7", "Dai", np.ones(512)),))
+        process = context.Process(target=_replace_latest, args=(output, snapshot))
+        process.start()
+        process.join(10)
+        received = output.get(timeout=1)
+        self.assertEqual(process.exitcode, 0)
+        self.assertEqual((received.version, received.entries[0].person_id), (7, "person-7"))
         output.close()
 
 

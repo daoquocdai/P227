@@ -8,7 +8,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from uuid import uuid4
 
-from sda_vision import VisionCallbacks, VisionSession, VisionSessionConfig
+from sda_vision import IdentityGallerySnapshot, VisionCallbacks, VisionSession, VisionSessionConfig
 
 from src.models.frame import FramePacket
 from src.models.vision import VisionDetection, VisionEvent, VisionResult
@@ -47,6 +47,7 @@ def map_vision_result(result, *, camera_location: str, identity_enabled: bool) -
                 "identity_state": item.identity_state,
                 "identity_status": item.identity_status,
                 "identity_name": item.identity_name,
+                "identity_person_id": item.identity_person_id,
                 "identity_confidence": item.identity_confidence,
                 "identity_similarity": item.identity_confidence,
                 "identity_face_detected": item.face_bbox is not None,
@@ -93,6 +94,7 @@ def map_vision_result(result, *, camera_location: str, identity_enabled: bool) -
                 identity_state=item.identity_state,
                 identity_status=("KNOWN" if item.identity_name else "UNKNOWN"),
                 identity_name=item.identity_name,
+                identity_person_id=item.identity_person_id,
             )
             if item.face_bbox is not None:
                 metadata.update(
@@ -253,6 +255,8 @@ class SdaSessionRegistry:
         self._vision_desired: dict[str, bool] = {}
         self._identity_desired: dict[str, bool] = {}
         self._next_epoch: dict[str, int] = {}
+        self._identity_gallery = IdentityGallerySnapshot(0)
+        self._gallery_update_ms = 0.0
 
     def start(self):
         self._events.start()
@@ -266,6 +270,7 @@ class SdaSessionRegistry:
             identity = self._identity_desired.get(camera_id, self.settings.vision_identity_enabled)
             initial_epoch = self._next_epoch.get(camera_id, 0)
             self._next_epoch[camera_id] = initial_epoch + 1
+            identity_gallery = self._identity_gallery
         config = VisionSessionConfig(
             source=str(source), camera_id=camera_id, camera_location=location or camera_id,
             source_epoch=initial_epoch,
@@ -276,6 +281,7 @@ class SdaSessionRegistry:
             identity_cpu_affinity=getattr(
                 self.settings, "vision_identity_cpu_affinity", None),
             preview="none", log_level=self.settings.log_level.lower(),
+            identity_gallery_mode="supplied", identity_gallery_snapshot=identity_gallery,
         )
         callbacks = VisionCallbacks(
             on_source_frame=lambda frame: self._on_source(camera_id, frame),
@@ -461,6 +467,17 @@ class SdaSessionRegistry:
     def identity_enabled(self, camera_id):
         with self._lock:
             return self._identity_desired.get(camera_id, self.settings.vision_identity_enabled)
+
+    def update_identity_gallery(self, snapshot: IdentityGallerySnapshot):
+        started = time.perf_counter()
+        with self._lock:
+            self._identity_gallery = snapshot
+            sessions = [record.session for record in self._records.values()]
+        for session in sessions:
+            session.update_identity_gallery(snapshot)
+        self._gallery_update_ms = (time.perf_counter() - started) * 1000.0
+        return {"version": snapshot.version, "entries": len(snapshot.entries),
+                "sessions": len(sessions), "update_ms": self._gallery_update_ms}
 
     def latest_result(self, camera_id):
         with self._lock:
