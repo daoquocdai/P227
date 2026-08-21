@@ -24,7 +24,7 @@ async def test_person_and_face_profile_crud(client, monkeypatch):
     assert updated.json()["notes"] == "Đã cập nhật"
 
     embedding = np.linspace(-1.0, 1.0, 512, dtype=np.float32)
-    monkeypatch.setattr(person_service._identity, "extract", lambda _: (embedding, 0.91))
+    monkeypatch.setattr(person_service._face_encoder, "extract", lambda _: (embedding, 0.91))
     image_data_url = "data:image/jpeg;base64," + base64.b64encode(b"test-image").decode("ascii")
     with_face = await client.post(
         f"/api/v1/persons/{person_id}/faces",

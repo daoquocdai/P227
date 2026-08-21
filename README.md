@@ -13,8 +13,8 @@ bằng chứng được lưu cục bộ trong SQLite/snapshot storage.
 - Camera và trạng thái Camera/Vision/Identity được lưu trong SQLite và tự khôi
   phục khi backend khởi động.
 - Raw MJPEG chạy theo source cadence, độc lập với tốc độ Vision.
-- Production dùng một pipeline canonical trong `src/vision`: YOLO,
-  MediaPipe Pose, SDA-GCN năm lớp và InsightFace tùy chọn.
+- Production dùng reusable `SDA-GCN/sda_vision`; FastAPI chỉ truy cập Vision
+  qua `src/integrations/sda_vision.py`.
 - Một capacity-one latest-frame slot cho mỗi camera giữ latency bounded khi
   inference chậm; không có queue/backlog trước Vision.
 - Video file dùng media/source timestamp; camera live dùng monotonic capture
@@ -43,7 +43,7 @@ bằng chứng được lưu cục bộ trong SQLite/snapshot storage.
 - Node.js 20+.
 - Windows 10/11 hoặc Linux 64-bit.
 - Webcam, video local hoặc RTSP nếu dùng source thật.
-- Các model canonical trong `src/vision`.
+- Model/runtime assets do package `sda_vision` sở hữu.
 - InsightFace `buffalo_l` chỉ khi bật Identity.
 
 ## Cài nhanh trên Windows
@@ -87,35 +87,26 @@ Copy `.env.example` thành `.env`. Cấu hình Vision chính:
 ```dotenv
 DATABASE_URL=sqlite:///./data/app.db
 
-VISION_ENGINE=canonical
+VISION_ENGINE=sda
 VISION_DEVICE=auto
-VISION_YOLO_PATH=yolov8n.pt
-VISION_CONFIG_PATH=../../SDA-GCN/config/production.yaml
-VISION_CHECKPOINT_PATH=../../SDA-GCN/weights/fall-detection-joint.pt
-VISION_MODEL_CACHE_DIR=data/vision-cache
 
 VISION_IDENTITY_ENABLED=false
 VISION_IDENTITY_PROVIDER=auto
 VISION_INSIGHTFACE_ROOT=~/.insightface
 ```
 
-- `VISION_ENGINE=canonical` là production path; `mock` chỉ dùng cho test/smoke.
+- `VISION_ENGINE=sda` là production path. `canonical` chỉ là rollback development
+  tạm thời; `mock` chỉ dùng cho test/smoke. SDA failure không fallback legacy.
 - `VISION_DEVICE=auto` chọn CUDA → OpenVINO Intel GPU → CPU và log runtime thật.
 - Giữ `VISION_IDENTITY_ENABLED=false` nếu chưa có
   `<VISION_INSIGHTFACE_ROOT>/models/buffalo_l/`.
-- Known-person production lấy từ `persons`/`face_profiles` trong database qua
-  `FaceGallery`, không cần cấu hình thư mục ảnh thủ công.
+- Runtime Identity vẫn dùng filesystem/NPZ đến Phase 4. Enrollment API/SQLite
+  tạm dùng legacy InsightFace encoder sau `FaceEmbeddingEncoder` boundary.
 - Các biến temporal target-rate/buffer cũ không điều khiển canonical production
   path hiện tại.
 - Không commit `.env`, credential, database, snapshots hoặc dữ liệu sinh trắc.
 
-Model bắt buộc:
-
-```text
-src/vision/yolov8n.pt
-SDA-GCN/config/production.yaml
-SDA-GCN/weights/fall-detection-joint.pt
-```
+Legacy `src/vision` vẫn được giữ cho rollback/tests nhưng không thuộc production runtime.
 
 ## Chạy ứng dụng
 
@@ -145,13 +136,11 @@ endpoint nghĩa là backend không listen, không phải một API riêng trả 
 
 ```mermaid
 flowchart LR
-    SOURCE[Webcam / Video / RTSP] --> CAPTURE[CameraRuntime]
-    CAPTURE --> RAW[Raw FrameHub]
+    SOURCE[Webcam / Video / RTSP] --> SDA[sda_vision source + 15 Hz Vision]
+    SDA --> RAW[Raw FrameHub]
     RAW --> STREAM[MJPEG / Preview]
-    CAPTURE --> SLOT[LatestFrameSlot capacity 1]
-    SLOT --> VISION[SynchronousVisionManager worker]
-    VISION --> PIPE[YOLO + Pose + SDA-GCN + Identity]
-    PIPE --> POLICY[VisionProductPolicy]
+    SDA --> ADAPTER[src/integrations/sda_vision.py]
+    ADAPTER --> POLICY[VisionProductPolicy]
     POLICY --> SNAP[Exact-frame privacy snapshot]
     SNAP --> PROCESSED[Processed FrameHub]
     POLICY --> DISPATCH[Thread-safe dispatcher]

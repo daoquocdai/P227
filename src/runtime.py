@@ -1,13 +1,11 @@
 from src.config import get_settings
-from src.services.camera_runtime import CameraRuntime
 from src.services.camera_service import CameraNotFoundError, camera_service
 from src.services.frame_hub import FrameHub
 from src.services.stream_service import StreamService
-from src.services.vision_manager import VisionManager
 
 
 def build_vision_engine(settings, mock_event_frame_ids: set[int] | None = None):
-    # Temporary legacy/test factory. Production LocalRuntime uses the SDA registry below.
+    # Explicit development rollback/test factory; never a production fallback.
     from src.integrations.legacy_vision import build_legacy_vision_engine
 
     return build_legacy_vision_engine(settings, mock_event_frame_ids)
@@ -24,13 +22,10 @@ class LocalRuntime:
 
         settings = get_settings()
         engine = vision_engine
-        sample_buffer = None
-        if engine is None and settings.vision_engine != "sda":
-            engine = build_vision_engine(settings, mock_event_frame_ids)
 
         self.frame_hub = FrameHub()
         self.processed_frame_hub = FrameHub()
-        self.vision_sample_buffer = sample_buffer
+        self.vision_sample_buffer = None
 
         if settings.vision_engine == "sda" and vision_engine is None:
             from src.integrations.sda_vision import SdaCameraFacade, SdaSessionRegistry, SdaVisionFacade
@@ -43,11 +38,14 @@ class LocalRuntime:
             self.camera = SdaCameraFacade(self.sda)
             self.vision = SdaVisionFacade(self.sda)
         else:
-            self.camera = CameraRuntime(self.frame_hub)
-            self.vision = VisionManager(
-                frame_hub=self.frame_hub,
+            from src.integrations.legacy_vision import build_legacy_runtime
+
+            self.camera, self.vision = build_legacy_runtime(
+                self.frame_hub,
+                settings=settings,
                 engine=engine,
                 event_dispatcher=event_dispatcher,
+                mock_event_frame_ids=mock_event_frame_ids,
             )
         self.stream = StreamService(
             self.frame_hub,

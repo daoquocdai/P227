@@ -7,11 +7,8 @@ import numpy as np
 
 from src.config import get_settings
 from src.database import database_connection
-from src.vision.runtime import VisionRuntimeResolver
-
-
-class FaceEnrollmentError(ValueError):
-    pass
+from src.integrations.legacy_vision import resolve_legacy_identity_execution
+from src.services.face_embedding_encoder import FaceEnrollmentError
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,10 +103,7 @@ class FaceIdentityService:
 
     def _execution_provider(self) -> tuple[list[str], int]:
         try:
-            providers, context_id = VisionRuntimeResolver.resolve_identity_execution(
-                VisionRuntimeResolver.available_ort_providers(),
-                self.provider,
-            )
+            providers, context_id = resolve_legacy_identity_execution(self.provider)
         except (RuntimeError, ValueError) as exc:
             raise FaceEnrollmentError(str(exc)) from exc
         return list(providers), context_id

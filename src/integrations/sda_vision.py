@@ -81,6 +81,13 @@ def map_vision_result(result, *, camera_location: str, identity_enabled: bool) -
         metadata = dict(item.metadata)
         metadata.setdefault("event_id", f"sda:{uuid4()}")
         metadata.setdefault("camera_location", camera_location)
+        metadata.setdefault("frame_id", item.frame_sequence)
+        metadata.setdefault("source_epoch", result.source_epoch)
+        metadata.setdefault("source_frame_index", result.source_frame_index)
+        metadata.setdefault("observation_time", item.source_time_s)
+        if item.person_bbox is not None:
+            metadata.setdefault("person_bbox_xyxy", item.person_bbox)
+            metadata.setdefault("person_bbox_coordinate_space", "source_pixels")
         if identity_enabled and (item.identity_state is not None or item.identity_name is not None):
             metadata.update(
                 identity_state=item.identity_state,

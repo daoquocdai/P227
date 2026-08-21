@@ -62,6 +62,23 @@ def test_identity_off_strips_identity_facts_and_events():
     assert "identity_state" not in mapped.detections[0].metadata
 
 
+def test_event_adapter_preserves_exact_source_correlation_once():
+    event = SdaEvent(
+        "FALL_CONFIRMED", 0.9, 7, 0.2, person_bbox=(10, 20, 100, 200),
+        metadata={"origin": "sda"})
+    mapped = map_vision_result(
+        sda_result(events=(event,)), camera_location="Kitchen", identity_enabled=True)
+    assert len(mapped.events) == 1
+    metadata = mapped.events[0].metadata
+    assert metadata["frame_id"] == 7
+    assert metadata["source_epoch"] == 2
+    assert metadata["source_frame_index"] == 6
+    assert metadata["observation_time"] == 0.2
+    assert metadata["person_bbox_xyxy"] == (10, 20, 100, 200)
+    assert metadata["person_bbox_coordinate_space"] == "source_pixels"
+    assert metadata["origin"] == "sda"
+
+
 def test_event_handoff_is_bounded_and_overflow_preserves_semantic_delivery():
     class Dispatcher:
         def __init__(self):

@@ -32,20 +32,27 @@ class Settings(BaseSettings):
     # Explicit test/demo control. Empty means the production mock emits no events.
     mock_vision_event_frame_ids: str = ""
 
-    # SDA is the production runtime. Canonical remains a temporary legacy/test option.
+    # Application Vision settings. SDA is the production runtime; canonical is
+    # an explicit development rollback and is never an automatic fallback.
     vision_engine: Literal["sda", "canonical", "mock"] = "sda"
     vision_device: str = "auto"
     vision_fps: float = Field(default=15.0, gt=0)
+    vision_identity_enabled: bool = False
+    vision_identity_process_priority: Literal["normal", "below_normal"] = "normal"
+    vision_identity_cpu_affinity: tuple[int, ...] | None = None
+
+    # Temporary enrollment compatibility settings. Phase 4 will replace the
+    # legacy encoder behind FaceEmbeddingEncoder without changing PersonService.
+    vision_identity_provider: Literal["auto", "cpu", "cuda", "directml"] = "auto"
+    vision_insightface_root: Path = Path.home() / ".insightface"
+
+    # Explicit legacy/canonical rollback settings. Production SDA does not read
+    # these paths; SDA owns its own models, assets, and cache layout.
     vision_yolo_path: Path = VISION_ROOT / "yolov8n.pt"
     vision_config_path: Path = SDA_GCN_ROOT / "config" / "production.yaml"
     vision_checkpoint_path: Path = SDA_GCN_ROOT / "weights" / "fall-detection-joint.pt"
     vision_model_cache_dir: Path = Path("data/vision-cache")
     vision_known_faces_dir: Path = VISION_ROOT / "register face"
-    vision_identity_enabled: bool = False
-    vision_identity_provider: Literal["auto", "cpu", "cuda", "directml"] = "auto"
-    vision_identity_process_priority: Literal["normal", "below_normal"] = "normal"
-    vision_identity_cpu_affinity: tuple[int, ...] | None = None
-    vision_insightface_root: Path = Path.home() / ".insightface"
     vision_temporal_target_sample_rate: float = Field(default=5.0, gt=0)
     vision_temporal_buffer_capacity: int = Field(default=8, ge=2, multiple_of=2)
 

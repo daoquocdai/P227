@@ -1,6 +1,6 @@
 # GuardianCam Quickstart — Windows CMD
 
-Luồng ngắn nhất để chạy backend, frontend và canonical Vision trên Windows.
+Luồng ngắn nhất để chạy backend, frontend và production `sda_vision` trên Windows.
 Chạy native nếu dùng webcam USB; Docker phù hợp hơn với video file/RTSP.
 
 ## 1. Chuẩn bị
@@ -104,18 +104,13 @@ copy /Y .env.example .env
 
 ## 3. Kiểm tra model và Identity
 
-Canonical Fall Vision cần:
-
-```text
-src\vision\yolov8n.pt
-SDA-GCN\config\production.yaml
-SDA-GCN\weights\fall-detection-joint.pt
-```
+Vision assets và cache layout do package `SDA-GCN/sda_vision` sở hữu. Thư mục
+`src/vision` chỉ được giữ tạm cho rollback development/tests.
 
 Giữ cấu hình sau nếu chưa cài InsightFace `buffalo_l`:
 
 ```dotenv
-VISION_ENGINE=canonical
+VISION_ENGINE=sda
 VISION_DEVICE=auto
 VISION_IDENTITY_ENABLED=false
 ```
@@ -129,6 +124,10 @@ Muốn bật `Phát hiện người lạ`, đảm bảo thư mục sau tồn t�
 
 Known-person profiles được đăng ký từ UI/API và lưu trong SQLite. Không cần copy
 ảnh vào `register face`.
+
+Camera production chỉ chạy qua `src/integrations/sda_vision.py`; không tự động
+fallback sang canonical nếu SDA khởi tạo lỗi. Runtime gallery vẫn filesystem/NPZ
+đến Phase 4; enrollment SQLite hiện nằm sau `FaceEmbeddingEncoder` boundary.
 
 Nếu chỉ muốn kiểm tra backend/frontend không cần AI thật:
 

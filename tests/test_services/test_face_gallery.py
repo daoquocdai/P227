@@ -37,8 +37,8 @@ def test_face_gallery_loads_active_profiles_and_invalidates_deactivated_person()
 
 def test_face_enrollment_auto_provider_prefers_cuda(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        "src.vision.runtime.VisionRuntimeResolver.available_ort_providers",
-        lambda: ("DmlExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"),
+        "src.services.face_identity_service.resolve_legacy_identity_execution",
+        lambda provider: (["CUDAExecutionProvider", "CPUExecutionProvider"], 0),
     )
     service = FaceIdentityService(FaceGallery(), tmp_path, provider="auto")
 
@@ -46,3 +46,21 @@ def test_face_enrollment_auto_provider_prefers_cuda(monkeypatch, tmp_path):
 
     assert providers == ["CUDAExecutionProvider", "CPUExecutionProvider"]
     assert context_id == 0
+
+
+def test_person_service_depends_on_replaceable_embedding_encoder():
+    from src.services.face_embedding_encoder import FaceEmbeddingEncoder
+    from src.services.person_service import PersonService
+
+    class Encoder:
+        def extract(self, image_bytes):
+            return np.ones(4, dtype=np.float32), 0.8
+
+    class Gallery:
+        def reload(self):
+            return 0
+
+    encoder = Encoder()
+    service = PersonService(encoder=encoder, gallery=Gallery())
+    assert isinstance(encoder, FaceEmbeddingEncoder)
+    assert service._face_encoder is encoder
