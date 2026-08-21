@@ -264,6 +264,10 @@ class SdaSessionRegistry:
             source_epoch=initial_epoch,
             loop_video=bool(loop_video), inference_enabled=inference, identity_enabled=identity,
             device=self.settings.vision_device, vision_fps=self.settings.vision_fps,
+            identity_process_priority=getattr(
+                self.settings, "vision_identity_process_priority", "normal"),
+            identity_cpu_affinity=getattr(
+                self.settings, "vision_identity_cpu_affinity", None),
             preview="none", log_level=self.settings.log_level.lower(),
         )
         callbacks = VisionCallbacks(

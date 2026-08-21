@@ -116,6 +116,8 @@ class VisionSession:
         self.rebuild_face_cache = config.rebuild_face_cache
         self.log_level = config.log_level
         self.identity_debug = config.identity_debug
+        self.identity_process_priority = config.identity_process_priority
+        self.identity_cpu_affinity = config.identity_cpu_affinity
         self.source_spec = parse_source(config.source)
         self.source_fps_override = config.source_fps
         self.identity_stage = None
@@ -276,6 +278,8 @@ class VisionSession:
             det_size=self.face_det_size, interval=self.identity_interval,
             rebuild_cache=self.rebuild_face_cache, debug=self.log_level == "debug",
             identity_debug=self.identity_debug,
+            process_priority=self.identity_process_priority,
+            cpu_affinity=self.identity_cpu_affinity,
         )
         stage.start()
         self.identity_stage = stage
@@ -672,6 +676,11 @@ class VisionSession:
                     print(f"Skipped         : {gallery['skipped']}")
                     print(f"Load time       : {gallery['gallery_ms']:.0f} ms")
                     print(f"Identity ready  : {gallery['ready_ms']:.0f} ms")
+                    execution = gallery.get("execution", {})
+                    print(f"Identity priority: {execution.get('effective_priority', 'normal')}")
+                    print(f"Identity affinity: {execution.get('effective_affinity') or 'unrestricted'}")
+                    if execution.get("isolation_reason"):
+                        print(f"Identity isolation: {execution['isolation_reason']}")
                     self._gallery_status_logged = True
             
             timestamp_ms = self.pose_timestamp_adapter.convert(

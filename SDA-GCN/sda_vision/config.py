@@ -23,6 +23,8 @@ class VisionSessionConfig:
     rebuild_face_cache: bool = False
     log_level: str = "info"
     identity_debug: bool = False
+    identity_process_priority: str = "normal"
+    identity_cpu_affinity: tuple[int, ...] | None = None
     preview: str = "none"
     raw_classifier: bool = False
     package_root: Path | None = None

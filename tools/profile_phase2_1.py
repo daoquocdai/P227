@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import psutil
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
@@ -109,6 +110,19 @@ def finish(case, collector, session, extra=None):
             "state": state,
             "overlapping_sda": overlapping,
         })
+    identity_intervals = [
+        (started_wall, finished_wall)
+        for _observed, _latency, _state, started_wall, finished_wall in identities
+        if started_wall is not None and finished_wall is not None
+    ]
+    sda_overlap, sda_non_overlap = [], []
+    for _observed, latency, _started, _count, started_wall, finished_wall in profile["sda_gcn"]:
+        target = sda_overlap if any(
+            identity_start <= finished_wall and started_wall <= identity_finish
+            for identity_start, identity_finish in identity_intervals
+        ) else sda_non_overlap
+        target.append(latency)
+    identity_overlap_count = sum(bool(item["overlapping_sda"]) for item in correlations)
     return {
         "case": case,
         "windows": windows,
@@ -118,6 +132,12 @@ def finish(case, collector, session, extra=None):
         "sda_invocation_ids_unique": len({item[3] for item in profile["sda_gcn"]}),
         "scheduler_deadline_misses": profile["scheduler_deadline_misses"],
         "capture_frames_dropped": profile["capture_frames_dropped"],
+        "overlap_metrics": {
+            "sda_overlap_ms": summary(sda_overlap),
+            "sda_non_overlap_ms": summary(sda_non_overlap),
+            "identity_calls_overlapping_sda": identity_overlap_count,
+            "identity_calls_not_overlapping_sda": len(correlations) - identity_overlap_count,
+        },
         **(extra or {}),
     }
 
@@ -147,11 +167,14 @@ class Dispatcher:
         return True
 
 
-def run_integrated(source, identity, with_client, duration):
+def run_integrated(source, identity, with_client, duration, *, process_priority="normal",
+                   cpu_affinity=None):
     collector = Collector()
     dispatcher = Dispatcher()
     settings = SimpleNamespace(
-        vision_identity_enabled=identity, vision_device="auto", vision_fps=15.0, log_level="error")
+        vision_identity_enabled=identity, vision_device="auto", vision_fps=15.0,
+        vision_identity_process_priority=process_priority,
+        vision_identity_cpu_affinity=cpu_affinity, log_level="error")
     hub = FrameHub()
     registry = SdaSessionRegistry(hub, settings=settings, event_dispatcher=dispatcher)
     registry.start()
@@ -215,6 +238,12 @@ def run_integrated(source, identity, with_client, duration):
                     "final_queue_depth": event_profile["current_queue_depth"]},
          "snapshots": {"calls": len(snapshot_latencies),
                        "latency_ms": summary(snapshot_latencies)},
+         "candidate": {"identity_process_priority": process_priority,
+                       "identity_cpu_affinity": cpu_affinity,
+                       "cpu_logical": psutil.cpu_count(logical=True),
+                       "cpu_physical": psutil.cpu_count(logical=False),
+                       "allowed_affinity": (psutil.Process().cpu_affinity()
+                                            if hasattr(psutil.Process(), "cpu_affinity") else None)},
          "dispatched_events": len(dispatcher.results)})
 
 
@@ -224,8 +253,22 @@ def main():
     parser.add_argument("--duration", type=float, default=31.0)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--only-on", action="store_true")
+    parser.add_argument("--integrated-mjpeg-only", action="store_true")
+    parser.add_argument("--integrated-mjpeg-on-only", action="store_true")
+    parser.add_argument("--identity-priority", choices=("normal", "below_normal"), default="normal")
+    parser.add_argument("--identity-affinity", help="Comma-separated allowed logical CPU IDs")
     args = parser.parse_args()
-    if args.only_on:
+    affinity = (tuple(int(value) for value in args.identity_affinity.split(","))
+                if args.identity_affinity else None)
+    tuning = {"process_priority": args.identity_priority, "cpu_affinity": affinity}
+    if args.integrated_mjpeg_on_only:
+        cases = [run_integrated(args.source, True, True, args.duration, **tuning)]
+    elif args.integrated_mjpeg_only:
+        cases = [
+            run_integrated(args.source, False, True, args.duration),
+            run_integrated(args.source, True, True, args.duration, **tuning),
+        ]
+    elif args.only_on:
         cases = [
             run_standalone(args.source, True, args.duration),
             run_integrated(args.source, True, False, args.duration),

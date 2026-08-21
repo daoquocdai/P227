@@ -1,4 +1,5 @@
 import multiprocessing as mp
+import pickle
 from collections import deque
 from pathlib import Path
 import sys
@@ -29,6 +30,12 @@ class PublicImportTests(unittest.TestCase):
         self.assertTrue(VisionFrameResult)
         self.assertTrue(VisionEvent)
         self.assertTrue(VisionDetection)
+
+    def test_identity_tuning_defaults_are_serializable_and_disabled(self):
+        config = VisionSessionConfig()
+        restored = pickle.loads(pickle.dumps(config))
+        self.assertEqual(restored.identity_process_priority, "normal")
+        self.assertIsNone(restored.identity_cpu_affinity)
 
     def test_core_has_no_backend_dependency(self):
         package = ROOT / "sda_vision"

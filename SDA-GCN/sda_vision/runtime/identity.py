@@ -66,9 +66,77 @@ def _similarity(first, second):
     return float(np.dot(first, second) / denominator) if denominator else 0.0
 
 
+def validate_process_priority(value):
+    normalized = str(value).strip().lower()
+    if normalized not in {"normal", "below_normal"}:
+        raise ValueError("identity_process_priority must be 'normal' or 'below_normal'")
+    return normalized
+
+
+def validate_cpu_affinity(value, allowed=None):
+    if value is None:
+        return None
+    normalized = tuple(dict.fromkeys(int(cpu) for cpu in value))
+    if not normalized or any(cpu < 0 for cpu in normalized):
+        raise ValueError("identity_cpu_affinity must contain non-negative CPU IDs")
+    if allowed is not None:
+        invalid = sorted(set(normalized) - set(allowed))
+        if invalid:
+            raise ValueError(f"identity_cpu_affinity contains disallowed CPU IDs: {invalid}")
+    return normalized
+
+
+def _apply_process_isolation(providers, priority, affinity):
+    """Apply best-effort child-only isolation and return truthful diagnostics."""
+    priority = validate_process_priority(priority)
+    affinity = validate_cpu_affinity(affinity)
+    status = {
+        "configured_priority": priority,
+        "effective_priority": "normal",
+        "configured_affinity": affinity,
+        "effective_affinity": None,
+        "isolation_applied": False,
+        "isolation_reason": None,
+    }
+    if not providers or providers[0] != "CPUExecutionProvider":
+        status["isolation_reason"] = "CPU isolation skipped for non-CPU primary provider"
+        return status
+    try:
+        import psutil
+
+        process = psutil.Process()
+        allowed = process.cpu_affinity() if hasattr(process, "cpu_affinity") else None
+        affinity = validate_cpu_affinity(affinity, allowed)
+        if affinity is not None:
+            if not hasattr(process, "cpu_affinity"):
+                status["isolation_reason"] = "CPU affinity is unsupported on this platform"
+            else:
+                process.cpu_affinity(list(affinity))
+                status["effective_affinity"] = tuple(process.cpu_affinity())
+                status["isolation_applied"] = True
+        elif allowed is not None:
+            status["effective_affinity"] = tuple(allowed)
+
+        if priority == "below_normal":
+            if os.name == "nt":
+                process.nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
+            else:
+                process.nice(10)
+            status["effective_priority"] = "below_normal"
+            status["isolation_applied"] = True
+    except (ImportError, OSError, ValueError) as exc:
+        status["isolation_reason"] = str(exc)
+    except Exception as exc:  # psutil platform-specific AccessDenied/NoSuchProcess
+        status["isolation_reason"] = str(exc)
+    return status
+
+
 def _identity_process(input_queue, result_queue, status_queue, stop_event, ready_event,
                       providers, data_dir, cache_path, det_size, threshold,
-                      rebuild_cache, debug, identity_debug):
+                      rebuild_cache, debug, identity_debug, process_priority,
+                      cpu_affinity):
+    isolation_status = _apply_process_isolation(
+        providers, process_priority, cpu_affinity)
     from insightface.app import FaceAnalysis
 
     process_started = time.perf_counter()
@@ -112,6 +180,7 @@ def _identity_process(input_queue, result_queue, status_queue, stop_event, ready
         "persons": gallery_stats.persons, "images": gallery_stats.images,
         "cached": gallery_stats.cached, "recomputed": gallery_stats.recomputed,
         "skipped": gallery_stats.skipped,
+        "execution": isolation_status,
     }
     _replace_latest(status_queue, ready_payload)
 
@@ -164,7 +233,18 @@ class IdentityStage:
     def __init__(self, providers, data_dir, cache_path, det_size=416, interval=0.5,
                  unknown_retry=1.0, locked_unknown_retry=15.0,
                  max_unknown_attempts=3, absent_timeout=1.5, threshold=0.45,
-                 rebuild_cache=False, debug=False, identity_debug=False):
+                 rebuild_cache=False, debug=False, identity_debug=False,
+                 process_priority="normal", cpu_affinity=None):
+        process_priority = validate_process_priority(process_priority)
+        if cpu_affinity is not None:
+            try:
+                import psutil
+                allowed_affinity = psutil.Process().cpu_affinity()
+            except (ImportError, OSError, AttributeError):
+                allowed_affinity = None
+            except Exception:  # psutil platform-specific access errors
+                allowed_affinity = None
+            cpu_affinity = validate_cpu_affinity(cpu_affinity, allowed_affinity)
         context = mp.get_context("spawn")
         self._inputs = context.Queue(maxsize=1)
         self._results = context.Queue(maxsize=1)
@@ -175,7 +255,8 @@ class IdentityStage:
             target=_identity_process,
             args=(self._inputs, self._results, self._status, self._stop, self._ready,
                   providers, str(data_dir), str(cache_path), det_size, threshold,
-                  rebuild_cache, debug, identity_debug),
+                  rebuild_cache, debug, identity_debug, process_priority,
+                  cpu_affinity),
             name="vision-identity", daemon=True,
         )
         self.interval = interval
@@ -193,6 +274,8 @@ class IdentityStage:
         self.frames_dropped = 0
         self.started_at = time.monotonic()
         self.gallery_status = None
+        self.process_priority = process_priority
+        self.cpu_affinity = cpu_affinity
 
     def start(self):
         self._process.start()

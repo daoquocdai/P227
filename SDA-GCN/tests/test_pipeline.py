@@ -1,11 +1,22 @@
 import queue
+import sys
 import threading
 import time
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 
-from runtime.identity import IdentityResult, IdentityStage, IdentityState
+from sda_vision.runtime import identity as identity_runtime
+from sda_vision.runtime.identity import (
+    IdentityResult,
+    IdentityStage,
+    IdentityState,
+    _apply_process_isolation,
+    validate_cpu_affinity,
+    validate_process_priority,
+)
 from runtime.pipeline import FixedRateScheduler, LatestFrameStore
 from runtime.source import FramePacket
 
@@ -82,6 +93,57 @@ class IdentityStateTests(unittest.TestCase):
         stage.poll()
         self.assertEqual(stage.result.state, IdentityState.UNVERIFIED)
 
+
+class IdentityIsolationTests(unittest.TestCase):
+    def test_identity_ipc_queues_remain_latest_only(self):
+        stage = IdentityStage(
+            ["CPUExecutionProvider"], ".", "identity-test-cache.npz")
+        try:
+            self.assertEqual(stage._inputs._maxsize, 1)
+            self.assertEqual(stage._results._maxsize, 1)
+        finally:
+            stage._inputs.close()
+            stage._results.close()
+            stage._status.close()
+
+    def test_priority_and_affinity_validation(self):
+        self.assertEqual(validate_process_priority("below_normal"), "below_normal")
+        self.assertEqual(validate_cpu_affinity([2, 2, 4], [0, 2, 4]), (2, 4))
+        with self.assertRaises(ValueError):
+            validate_process_priority("realtime")
+        with self.assertRaises(ValueError):
+            validate_cpu_affinity([9], [0, 1])
+
+    def test_non_cpu_provider_does_not_apply_cpu_tuning(self):
+        result = _apply_process_isolation(
+            ["CUDAExecutionProvider", "CPUExecutionProvider"], "below_normal", (0,))
+        self.assertFalse(result["isolation_applied"])
+        self.assertIn("non-CPU", result["isolation_reason"])
+
+    def test_cpu_affinity_is_applied_inside_target_process(self):
+        class FakeProcess:
+            affinity = [0, 1, 2, 3]
+            priority = None
+
+            def cpu_affinity(self, value=None):
+                if value is not None:
+                    self.affinity = list(value)
+                return self.affinity
+
+            def nice(self, value):
+                self.priority = value
+
+        process = FakeProcess()
+        fake_psutil = SimpleNamespace(
+            Process=lambda: process, BELOW_NORMAL_PRIORITY_CLASS=0x00004000)
+        with patch.dict(sys.modules, {"psutil": fake_psutil}), patch.object(
+                identity_runtime.os, "name", "nt"):
+            result = _apply_process_isolation(
+                ["CPUExecutionProvider"], "below_normal", (2, 3))
+        self.assertTrue(result["isolation_applied"])
+        self.assertEqual(result["effective_priority"], "below_normal")
+        self.assertEqual(result["effective_affinity"], (2, 3))
+        self.assertEqual(process.priority, fake_psutil.BELOW_NORMAL_PRIORITY_CLASS)
 
 class SchedulerIsolationTests(unittest.TestCase):
     def test_slow_identity_work_does_not_block_scheduler(self):
