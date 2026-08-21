@@ -5,17 +5,30 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from dataclasses import dataclass
 
 import numpy as np
-from sda_vision import IdentityGalleryEntry, IdentityGallerySnapshot
 
 from src.database import database_connection
 
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True, slots=True)
+class AppFaceGalleryEntry:
+    person_id: str
+    name: str
+    embedding: np.ndarray
+
+
+@dataclass(frozen=True, slots=True)
+class AppFaceGallerySnapshot:
+    revision: int | str
+    entries: tuple[AppFaceGalleryEntry, ...] = ()
+
+
 class SqliteFaceGalleryProvider:
-    def load(self, version: int | str) -> tuple[IdentityGallerySnapshot, dict]:
+    def load(self, version: int | str) -> tuple[AppFaceGallerySnapshot, dict]:
         started = time.perf_counter()
         entries = []
         skipped = 0
@@ -43,9 +56,9 @@ class SqliteFaceGalleryProvider:
             if embedding.size != dimension or not np.isfinite(embedding).all():
                 skipped += 1
                 continue
-            entries.append(IdentityGalleryEntry(
-                row["person_id"], row["display_name"], embedding))
-        snapshot = IdentityGallerySnapshot(version, tuple(entries))
+            entries.append(AppFaceGalleryEntry(
+                row["person_id"], row["display_name"], embedding.copy()))
+        snapshot = AppFaceGallerySnapshot(version, tuple(entries))
         if skipped:
             logger.warning("Skipped %d invalid SQLite Identity embedding row(s)", skipped)
         return snapshot, {
@@ -58,7 +71,7 @@ class FaceGalleryCoordinator:
     def __init__(self, provider=None):
         self.provider = provider or SqliteFaceGalleryProvider()
         self._lock = threading.RLock()
-        self._registry = None
+        self._publisher = None
         self._revision = 0
         self.last_error = None
         self.last_metrics = None
@@ -69,14 +82,14 @@ class FaceGalleryCoordinator:
         with self._lock:
             return self._revision
 
-    def bind_registry(self, registry):
+    def set_publisher(self, publisher):
         with self._lock:
-            self._registry = registry
+            self._publisher = publisher
 
-    def unbind_registry(self, registry):
+    def clear_publisher(self, publisher):
         with self._lock:
-            if self._registry is registry:
-                self._registry = None
+            if self._publisher is publisher:
+                self._publisher = None
 
     def refresh(self):
         with self._refresh_lock:
@@ -87,9 +100,9 @@ class FaceGalleryCoordinator:
                 self._revision = next_revision
                 self.last_error = None
                 self.last_metrics = metrics
-                registry = self._registry
-        if registry is not None:
-            registry.update_identity_gallery(snapshot)
+                publisher = self._publisher
+        if publisher is not None:
+            publisher(snapshot)
         return snapshot
 
     def refresh_after_commit(self):

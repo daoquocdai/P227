@@ -27,6 +27,7 @@ class IdentityGalleryEntry:
             raise ValueError("Identity gallery person_id and name must be non-empty")
         if embedding.size == 0 or not np.isfinite(embedding).all():
             raise ValueError("Identity gallery embedding must be non-empty and finite")
+        embedding.setflags(write=False)
         object.__setattr__(self, "person_id", person_id)
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "embedding", embedding)

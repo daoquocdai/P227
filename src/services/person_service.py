@@ -2,9 +2,9 @@ from typing import Any
 from uuid import uuid4
 
 from src.database import database_connection
+from src.integrations.sda_identity import sda_face_embedding_encoder
 from src.services.face_embedding_encoder import FaceEmbeddingEncoder
 from src.services.face_gallery_provider import face_gallery_coordinator
-from src.services.face_identity_service import face_identity_service
 
 
 class PersonNotFoundError(Exception):
@@ -18,7 +18,7 @@ class FaceProfileNotFoundError(Exception):
 class PersonService:
     def __init__(self, encoder: FaceEmbeddingEncoder | None = None,
                  gallery_coordinator=None) -> None:
-        self._face_encoder = encoder or face_identity_service
+        self._face_encoder = encoder or sda_face_embedding_encoder
         self._gallery_coordinator = gallery_coordinator or face_gallery_coordinator
 
     def list_people(self) -> list[dict[str, Any]]:

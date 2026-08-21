@@ -4,8 +4,11 @@ from types import SimpleNamespace
 import numpy as np
 
 from src.database import database_connection
-from src.services.face_gallery_provider import FaceGalleryCoordinator, SqliteFaceGalleryProvider
-from src.services.face_identity_service import FaceIdentityService
+from src.integrations.sda_identity import SdaFaceEmbeddingEncoder, to_sda_gallery
+from src.services.face_gallery_provider import (
+    AppFaceGalleryEntry, AppFaceGallerySnapshot, FaceGalleryCoordinator,
+    SqliteFaceGalleryProvider,
+)
 
 
 def test_face_gallery_loads_active_profiles_and_invalidates_deactivated_person():
@@ -37,7 +40,7 @@ def test_face_gallery_loads_active_profiles_and_invalidates_deactivated_person()
 
 
 def test_face_enrollment_uses_public_sda_encoder(tmp_path):
-    service = FaceIdentityService(tmp_path, provider="auto")
+    service = SdaFaceEmbeddingEncoder(tmp_path, provider="auto")
     assert service._encoder.config.device == "auto"
 
 
@@ -62,19 +65,28 @@ def test_person_service_depends_on_replaceable_embedding_encoder():
 def test_gallery_coordinator_publishes_monotonic_revisions():
     class Provider:
         def load(self, version):
-            from sda_vision import IdentityGallerySnapshot
-            return IdentityGallerySnapshot(version), {"load_ms": 0.1}
+            return AppFaceGallerySnapshot(version), {"load_ms": 0.1}
 
-    class Registry:
+    class Publisher:
         def __init__(self): self.versions = []
-        def update_identity_gallery(self, snapshot): self.versions.append(snapshot.version)
+        def __call__(self, snapshot): self.versions.append(snapshot.revision)
 
     coordinator = FaceGalleryCoordinator(Provider())
-    registry = Registry()
-    coordinator.bind_registry(registry)
+    publisher = Publisher()
+    coordinator.set_publisher(publisher)
     coordinator.refresh()
     coordinator.refresh()
-    assert registry.versions == [1, 2]
+    assert publisher.versions == [1, 2]
+
+
+def test_integration_converts_app_gallery_without_losing_identity_fields():
+    embedding = np.arange(4, dtype=np.float32)
+    app_snapshot = AppFaceGallerySnapshot(
+        8, (AppFaceGalleryEntry("person-8", "Mai", embedding),))
+    snapshot = to_sda_gallery(app_snapshot)
+    assert (snapshot.version, snapshot.entries[0].person_id,
+            snapshot.entries[0].name) == (8, "person-8", "Mai")
+    np.testing.assert_array_equal(snapshot.entries[0].embedding, embedding)
 
 
 def test_sqlite_gallery_skips_invalid_and_preserves_multiple_embeddings():
@@ -106,23 +118,23 @@ def test_integrated_gallery_mutations_publish_without_camera_restart():
         def extract(self, _image):
             return np.array([1, 0, 0, 0], dtype=np.float32), 0.9
 
-    class Registry:
+    class Publisher:
         def __init__(self): self.snapshots = []
-        def update_identity_gallery(self, snapshot): self.snapshots.append(snapshot)
+        def __call__(self, snapshot): self.snapshots.append(snapshot)
 
-    registry = Registry()
+    publisher = Publisher()
     coordinator = FaceGalleryCoordinator(SqliteFaceGalleryProvider())
-    coordinator.bind_registry(registry)
+    coordinator.set_publisher(publisher)
     service = PersonService(Encoder(), coordinator)
     person = service.create_person(SimpleNamespace(
         name="E2E person", relationship=None, birth=None, notes=None, active=True))
     with_face = service.add_face(person["id"], b"deterministic", "front")
-    assert registry.snapshots[-1].entries[0].person_id == person["id"]
-    assert registry.snapshots[-1].entries[0].name == "E2E person"
+    assert publisher.snapshots[-1].entries[0].person_id == person["id"]
+    assert publisher.snapshots[-1].entries[0].name == "E2E person"
     face_id = with_face["faces"][0]["id"]
     service.update_person(person["id"], SimpleNamespace(
         model_dump=lambda **_: {"name": "Renamed person"}))
-    assert registry.snapshots[-1].entries[0].name == "Renamed person"
+    assert publisher.snapshots[-1].entries[0].name == "Renamed person"
     service.delete_face(person["id"], face_id)
-    assert registry.snapshots[-1].entries == ()
-    assert [snapshot.version for snapshot in registry.snapshots] == [1, 2, 3]
+    assert publisher.snapshots[-1].entries == ()
+    assert [snapshot.revision for snapshot in publisher.snapshots] == [1, 2, 3]

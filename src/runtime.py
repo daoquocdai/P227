@@ -36,8 +36,10 @@ class LocalRuntime:
                 event_dispatcher=event_dispatcher,
             )
             from src.services.face_gallery_provider import face_gallery_coordinator
+            from src.integrations.sda_identity import SdaGalleryPublisher
             self._face_gallery_coordinator = face_gallery_coordinator
-            self._face_gallery_coordinator.bind_registry(self.sda)
+            self._sda_gallery_publisher = SdaGalleryPublisher(self.sda)
+            self._face_gallery_coordinator.set_publisher(self._sda_gallery_publisher)
             self._face_gallery_coordinator.refresh_after_commit()
             self.camera = SdaCameraFacade(self.sda)
             self.vision = SdaVisionFacade(self.sda)
@@ -121,4 +123,4 @@ class LocalRuntime:
         self.camera.stop_all()
         self.vision.stop()
         if hasattr(self, "_face_gallery_coordinator"):
-            self._face_gallery_coordinator.unbind_registry(self.sda)
+            self._face_gallery_coordinator.clear_publisher(self._sda_gallery_publisher)

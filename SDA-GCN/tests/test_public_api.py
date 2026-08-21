@@ -24,6 +24,15 @@ from sda_vision.runtime.timing import PoseSample
 
 
 class PublicImportTests(unittest.TestCase):
+    def test_gallery_embedding_is_defensively_copied_and_read_only(self):
+        source = np.ones(4, dtype=np.float32)
+        entry = IdentityGalleryEntry("person", "Name", source)
+        source[0] = 9
+        self.assertEqual(entry.embedding[0], 1)
+        self.assertFalse(entry.embedding.flags.writeable)
+        with self.assertRaises(ValueError):
+            entry.embedding[0] = 2
+
     def test_small_public_api_imports(self):
         self.assertTrue(VisionSession)
         self.assertTrue(VisionSessionConfig)

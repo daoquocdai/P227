@@ -17,7 +17,7 @@ from sda_vision.runtime.identity import (
     validate_cpu_affinity,
     validate_process_priority,
 )
-from sda_vision import IdentityGalleryEntry, IdentityGallerySnapshot
+from sda_vision import IdentityGalleryEntry, IdentityGallerySnapshot, VisionEvent, VisionSession
 from runtime.pipeline import FixedRateScheduler, LatestFrameStore
 from runtime.source import FramePacket
 
@@ -119,7 +119,37 @@ class IdentityStateTests(unittest.TestCase):
         stage._gallery_updates = queue.Queue(maxsize=1)
         stage.update_gallery(IdentityGallerySnapshot(1))
         stage.update_gallery(IdentityGallerySnapshot(2))
-        self.assertEqual(stage._gallery_updates.get_nowait().version, 2)
+        stage.update_gallery(IdentityGallerySnapshot(3))
+        stage.update_gallery(IdentityGallerySnapshot(4))
+        self.assertEqual(stage._gallery_updates.get_nowait().version, 4)
+
+    def test_gallery_update_resets_locked_unknown(self):
+        stage = self.make_stage()
+        stage.gallery_mode = "supplied"
+        stage.gallery_version = 1
+        stage._gallery_updates = queue.Queue(maxsize=1)
+        stage.result = IdentityResult(IdentityState.LOCKED_UNKNOWN, gallery_version=1)
+        stage.failed_attempts = 3
+        stage.update_gallery(IdentityGallerySnapshot(2))
+        self.assertEqual(stage.result.state, IdentityState.UNVERIFIED)
+        self.assertEqual(stage.failed_attempts, 0)
+
+    def test_session_gallery_update_preserves_fall_event_and_state(self):
+        session = VisionSession.__new__(VisionSession)
+        session._control_lock = threading.RLock()
+        session.identity_gallery_mode = "supplied"
+        session.identity_gallery_snapshot = IdentityGallerySnapshot(1)
+        session.config = SimpleNamespace(identity_gallery_snapshot=None)
+        session.identity_stage = None
+        session._last_identity_event_timestamp = 5.0
+        session._latest_detection = object()
+        fall = VisionEvent("FALL_CONFIRMED", 0.9, 1, 1.0)
+        identity = VisionEvent("PERSON_RECOGNIZED", 0.9, 1, 1.0)
+        session._pending_generated_events = [fall, identity]
+        session.fall_state = "CONFIRMED"
+        session.update_identity_gallery(IdentityGallerySnapshot(2))
+        self.assertEqual(session.fall_state, "CONFIRMED")
+        self.assertEqual(session._pending_generated_events, [fall])
 
 
 class IdentityIsolationTests(unittest.TestCase):
