@@ -46,9 +46,7 @@ class Settings(BaseSettings):
         normalized = value.strip().lower()
         if normalized in {"auto", "cpu", "cuda", "amd", "intel"}:
             return normalized
-        if normalized.startswith("cuda:") and normalized[5:].isdigit():
-            return normalized
-        raise ValueError("VISION_DEVICE must be auto, cpu, cuda, cuda:N, amd, or intel")
+        raise ValueError("VISION_DEVICE must be auto, cpu, cuda, amd, or intel")
 
     # LLM
     openai_api_key: str = ""

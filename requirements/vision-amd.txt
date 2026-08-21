@@ -1,8 +1,8 @@
-# AMD/Windows profile. DirectML provides the ONNX Runtime accelerator while
-# Torch uses the portable CPU wheel.
---extra-index-url https://download.pytorch.org/whl/cpu
+# AMD/Windows profile. ONNX Runtime DirectML accelerates Identity and
+# torch-directml accelerates SDA-GCN. torch-directml pins its compatible Torch
+# and TorchVision builds; do not add the CPU Torch profile here.
 -r base.txt
 
 onnxruntime-directml==1.24.4; platform_system == "Windows"
 onnxruntime==1.26.0; platform_system != "Windows"
-torch==2.5.1+cpu
+torch-directml==0.2.5.dev240914; platform_system == "Windows"

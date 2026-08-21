@@ -24,7 +24,7 @@ def to_sda_gallery(snapshot: AppFaceGallerySnapshot) -> IdentityGallerySnapshot:
 
 class SdaFaceEmbeddingEncoder:
     def __init__(self, insightface_root: Path, provider: str = "auto"):
-        device = {"directml": "amd"}.get(provider.strip().lower(), provider.strip().lower())
+        device = provider.strip().lower()
         self._encoder = FaceEncoder(FaceEncoderConfig(insightface_root=insightface_root, device=device))
 
     def extract(self, image_bytes: bytes):

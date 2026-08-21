@@ -8,8 +8,7 @@ import threading
 
 import numpy as np
 
-from .runtime.hardware import resolve_backend
-from .runtime.inference import choose_onnx_providers
+from .runtime.hardware import probe_capabilities, resolve_face_providers
 
 
 class FaceEncodingError(ValueError):
@@ -34,6 +33,7 @@ class FaceEncoder:
         self.config = config or FaceEncoderConfig()
         self._lock = threading.RLock()
         self._face_app = None
+        self.provider_diagnostics = None
 
     def encode(self, image_bytes: bytes) -> FaceEncodingResult:
         if not image_bytes or len(image_bytes) > 10 * 1024 * 1024:
@@ -43,7 +43,10 @@ class FaceEncoder:
         if image is None or image.ndim != 3:
             raise FaceEncodingError("Face image is invalid or unsupported")
         with self._lock:
-            faces = self._app().get(image)
+            try:
+                faces = self._app().get(image)
+            except Exception as exc:
+                raise FaceEncodingError(f"InsightFace inference failed: {exc}") from exc
         if not faces:
             raise FaceEncodingError("No face was detected in the supplied image")
         if len(faces) != 1:
@@ -70,13 +73,24 @@ class FaceEncoder:
             from insightface.app import FaceAnalysis
         except ImportError as exc:
             raise FaceEncodingError(f"InsightFace runtime is unavailable: {exc}") from exc
-        backend = resolve_backend(self.config.device)
-        providers, _stage = choose_onnx_providers(backend, ort.get_available_providers())
+        face_spec = resolve_face_providers(
+            self.config.device, probe_capabilities(), ort.get_available_providers())
+        providers = list(face_spec.providers)
         app = FaceAnalysis(
             name="buffalo_l", root=str(root),
             allowed_modules=["detection", "recognition"], providers=providers)
         primary = providers[0][0] if isinstance(providers[0], tuple) else providers[0]
         app.prepare(ctx_id=-1 if primary == "CPUExecutionProvider" else 0,
                     det_size=(self.config.detector_size, self.config.detector_size))
+        effective = []
+        for model in getattr(app, "models", {}).values():
+            session = getattr(model, "session", None)
+            if session is not None and hasattr(session, "get_providers"):
+                effective.extend(session.get_providers())
+        self.provider_diagnostics = {
+            "backend": face_spec.backend,
+            "requested_providers": list(face_spec.providers),
+            "effective_providers": list(dict.fromkeys(effective)),
+        }
         self._face_app = app
         return app

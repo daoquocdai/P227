@@ -19,6 +19,10 @@ class BackendResolutionError(RuntimeError):
     """Raised when a manually requested accelerator is unavailable."""
 
 
+class FaceAccelerationError(RuntimeError):
+    """Raised when GPU-first Identity cannot obtain a matching ORT provider."""
+
+
 @dataclass(frozen=True)
 class HardwareCapabilities:
     torch_cuda: bool = False
@@ -57,6 +61,19 @@ class BackendSpec:
             "openvino": "OpenVINO",
             "cpu": "PyTorch CPU",
         }[self.backend]
+
+
+@dataclass(frozen=True)
+class FaceProviderSpec:
+    backend: str
+    providers: tuple[str, ...]
+    device: str
+    precision: str
+    reason: str
+
+
+def _has_vendor(caps: HardwareCapabilities, vendor: str) -> bool:
+    return any(vendor in name.lower() for name in caps.adapter_names)
 
 
 def _windows_adapter_names() -> tuple[str, ...]:
@@ -136,7 +153,7 @@ def probe_capabilities() -> HardwareCapabilities:
     )
 
 
-def resolve_backend(
+def resolve_action_backend(
     requested: str = "auto",
     capabilities: Optional[HardwareCapabilities] = None,
 ) -> BackendSpec:
@@ -191,3 +208,63 @@ def resolve_backend(
     if any("intel" in name.lower() for name in caps.adapter_names) and not caps.openvino_gpu:
         warnings.warn("Intel GPU detected, but OpenVINO GPU is unavailable; falling back to CPU.", RuntimeWarning, stacklevel=2)
     return BackendSpec("cpu", "cpu", "CPU", "fp32", "CPU", "No supported accelerator backend is usable", "CPU", requested)
+
+
+def resolve_backend(
+    requested: str = "auto",
+    capabilities: Optional[HardwareCapabilities] = None,
+) -> BackendSpec:
+    """Backward-compatible alias for the Action-stage resolver."""
+    return resolve_action_backend(requested, capabilities)
+
+
+def resolve_face_providers(
+    requested: str,
+    capabilities: HardwareCapabilities,
+    available_onnx_providers: Sequence[str],
+    system: str | None = None,
+) -> FaceProviderSpec:
+    """Resolve InsightFace independently from the Action compute runtime."""
+    requested = requested.lower()
+    if requested not in {"auto", "cuda", "amd", "intel", "directml", "cpu"}:
+        raise BackendResolutionError(f"Unknown device mode: {requested}")
+    available = set(available_onnx_providers)
+    system = system or platform.system()
+    cpu = "CPUExecutionProvider"
+
+    if requested == "cpu":
+        if cpu not in available:
+            raise FaceAccelerationError("CPUExecutionProvider is unavailable for explicit CPU Identity.")
+        return FaceProviderSpec("ONNX Runtime CPU", (cpu,), "CPU", "fp32", "CPU was explicitly requested")
+
+    nvidia = capabilities.torch_cuda and not capabilities.torch_hip
+    amd_linux = capabilities.torch_cuda and capabilities.torch_hip and system != "Windows"
+    intel = capabilities.openvino_gpu or _has_vendor(capabilities, "intel")
+    amd_windows = system == "Windows" and capabilities.has_amd_adapter
+
+    if requested == "cuda" or (requested == "auto" and nvidia):
+        if "CUDAExecutionProvider" not in available:
+            raise FaceAccelerationError("NVIDIA GPU is usable but CUDAExecutionProvider is unavailable for Identity.")
+        chain = ("CUDAExecutionProvider",) + ((cpu,) if cpu in available else ())
+        return FaceProviderSpec("ONNX Runtime CUDA", chain, "CUDA", "fp32", "CUDAExecutionProvider is available")
+
+    if (
+        requested in {"intel", "amd", "directml"} and system == "Windows"
+        or requested == "auto" and (intel or amd_windows)
+    ):
+        if "DmlExecutionProvider" not in available:
+            vendor = "Intel" if intel and requested != "amd" else "AMD"
+            raise FaceAccelerationError(f"{vendor} GPU is present but DmlExecutionProvider is unavailable for Identity.")
+        chain = ("DmlExecutionProvider",) + ((cpu,) if cpu in available else ())
+        return FaceProviderSpec("ONNX Runtime DirectML", chain, "DirectML", "fp32", "DmlExecutionProvider is available")
+
+    if requested == "amd" or (requested == "auto" and amd_linux):
+        raise FaceAccelerationError(
+            "AMD Linux GPU Identity has no supported ONNX Runtime GPU provider in this application profile."
+        )
+
+    if requested in {"cuda", "amd", "intel", "directml"}:
+        raise FaceAccelerationError(f"Requested {requested} Identity accelerator is unavailable.")
+    if cpu not in available:
+        raise FaceAccelerationError("No supported GPU exists and CPUExecutionProvider is unavailable.")
+    return FaceProviderSpec("ONNX Runtime CPU", (cpu,), "CPU", "fp32", "No supported GPU accelerator is present")

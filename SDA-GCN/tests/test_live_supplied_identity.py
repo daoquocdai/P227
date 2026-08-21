@@ -88,3 +88,37 @@ def test_real_spawned_identity_child_accepts_live_supplied_gallery():
     finally:
         stage.stop(timeout=5)
     assert not stage._process.is_alive()
+
+
+@pytest.mark.skipif(not FACE.exists() or not MODEL.exists(),
+                    reason="local buffalo_l model and valid face fixture required")
+def test_real_spawned_identity_child_uses_directml_when_available():
+    import onnxruntime as ort
+
+    if "DmlExecutionProvider" not in ort.get_available_providers():
+        pytest.skip("DmlExecutionProvider is unavailable")
+    image = cv2.imread(str(FACE))
+    encoded = FaceEncoder(FaceEncoderConfig(device="directml", detector_size=640)).encode(
+        FACE.read_bytes())
+    snapshot = IdentityGallerySnapshot(
+        1, (IdentityGalleryEntry("test-person", "Test Name", encoded.embedding),))
+    stage = IdentityStage(
+        ["DmlExecutionProvider", "CPUExecutionProvider"],
+        ROOT / "register face", ROOT / "unused-live-cache.npz",
+        det_size=640, gallery_mode="supplied", gallery_snapshot=snapshot)
+    try:
+        stage.start()
+        assert stage._ready.wait(60), "DirectML Identity child did not become ready"
+        status = stage.poll_status()
+        assert status and status.get("startup_error") is None
+        assert status["requested_providers"][0] == "DmlExecutionProvider"
+        assert status["effective_providers"][0] == "DmlExecutionProvider"
+        bbox = (0, 0, image.shape[1], image.shape[0])
+        before = stage.frames_processed
+        assert stage.submit(image, bbox, now=1.0)
+        known = _wait_result(stage, before)
+        assert known.state == IdentityState.LOCKED_KNOWN
+        assert known.face_found is True
+    finally:
+        stage.stop(timeout=5)
+    assert not stage._process.is_alive()

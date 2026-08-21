@@ -490,6 +490,11 @@ class SdaSessionRegistry:
                     "max_pending": 1,
                     **metrics,
                 },
+                "hardware": (
+                    {}
+                    if record is None or not hasattr(record.session, "hardware_diagnostics")
+                    else record.session.hardware_diagnostics()
+                ),
             }
 
     def is_running(self, camera_id):

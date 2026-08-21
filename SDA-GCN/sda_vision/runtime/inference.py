@@ -13,7 +13,7 @@ import warnings
 import numpy as np
 import torch
 
-from .hardware import BackendSpec
+from .hardware import BackendSpec, FaceProviderSpec
 
 
 @dataclass(frozen=True)
@@ -86,11 +86,7 @@ class ActionInference:
                 self.model = None
                 return StageSpec("SDA-GCN", "OpenVINO", "GPU", "fp16")
             except Exception as exc:
-                if spec.mode != "auto":
-                    raise RuntimeError(f"SDA-GCN OpenVINO GPU initialization failed: {exc}") from exc
-                warnings.warn(f"SDA-GCN OpenVINO GPU initialization failed; using PyTorch CPU: {exc}", RuntimeWarning)
-                self.model = self.model.cpu()
-                return StageSpec("SDA-GCN", "PyTorch", "CPU", "fp32", str(exc))
+                raise RuntimeError(f"SDA-GCN OpenVINO GPU initialization failed: {exc}") from exc
 
         device: Any = spec.device
         if spec.backend == "torch_directml":
@@ -116,15 +112,7 @@ class ActionInference:
                 with torch.inference_mode():
                     output = self.model(tensor).float().cpu()
             except Exception as exc:
-                if self.requested_spec.backend != "torch_directml" or self.requested_spec.mode != "auto":
-                    raise
-                warnings.warn(f"SDA-GCN DirectML inference failed; using PyTorch CPU: {exc}", RuntimeWarning)
-                self.model = self.model.cpu().float()
-                self.device = torch.device("cpu")
-                self.stage = StageSpec("SDA-GCN", "PyTorch", "CPU", "fp32", str(exc))
-                tensor = tensor.cpu().float()
-                with torch.inference_mode():
-                    output = self.model(tensor).float()
+                raise RuntimeError(f"SDA-GCN DirectML inference failed: {exc}") from exc
         self.last_finished_monotonic_s = time.perf_counter()
         self.last_finished_wall_time_s = time.time()
         self.last_inference_ms = (self.last_finished_monotonic_s - started) * 1000.0
@@ -138,15 +126,9 @@ class ActionInference:
         self.model = None
 
 
-def choose_onnx_providers(spec: BackendSpec, available: list[str]) -> tuple[list, StageSpec]:
-    """Select a truthful InsightFace/ONNX Runtime provider chain."""
-    if spec.backend == "torch_cuda" and "CUDAExecutionProvider" in available:
-        return ["CUDAExecutionProvider", "CPUExecutionProvider"], StageSpec("Face", "ONNX Runtime", "CUDA", "fp32")
-    if spec.backend == "torch_directml" and "DmlExecutionProvider" in available:
-        return ["DmlExecutionProvider", "CPUExecutionProvider"], StageSpec("Face", "ONNX Runtime", "DirectML", "fp32")
-    if spec.backend == "openvino" and "OpenVINOExecutionProvider" in available:
-        return [("OpenVINOExecutionProvider", {"device_type": "GPU_FP16"}), "CPUExecutionProvider"], StageSpec("Face", "ONNX Runtime", "OpenVINO GPU", "fp16")
-    return ["CPUExecutionProvider"], StageSpec("Face", "ONNX Runtime", "CPU", "fp32", "No matching ONNX accelerator provider")
+def face_stage_spec(spec: FaceProviderSpec) -> StageSpec:
+    backend = "ONNX Runtime" if spec.backend.startswith("ONNX Runtime") else spec.backend
+    return StageSpec("Face", backend, spec.device, spec.precision, spec.reason)
 
 
 def print_diagnostics(spec: BackendSpec, pose: StageSpec, action: StageSpec, face: StageSpec) -> None:

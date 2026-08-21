@@ -22,8 +22,13 @@ from .callbacks import VisionCallbacks
 from .config import VisionSessionConfig
 from .contracts import (FrameTransform, VisionDetection, VisionEvent,
                         VisionFrameResult, VisionSourceFrame)
-from .runtime.hardware import resolve_backend
-from .runtime.inference import ActionInference, StageSpec, choose_onnx_providers, print_diagnostics
+from .runtime.hardware import (
+    FaceAccelerationError,
+    probe_capabilities,
+    resolve_action_backend,
+    resolve_face_providers,
+)
+from .runtime.inference import ActionInference, StageSpec, face_stage_spec, print_diagnostics
 from .runtime.identity import IdentityStage, IdentityState
 from .runtime.scheduler import FixedRateScheduler
 from .runtime.source import SourceKind, create_source, parse_source
@@ -106,7 +111,8 @@ class VisionSession:
         self.config = config
         self.callbacks = callbacks or VisionCallbacks()
         self.base_dir = str(config.package_root or Path(__file__).resolve().parents[1])
-        self.backend = resolve_backend(config.device)
+        self.hardware_capabilities = probe_capabilities()
+        self.backend = resolve_action_backend(config.device, self.hardware_capabilities)
         self.preview = config.preview
         self.identity_enabled = config.identity_enabled
         self.inference_enabled = config.inference_enabled
@@ -130,6 +136,12 @@ class VisionSession:
         self.action_model = None
         self.pose_stage = StageSpec("Pose", "MediaPipe", "CPU", "fp32", "MediaPipe Tasks Python does not expose an OpenVINO provider")
         self.face_stage = None
+        self.face_requested_providers = ()
+        self.face_effective_providers = ()
+        self.face_startup_error = None
+        self.face_effective_det_size = None
+        self._identity_start_attempted = False
+        self._last_identity_queue = {"submitted": 0, "processed": 0, "dropped": 0, "max_depth": 0}
         self.known_faces = {}
         
         self.last_sent_time = {}
@@ -261,7 +273,8 @@ class VisionSession:
         print(f"Identity        : {'ENABLED' if self.identity_enabled else 'DISABLED'}")
         if self.identity_enabled:
             print(f"Identity rate   : <= {1.0 / self.identity_interval:.1f} Hz")
-            print(f"Face det size   : {self.face_det_size}x{self.face_det_size}")
+            det_size = self.face_effective_det_size or self.face_det_size
+            print(f"Face det size   : {det_size}x{det_size}")
         preview_label = {'window': 'OpenCV Window', 'web': 'Web MJPEG', 'none': 'DISABLED'}[self.preview]
         print(f"Preview         : {preview_label}")
         print(f"Event Callback  : {'ENABLED' if self.callbacks.on_event else 'DISABLED'}\n")
@@ -270,15 +283,31 @@ class VisionSession:
 
     def _start_identity_stage(self):
         with self._control_lock:
-            if self.identity_stage is not None or not self.identity_enabled:
+            if self.identity_stage is not None or not self.identity_enabled or self._identity_start_attempted:
                 return
+            self._identity_start_attempted = True
             print("[*] Initializing Identity worker...")
-            providers, self.face_stage = choose_onnx_providers(
-                self.backend, ort.get_available_providers())
+            try:
+                face_spec = resolve_face_providers(
+                    self.config.device,
+                    self.hardware_capabilities,
+                    ort.get_available_providers(),
+                )
+            except FaceAccelerationError as exc:
+                self.face_stage = StageSpec("Face", "UNAVAILABLE", "", "n/a", str(exc))
+                self.face_startup_error = str(exc)
+                print(f"[Identity Acceleration Error] {exc}")
+                return
+            providers = list(face_spec.providers)
+            self.face_requested_providers = tuple(face_spec.providers)
+            self.face_stage = face_stage_spec(face_spec)
+            self.face_startup_error = None
+            effective_det_size = 640 if face_spec.device == "DirectML" else self.face_det_size
+            self.face_effective_det_size = effective_det_size
             stage = IdentityStage(
                 providers, os.path.join(self.base_dir, "register face"),
                 os.path.join(self.base_dir, "work_dir/identity_cache/identity_gallery.npz"),
-                det_size=self.face_det_size, interval=self.identity_interval,
+                det_size=effective_det_size, interval=self.identity_interval,
                 rebuild_cache=self.rebuild_face_cache, debug=self.log_level == "debug",
                 identity_debug=self.identity_debug,
                 process_priority=self.identity_process_priority,
@@ -317,6 +346,7 @@ class VisionSession:
             self._reset_temporal_state()
             if not enabled:
                 old_identity, self.identity_stage = self.identity_stage, None
+                self._identity_start_attempted = False
         if old_identity is not None:
             old_identity.stop()
         if enabled and self.identity_enabled and self.action_model is not None:
@@ -338,9 +368,12 @@ class VisionSession:
                 self._latest_detection = None
                 if not enabled:
                     old_identity, self.identity_stage = self.identity_stage, None
+                    self._identity_start_attempted = False
                     self.face_stage = StageSpec("Face", "DISABLED", "", "n/a")
                 else:
                     should_start = self.action_model is not None and self.identity_stage is None
+                    self._identity_start_attempted = False
+                    self.face_startup_error = None
         if old_identity is not None:
             old_identity.stop()
         if should_start:
@@ -704,19 +737,29 @@ class VisionSession:
             if self.identity_stage and not self._gallery_status_logged:
                 gallery = self.identity_stage.poll_status()
                 if gallery:
+                    self.face_effective_providers = tuple(gallery.get("effective_providers", ()))
+                    if gallery.get("startup_error"):
+                        self.face_startup_error = gallery["startup_error"]
+                        self.face_stage = StageSpec(
+                            "Face", "UNAVAILABLE", "", "n/a", self.face_startup_error
+                        )
                     print("\n[Identity Gallery]")
-                    print(f"Persons         : {gallery['persons']}")
-                    print(f"Images          : {gallery['images']}")
-                    print(f"Cached          : {gallery['cached']}")
-                    print(f"Recomputed      : {gallery['recomputed']}")
-                    print(f"Skipped         : {gallery['skipped']}")
-                    print(f"Load time       : {gallery['gallery_ms']:.0f} ms")
-                    print(f"Identity ready  : {gallery['ready_ms']:.0f} ms")
+                    print(f"Persons         : {gallery.get('persons', 0)}")
+                    print(f"Images          : {gallery.get('images', 0)}")
+                    print(f"Cached          : {gallery.get('cached', 0)}")
+                    print(f"Recomputed      : {gallery.get('recomputed', 0)}")
+                    print(f"Skipped         : {gallery.get('skipped', 0)}")
+                    print(f"Load time       : {gallery.get('gallery_ms', 0):.0f} ms")
+                    print(f"Identity ready  : {gallery.get('ready_ms', 0):.0f} ms")
                     execution = gallery.get("execution", {})
                     print(f"Identity priority: {execution.get('effective_priority', 'normal')}")
                     print(f"Identity affinity: {execution.get('effective_affinity') or 'unrestricted'}")
                     if execution.get("isolation_reason"):
                         print(f"Identity isolation: {execution['isolation_reason']}")
+                    print(f"Face requested   : {', '.join(self.face_requested_providers) or 'none'}")
+                    print(f"Face effective   : {', '.join(self.face_effective_providers) or 'none'}")
+                    if self.face_startup_error:
+                        print(f"Face error       : {self.face_startup_error}")
                     self._gallery_status_logged = True
             
             timestamp_ms = self.pose_timestamp_adapter.convert(
@@ -822,6 +865,12 @@ class VisionSession:
                                        if self.current_sda_gcn_ms is not None else None),
                                    "sda_gcn_invocation_count": self.action_model.invocation_count,
                                    "identity_inference_ms": self.current_identity_ms,
+                                   "identity_frames_submitted": (
+                                       self.identity_stage.frames_submitted if self.identity_stage else 0),
+                                   "identity_frames_processed": (
+                                       self.identity_stage.frames_processed if self.identity_stage else 0),
+                                   "identity_frames_dropped": (
+                                       self.identity_stage.frames_dropped if self.identity_stage else 0),
                                    "identity_inference_started_monotonic_s": (
                                        self.identity_stage.result.inference_started_monotonic_s
                                        if self.current_identity_ms is not None and self.identity_stage else None),
@@ -888,6 +937,12 @@ class VisionSession:
             self.frame_source.stop()
             self.frame_source = None
         if self.identity_stage:
+            self._last_identity_queue = {
+                "submitted": getattr(self.identity_stage, "frames_submitted", 0),
+                "processed": getattr(self.identity_stage, "frames_processed", 0),
+                "dropped": getattr(self.identity_stage, "frames_dropped", 0),
+                "max_depth": 1,
+            }
             self.identity_stage.stop()
             self.identity_stage = None
         if self.pose_model:
@@ -913,5 +968,31 @@ class VisionSession:
             "cycle": list(self._profile_cycle),
             "scheduler_deadline_misses": self._scheduler_deadline_misses,
             "capture_frames_dropped": self._capture_frames_dropped,
+            "identity_queue": (
+                {
+                    "submitted": self.identity_stage.frames_submitted,
+                    "processed": self.identity_stage.frames_processed,
+                    "dropped": self.identity_stage.frames_dropped,
+                    "max_depth": 1,
+                }
+                if self.identity_stage
+                else dict(self._last_identity_queue)
+            ),
+        }
+
+    def hardware_diagnostics(self) -> dict:
+        return {
+            "pose_backend": "MediaPipe CPU",
+            "action_backend": None if self.action_model is None else self.action_model.stage.backend,
+            "action_device": None if self.action_model is None else self.action_model.stage.device,
+            "action_precision": None if self.action_model is None else self.action_model.stage.precision,
+            "face_backend": None if self.face_stage is None else self.face_stage.backend,
+            "face_provider": self.face_requested_providers[0] if self.face_requested_providers else None,
+            "face_detector_size": self.face_effective_det_size,
+            "face_requested_providers": list(self.face_requested_providers),
+            "face_effective_providers": list(self.face_effective_providers),
+            "face_startup_error": self.face_startup_error,
+            "hardware_vendor": self.backend.vendor,
+            "hardware_device_name": self.backend.device_name,
         }
 

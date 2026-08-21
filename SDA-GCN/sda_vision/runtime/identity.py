@@ -150,12 +150,29 @@ def _identity_process(input_queue, result_queue, status_queue, stop_event, ready
     if not debug:
         output_context.enter_context(contextlib.redirect_stdout(captured_stdout))
         output_context.enter_context(contextlib.redirect_stderr(captured_stderr))
-    with output_context, warnings.catch_warnings():
-        warnings.filterwarnings("ignore", message="SymbolDatabase.GetPrototype\(\) is deprecated")
-        model_started = time.perf_counter()
-        app = FaceAnalysis(name="buffalo_l", allowed_modules=["detection", "recognition"], providers=providers)
-        app.prepare(ctx_id=0 if providers[0] != "CPUExecutionProvider" else -1, det_size=(det_size, det_size))
-        model_ms = (time.perf_counter() - model_started) * 1000.0
+    try:
+        with output_context, warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=r"SymbolDatabase.GetPrototype\(\) is deprecated")
+            model_started = time.perf_counter()
+            app = FaceAnalysis(name="buffalo_l", allowed_modules=["detection", "recognition"], providers=providers)
+            app.prepare(ctx_id=0 if providers[0] != "CPUExecutionProvider" else -1, det_size=(det_size, det_size))
+            model_ms = (time.perf_counter() - model_started) * 1000.0
+    except Exception as exc:
+        _replace_latest(status_queue, {
+            "startup_error": str(exc),
+            "requested_providers": list(providers),
+            "effective_providers": [],
+            "execution": isolation_status,
+        })
+        ready_event.set()
+        return
+
+    effective_providers = []
+    for model in getattr(app, "models", {}).values():
+        session = getattr(model, "session", None)
+        if session is not None and hasattr(session, "get_providers"):
+            effective_providers.extend(session.get_providers())
+    effective_providers = list(dict.fromkeys(effective_providers))
 
     root = Path(data_dir)
 
@@ -199,6 +216,8 @@ def _identity_process(input_queue, result_queue, status_queue, stop_event, ready
         "cached": gallery_stats.cached, "recomputed": gallery_stats.recomputed,
         "skipped": gallery_stats.skipped,
         "execution": isolation_status,
+        "requested_providers": list(providers),
+        "effective_providers": effective_providers,
     }
     _replace_latest(status_queue, ready_payload)
 

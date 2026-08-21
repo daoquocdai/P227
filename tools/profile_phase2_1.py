@@ -47,6 +47,19 @@ class Collector:
         self.source_times = []
         self.result_times = []
         self.states = []
+        self.cpu_samples = []
+        self._sample_stop = threading.Event()
+        psutil.cpu_percent(interval=None)
+        self._sample_thread = threading.Thread(target=self._sample_resources, daemon=True)
+        self._sample_thread.start()
+
+    def _sample_resources(self):
+        while not self._sample_stop.wait(1.0):
+            self.cpu_samples.append((time.monotonic(), psutil.cpu_percent(interval=None)))
+
+    def stop_sampling(self):
+        self._sample_stop.set()
+        self._sample_thread.join(2)
 
     def source(self, _frame):
         self.source_times.append(time.monotonic())
@@ -86,7 +99,8 @@ def window_profile(collector, profile, start, end):
     }
 
 
-def finish(case, collector, session, extra=None):
+def finish(case, collector, session, extra=None, duration=30.0):
+    collector.stop_sampling()
     profile = session.performance_profile()
     windows = {
         name: window_profile(collector, profile, start, end)
@@ -123,6 +137,16 @@ def finish(case, collector, session, extra=None):
         ) else sda_non_overlap
         target.append(latency)
     identity_overlap_count = sum(bool(item["overlapping_sda"]) for item in correlations)
+    minute_windows = {}
+    for minute_start in range(0, int(duration), 60):
+        minute_end = min(duration, minute_start + 60)
+        if minute_end - minute_start < 30:
+            continue
+        window = window_profile(collector, profile, minute_start, minute_end)
+        cpu = [value for timestamp, value in collector.cpu_samples
+               if collector.started + minute_start <= timestamp < collector.started + minute_end]
+        window["system_cpu_percent"] = summary(cpu)
+        minute_windows[f"minute_{minute_start // 60 + 1}"] = window
     return {
         "case": case,
         "windows": windows,
@@ -132,6 +156,8 @@ def finish(case, collector, session, extra=None):
         "sda_invocation_ids_unique": len({item[3] for item in profile["sda_gcn"]}),
         "scheduler_deadline_misses": profile["scheduler_deadline_misses"],
         "capture_frames_dropped": profile["capture_frames_dropped"],
+        "identity_queue": profile.get("identity_queue", {}),
+        "minute_windows": minute_windows,
         "overlap_metrics": {
             "sda_overlap_ms": summary(sda_overlap),
             "sda_non_overlap_ms": summary(sda_non_overlap),
@@ -142,11 +168,11 @@ def finish(case, collector, session, extra=None):
     }
 
 
-def run_standalone(source, identity, duration):
+def run_standalone(source, identity, duration, *, loop_video=False):
     collector = Collector()
     session = VisionSession(VisionSessionConfig(
         source=source, camera_id="profile", device="auto", identity_enabled=identity,
-        vision_fps=15.0, preview="none", log_level="error"),
+        vision_fps=15.0, preview="none", log_level="error", loop_video=loop_video),
         VisionCallbacks(on_source_frame=collector.source, on_result_frame=collector.result))
     thread = threading.Thread(target=session.run, name="profile-standalone")
     thread.start()
@@ -155,7 +181,7 @@ def run_standalone(source, identity, duration):
     thread.join(10)
     if thread.is_alive():
         raise RuntimeError("standalone session did not stop")
-    return finish(f"standalone_identity_{'on' if identity else 'off'}", collector, session)
+    return finish(f"standalone_identity_{'on' if identity else 'off'}", collector, session, duration=duration)
 
 
 class Dispatcher:
@@ -255,13 +281,17 @@ def main():
     parser.add_argument("--only-on", action="store_true")
     parser.add_argument("--integrated-mjpeg-only", action="store_true")
     parser.add_argument("--integrated-mjpeg-on-only", action="store_true")
+    parser.add_argument("--standalone-on-only", action="store_true")
+    parser.add_argument("--loop-video", action="store_true")
     parser.add_argument("--identity-priority", choices=("normal", "below_normal"), default="normal")
     parser.add_argument("--identity-affinity", help="Comma-separated allowed logical CPU IDs")
     args = parser.parse_args()
     affinity = (tuple(int(value) for value in args.identity_affinity.split(","))
                 if args.identity_affinity else None)
     tuning = {"process_priority": args.identity_priority, "cpu_affinity": affinity}
-    if args.integrated_mjpeg_on_only:
+    if args.standalone_on_only:
+        cases = [run_standalone(args.source, True, args.duration, loop_video=args.loop_video)]
+    elif args.integrated_mjpeg_on_only:
         cases = [run_integrated(args.source, True, True, args.duration, **tuning)]
     elif args.integrated_mjpeg_only:
         cases = [
