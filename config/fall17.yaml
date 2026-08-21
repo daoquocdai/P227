@@ -1,39 +1,39 @@
 num_worker: 8
-work_dir: ./work_dir/fall_detection/fall
+work_dir: ./work_dir/fall_detection17/joint
 
 # feeder
-feeder: feeders.feeder_ntu.Feeder
+feeder: feeders17.feeder_ntu.Feeder
 
 train_feeder_args:
-  data_path: ./data/fused_features/train_joint_only
-  label_path: ./data/fused_features/train_joint_only/train_label.csv
+  data_path: ./data/fused_featuresgpu/train_joint_only
+  label_path: ./data/fused_featuresgpu/train_joint_only/train_label.csv
   debug: False
   random_choose: True
   random_shift: True
   random_move: True
   window_size: 64
-  normalization: False
+  normalization: True
   random_rot: True
   p_interval: [1]
   bone: False
 
 val_feeder_args:
-  data_path: ./data/fused_features/val_joint_only
-  label_path: ./data/fused_features/val_joint_only/val_label.csv
+  data_path: ./data/fused_featuresgpu/val_joint_only
+  label_path: ./data/fused_featuresgpu/val_joint_only/val_label.csv
   split: val
   debug: False
   random_choose: False
   random_shift: False
   random_move: False
   window_size: 64
-  normalization: False
+  normalization: True
   random_rot: False
   p_interval: [1]
   bone: False
 
 test_feeder_args:
-  data_path: ./data/fused_features/val_joint_only
-  label_path: ./data/fused_features/val_joint_only/val_label.csv
+  data_path: ./data/fused_featuresgpu/val_joint_only
+  label_path: ./data/fused_featuresgpu/val_joint_only/val_label.csv
   split: test
   window_size: 64
   p_interval: [1]
@@ -41,12 +41,12 @@ test_feeder_args:
   debug: False 
 
 # model
-model: model.SDAGCN.Model
+model: model.SDAGCN17.Model
 model_args:
   num_class: 5     
-  num_point: 25     
+  num_point: 17     
   num_person: 1
-  graph: graph.ntu_rgb_d_hierarchy.Graph   
+  graph: graph17.ntu_rgb_d_hierarchy.Graph   
   graph_args:
     labeling_mode: 'spatial'
     CoM: 0          
@@ -63,6 +63,6 @@ warm_up_epoch: 3
 device: [0]
 batch_size: 64
 test_batch_size: 64
-num_epoch: 15
-step: [8, 12]
+num_epoch: 30
+step: [15, 20]
 nesterov: True

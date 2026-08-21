@@ -81,6 +81,10 @@ def resample_frames(kpts_array, target_frames=64):
 def compute_similarity(embedding1, embedding2):
     return np.dot(embedding1, embedding2) / (np.linalg.norm(embedding1) * np.linalg.norm(embedding2))
 
+
+# ==============================
+# HÀM TRÍCH XUẤT KEYPOINTS MỚI (Từ toàn khung hình MediaPipe)
+# ==============================
 def extract_from_landmarks(landmarks):
     TOTAL_JOINTS = 25
     keypoints = np.zeros((TOTAL_JOINTS, 3), dtype=np.float32)
@@ -120,6 +124,7 @@ def extract_from_landmarks(landmarks):
 
     return keypoints
 
+
 class FallDetectionSystem:
     def __init__(self):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -131,6 +136,8 @@ class FallDetectionSystem:
         self.known_faces = {}
         
         self.last_sent_time = {}
+        
+        # Biến lưu trữ kết quả Tracking bất đồng bộ từ MediaPipe
         self.latest_pose_result = None
         
         # States
@@ -138,9 +145,6 @@ class FallDetectionSystem:
         self.timestamp_buffer = []
         self.current_action = "Waiting for frames..."
         self.action_color = (255, 255, 255)
-        
-        # BỘ ĐẾM SỰ KIỆN HARDCODE (HÀNG CHỜ)
-        self.pending_event = None
         
         # Constants
         self.orig_w = 1280
@@ -152,6 +156,7 @@ class FallDetectionSystem:
         self.track_last_face_check = {}
         self.frame_count = 0
 
+    # Hàm Callback nhận dữ liệu từ luồng nền của MediaPipe
     def _pose_callback(self, result: vision.PoseLandmarkerResult, output_image: mp.Image, timestamp_ms: int):
         self.latest_pose_result = result
 
@@ -161,6 +166,7 @@ class FallDetectionSystem:
         self.app.prepare(ctx_id=0, det_size=(640, 640))
 
         print("[*] Đang khởi tạo MediaPipe Pose (LIVE_STREAM mode)...")
+        # CHÚ Ý: ĐỔI ĐƯỜNG DẪN FILE .TASK Ở ĐÂY
         model_path = 'pose_landmarker_full.task' 
         
         base_options = python.BaseOptions(model_asset_path=model_path)
@@ -282,128 +288,39 @@ class FallDetectionSystem:
         cv2.putText(frame, name_display, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, face_color, 2)
         
     def detect_fall(self):
-        # 1. LOGIC KIỂM DUYỆT (HARDCODE STATE MACHINE)
-        if self.pending_event is not None and len(self.kpts_buffer) > 0:
-            event = self.pending_event
-            elapsed = time.time() - event["start_time"]
+        if len(self.timestamp_buffer) > 0 and (time.time() - self.timestamp_buffer[0] >= 2.0):
+            raw_array = np.array(self.kpts_buffer)
             
-            # Lấy raw keypoints ở frame hiện tại để làm thước đo tỷ lệ cơ thể
-            current_kpts = self.kpts_buffer[-1].copy()
+            kpt = clean_out_of_bounds_data(raw_array)
+            kpt = interpolate_missing(kpt)
+            kpt = kpt - kpt[:, 0:1, :] 
+            kpt = normalize_pose(kpt)
+            kpt = apply_kalman_filter(kpt)
+            kpt = resample_frames(kpt, target_frames=self.window_size)
             
-            # Tính chiều dài lưng (Khoảng cách từ Cổ index 2 đến Hông index 0)
-            torso_len = np.linalg.norm(current_kpts[2] - current_kpts[0])
-            if torso_len < 1e-5: 
-                torso_len = 1e-5
+            data_numpy = kpt.transpose(2, 0, 1) 
+            data_numpy = data_numpy[:, :, :, np.newaxis] 
 
-            # Hàm kiểm tra chuyển động chống pha loãng tín hiệu
-            def has_moved(current, anchor, torso_length):
-                # Tính khoảng cách xê dịch của toàn bộ 25 khớp
-                diff = np.linalg.norm(current - anchor, axis=1) 
+            data_tensor = torch.FloatTensor(data_numpy).unsqueeze(0).to(self.device) 
+            
+            with torch.no_grad():
+                output = self.action_model(data_tensor)
+                prob = F.softmax(output, dim=1).squeeze()
+                pred_idx = torch.argmax(prob).item()
+                conf = float(prob[pred_idx]) 
                 
-                # Màng lọc 1: Loại bỏ nhiễu tĩnh (< 15% torso)
-                moved_joints = diff[diff > 0.15 * torso_length]
-                
-                # Màng lọc 2: Chốt hành động (Ít nhất 1 khớp xê dịch mạnh > 40% torso)
-                if len(moved_joints) >= 1:
-                    avg_movement = np.mean(moved_joints)
-                    if avg_movement > 0.40 * torso_length:
-                        return True
-                return False
-
-            # DÒNG THỜI GIAN CUỐN CHIẾU
-            if elapsed >= 2.0 and event["state"] == "FALL_DETECTED":
-                event["anchor_kpts"] = current_kpts
-                event["state"] = "WARNING_PENDING"
-                event["next_check_time"] = event["start_time"] + 3.0
-                
-            elif event["state"] == "WARNING_PENDING" and time.time() >= event["next_check_time"]:
-                if has_moved(current_kpts, event["anchor_kpts"], torso_len):
-                    self.pending_event = None # Khớp xê dịch mạnh -> Bẻ lái hủy
+                if pred_idx == 1:
+                    self.current_action = f"Nga! ({conf:.2f})"
+                    self.action_color = (0, 0, 255)
+                    self.send_event_to_backend("FALL_CONFIRMED", conf)
                 else:
-                    event["state"] = "WARNING"
-                    self.current_action = "Co the nga (Cho...)"
-                    self.action_color = (0, 165, 255) # Cam
-                    event["anchor_kpts"] = current_kpts
-                    event["next_check_time"] = event["start_time"] + 5.0
-                    
-            elif event["state"] == "WARNING" and time.time() >= event["next_check_time"]:
-                if has_moved(current_kpts, event["anchor_kpts"], torso_len):
-                    self.pending_event = None
-                else:
-                    event["state"] = "ALERT"
-                    self.current_action = f"Nga! ({event['conf']:.2f})"
-                    self.action_color = (0, 0, 255) # Đỏ
-                    
-                    # Phát API cảnh báo (Gửi duy nhất 1 lần ở Giây thứ 5.0)
-                    self.send_event_to_backend("FALL_CONFIRMED", event["conf"])
-                    
-                    event["anchor_kpts"] = current_kpts
-                    event["next_check_time"] = time.time() + 2.0
-                    
-            elif event["state"] == "ALERT" and time.time() >= event["next_check_time"]:
-                # Cuốn chiếu kiểm tra mỗi 2 giây
-                if has_moved(current_kpts, event["anchor_kpts"], torso_len):
-                    self.pending_event = None
-                else:
-                    event["anchor_kpts"] = current_kpts
-                    event["next_check_time"] = time.time() + 2.0
-
-            # Khôi phục trạng thái an toàn nếu bị hủy
-            if self.pending_event is None:
-                self.current_action = "Khong nga (Reset)"
-                self.action_color = (0, 255, 0)
-                
-        # 2. LOGIC ĐÁNH LỬA AI (Chỉ chạy khi Hàng chờ trống)
-        else:
-            if len(self.timestamp_buffer) > 0 and (time.time() - self.timestamp_buffer[0] >= 2.0):
-                raw_array = np.array(self.kpts_buffer)
-                
-                kpt = clean_out_of_bounds_data(raw_array)
-                kpt = interpolate_missing(kpt)
-                kpt = kpt - kpt[:, 0:1, :] 
-                kpt = normalize_pose(kpt)
-                kpt = apply_kalman_filter(kpt)
-                kpt = resample_frames(kpt, target_frames=self.window_size)
-                
-                data_numpy = kpt.transpose(2, 0, 1) 
-                data_numpy = data_numpy[:, :, :, np.newaxis] 
-
-                data_tensor = torch.FloatTensor(data_numpy).unsqueeze(0).to(self.device) 
-                
-                with torch.no_grad():
-                    output = self.action_model(data_tensor)
-                    prob = F.softmax(output, dim=1).squeeze()
-                    pred_idx = torch.argmax(prob).item()
-                    conf = float(prob[pred_idx]) 
-                    
-                    if pred_idx == 0: # AI Báo Ngã
-                        # Cơ chế Lock-out: Bỏ sự kiện vào hàng chờ
-                        self.pending_event = {
-                            "start_time": time.time(),
-                            "state": "FALL_DETECTED",
-                            "anchor_kpts": None,
-                            "next_check_time": 0,
-                            "conf": conf
-                        }
-                        self.current_action = f"Phat hien nga ({conf:.2f}) - Kiem tra..."
-                        self.action_color = (0, 255, 255) # Vàng
-                    else:
-                        action_names = {1: "Dung", 2: "Cui", 3: "Ngoi", 4: "Nam"}
-                        action_name = action_names.get(pred_idx, "Khong xac dinh")
-                        self.current_action = f"{action_name} ({conf:.2f})"
-                        self.action_color = (0, 255, 0) # Xanh
-
-                # TRẢ VỀ ĐÚNG VỊ TRÍ CŨ TRONG CODE GỐC: Chỉ cắt buffer SAU KHI AI đã chạy
-                current_time = time.time()
-                while len(self.timestamp_buffer) > 0 and (current_time - self.timestamp_buffer[0] > 1.0):
-                    self.timestamp_buffer.pop(0)
-                    self.kpts_buffer.pop(0)
-
-        # 3. CHỐNG TRÀN RAM (Bảo vệ dự phòng cho hệ thống)
-        current_time = time.time()
-        while len(self.timestamp_buffer) > 0 and (current_time - self.timestamp_buffer[0] > 2.5):
-            self.timestamp_buffer.pop(0)
-            self.kpts_buffer.pop(0)
+                    self.current_action = f"Khong nga ({conf:.2f})"
+                    self.action_color = (0, 255, 0)
+            
+            current_time = time.time()
+            while len(self.timestamp_buffer) > 0 and (current_time - self.timestamp_buffer[0] > 1.0):
+                self.timestamp_buffer.pop(0)
+                self.kpts_buffer.pop(0)
 
     def run(self):
         print("[*] Đang kết nối trực tiếp tới Camera máy tính...")
@@ -430,8 +347,11 @@ class FallDetectionSystem:
 
             self.frame_count += 1
             
+            # 1. Gửi Frame vào luồng MediaPipe (Bất đồng bộ)
+            # 1. Gửi Frame vào luồng MediaPipe (Bất đồng bộ)
             timestamp_ms = int(time.time() * 1000)
             
+            # Ép buộc thời gian phải luôn tăng (Monotonically increasing)
             if not hasattr(self, 'last_timestamp_ms'):
                 self.last_timestamp_ms = 0
             if timestamp_ms <= self.last_timestamp_ms:
@@ -441,14 +361,17 @@ class FallDetectionSystem:
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
             self.pose_model.detect_async(mp_image, timestamp_ms)
 
+            # 2. Xử lý dữ liệu từ kết quả Tracking mới nhất
             person_found = False
             
             if self.latest_pose_result and self.latest_pose_result.pose_landmarks:
                 person_found = True
                 landmarks = self.latest_pose_result.pose_landmarks[0]
                 
+                # Trích xuất 25 điểm khớp
                 kpts = extract_from_landmarks(landmarks)
                 
+                # Tính toán Bounding Box từ các điểm khớp (dùng cho InsightFace)
                 xs = [lm.x for lm in landmarks]
                 ys = [lm.y for lm in landmarks]
                 x_min, x_max = min(xs), max(xs)
@@ -460,12 +383,15 @@ class FallDetectionSystem:
                 x2 = min(self.orig_w, int(x_max * self.orig_w) + pad)
                 y2 = min(self.orig_h, int(y_max * self.orig_h) + pad)
                 
+                # Gắn track_id = 1 giả lập (Vì MediaPipe LIVE_STREAM mặc định track 1 người xuyên suốt)
                 if (x2 - x1) >= 20 and (y2 - y1) >= 20:
                     self.process_person(frame, x1, y1, x2, y2, track_id=1)
                 
+                # Đưa vào buffer
                 self.kpts_buffer.append(kpts)
                 self.timestamp_buffer.append(time.time())
 
+            # 3. Nếu MediaPipe mất dấu người
             if not person_found:
                 if len(self.kpts_buffer) > 0:
                     last_kpts = self.kpts_buffer[-1].copy()
@@ -475,12 +401,13 @@ class FallDetectionSystem:
                 self.kpts_buffer.append(last_kpts)
                 self.timestamp_buffer.append(time.time())
                 
-                if self.pending_event is None:
-                    self.current_action = "Khong nga (Lost)"
-                    self.action_color = (0, 255, 0)
+                self.current_action = "Khong nga (Lost)"
+                self.action_color = (0, 255, 0)
 
+            # 4. Gọi SDA-GCN
             self.detect_fall()
             
+            # 5. Vẽ thông tin lên màn hình
             cv2.putText(frame, f"Action: {self.current_action}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, self.action_color, 2)
             cv2.putText(frame, f"Buffer: {len(self.kpts_buffer)} frames / 2.0s", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             

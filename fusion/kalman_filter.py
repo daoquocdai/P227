@@ -1,7 +1,7 @@
 import numpy as np
 
 class Kalman1D:
-    def __init__(self, R=0.01, Q=1e-5):
+    def __init__(self, R=1e-4, Q=1e-2):
         # R: measurement noise
         # Q: process noise
         self.R = R

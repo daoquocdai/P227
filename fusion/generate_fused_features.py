@@ -17,9 +17,9 @@ from fusion.kalman_filter import apply_kalman_filter
 from fusion.normalize_pose import normalize_pose
 
 CONFIG = {
-    "RAW_KEYPOINTS_DIR": "data/keypoint6",
-    "CSV_DIR": "Dataset_Split", 
-    "OUTPUT_ROOT": "data/fused_features6",
+    "RAW_KEYPOINTS_DIR": "data/keypoint",
+    "CSV_DIR": "data", 
+    "OUTPUT_ROOT": "data/fused_features",
     "TRAIN_CSV": "train.csv",
     "VAL_CSV": "val.csv",
     "NUM_AUG": 5,
