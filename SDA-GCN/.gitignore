@@ -32,3 +32,5 @@ yolov8n.pt
 *.avi
 *.bin
 extractkpt/checkpoint/
+work_dir/runtime_cache/
+work_dir/identity_cache/

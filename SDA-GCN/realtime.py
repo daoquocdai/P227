@@ -1,29 +1,41 @@
 import cv2
 import numpy as np
 import os
+os.environ.setdefault('GLOG_minloglevel', '2')
 import torch
 import sys
 import yaml
-from collections import OrderedDict
-from insightface.app import FaceAnalysis
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 import torch.nn.functional as F
 import time
-import requests
 import uuid
 from datetime import datetime, timezone
 import threading
 from flask import Flask, Response
 from scipy.interpolate import interp1d
 import logging
+import warnings
+warnings.filterwarnings("ignore", message=r"SymbolDatabase.GetPrototype\(\) is deprecated")
+import argparse
+import onnxruntime as ort
+from collections import deque
+
+from runtime.hardware import BackendResolutionError, resolve_backend
+from runtime.inference import ActionInference, StageSpec, choose_onnx_providers, print_diagnostics
+from runtime.events import EventSender
+from runtime.identity import IdentityStage, IdentityState
+from runtime.pipeline import FixedRateScheduler
+from runtime.source import SourceKind, create_source, parse_source
+from runtime.timing import (LatestPoseStore, MediaPipeTimestampAdapter, PosePacket,
+                            PoseSample, PoseSubmission, source_span_s)
 
 # Append local path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # Đã bỏ hàm extract_from_crop cũ, chỉ giữ lại clean_out_of_bounds_data
-from extractkpt.extractkpt import clean_out_of_bounds_data
+from extractkpt.common.cleaning import clean_out_of_bounds_data
 from feeders.bone_pairs import ntu_pairs
 from fusion.normalize_pose import normalize_pose
 from fusion.interpolate import interpolate_missing
@@ -49,10 +61,14 @@ def generate_frames():
 def video_feed():
     return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
+@app_flask.route('/')
+def preview_page():
+    return '<!doctype html><title>Vision Preview</title><img src="/video_feed" style="max-width:100%;height:auto">'
+
 def run_flask():
     log = logging.getLogger('werkzeug')
     log.setLevel(logging.ERROR)
-    app_flask.run(host='0.0.0.0', port=8001, debug=False, use_reloader=False)
+    app_flask.run(host='127.0.0.1', port=8001, debug=False, use_reloader=False)
 
 def import_class(import_str):
     mod_str, _sep, class_str = import_str.rpartition('.')
@@ -121,21 +137,40 @@ def extract_from_landmarks(landmarks):
     return keypoints
 
 class FallDetectionSystem:
-    def __init__(self):
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        print(f"[*] Sử dụng thiết bị: {self.device}")
+    def __init__(self, device_mode="auto", preview="window", backend_url=None, identity="on",
+                 vision_fps=15.0, identity_interval=0.5, face_det_size=416,
+                 rebuild_face_cache=False, log_level="info", identity_debug=False,
+                 source_spec=None, source_fps=None):
+        self.base_dir = os.path.dirname(os.path.abspath(__file__))
+        self.backend = resolve_backend(device_mode)
+        self.preview = preview
+        self.event_sender = EventSender(backend_url)
+        self.identity_enabled = identity == "on"
+        self.target_vision_fps = vision_fps
+        self.identity_interval = identity_interval
+        self.face_det_size = face_det_size
+        self.rebuild_face_cache = rebuild_face_cache
+        self.log_level = log_level
+        self.identity_debug = identity_debug
+        self.source_spec = source_spec or parse_source("0")
+        self.source_fps_override = source_fps
+        self.identity_stage = None
+        self.frame_source = None
         
         self.app = None
         self.pose_model = None
         self.action_model = None
+        self.pose_stage = StageSpec("Pose", "MediaPipe", "CPU", "fp32", "MediaPipe Tasks Python does not expose an OpenVINO provider")
+        self.face_stage = None
         self.known_faces = {}
         
         self.last_sent_time = {}
-        self.latest_pose_result = None
+        self.pose_store = LatestPoseStore()
+        self.pose_timestamp_adapter = MediaPipeTimestampAdapter()
+        self._last_pose_sequence = 0
         
         # States
-        self.kpts_buffer = []
-        self.timestamp_buffer = []
+        self.pose_samples = deque()
         self.current_action = "Waiting for frames..."
         self.action_color = (255, 255, 255)
         
@@ -146,22 +181,42 @@ class FallDetectionSystem:
         self.orig_w = 1280
         self.orig_h = 720
         self.window_size = 64
-        self.BACKEND_URL = "http://127.0.0.1:8000/api/v1/vision/events"
         
-        self.track_identities = {}
-        self.track_last_face_check = {}
         self.frame_count = 0
+        self.pose_inference_ms = 0.0
+        self.total_vision_ms = 0.0
+        self.effective_fps = 0.0
+        self._pose_submissions = {}
+        self.current_sda_gcn_ms = None
+        self.current_identity_ms = None
+        self._last_identity_event_timestamp = 0.0
+        self._gallery_status_logged = False
 
     def _pose_callback(self, result: vision.PoseLandmarkerResult, output_image: mp.Image, timestamp_ms: int):
-        self.latest_pose_result = result
+        submission = self._pose_submissions.pop(timestamp_ms, None)
+        if submission is not None:
+            latency = (time.perf_counter() - submission.submitted_perf_counter_s) * 1000.0
+            self.pose_inference_ms = latency
+            self.pose_store.publish(PosePacket(submission.source_time_s, submission.frame_sequence,
+                                               result, latency, submission.frame))
 
     def init_models(self):
-        print("[*] Đang khởi tạo InsightFace...")
-        self.app = FaceAnalysis(name='buffalo_l', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
-        self.app.prepare(ctx_id=0, det_size=(640, 640))
+        if self.identity_enabled:
+            print("[*] Đang khởi tạo Identity worker...")
+            providers, self.face_stage = choose_onnx_providers(self.backend, ort.get_available_providers())
+            self.identity_stage = IdentityStage(
+                providers, os.path.join(self.base_dir, "register face"),
+                os.path.join(self.base_dir, "work_dir/identity_cache/identity_gallery.npz"),
+                det_size=self.face_det_size, interval=self.identity_interval,
+                rebuild_cache=self.rebuild_face_cache, debug=self.log_level == "debug",
+                identity_debug=self.identity_debug,
+            )
+            self.identity_stage.start()
+        else:
+            self.face_stage = StageSpec("Face", "DISABLED", "", "n/a")
 
         print("[*] Đang khởi tạo MediaPipe Pose (LIVE_STREAM mode)...")
-        model_path = 'pose_landmarker_full.task' 
+        model_path = os.path.join(self.base_dir, 'pose_landmarker_full.task')
         
         base_options = python.BaseOptions(model_asset_path=model_path)
         options = vision.PoseLandmarkerOptions(
@@ -175,49 +230,40 @@ class FallDetectionSystem:
         self.pose_model = vision.PoseLandmarker.create_from_options(options)
 
         print("[*] Đang khởi tạo SDA-GCN (Fall Detection)...")
-        config_path = 'work_dir/fall_detection/fall/config.yaml'
-        weights_path = 'work_dir/fall_detection/fall/runs-best_val.pt'
+        config_path = os.path.join(self.base_dir, 'work_dir/fall_detection/fall/config.yaml')
+        weights_path = os.path.join(self.base_dir, 'work_dir/fall_detection/fall/runs-best_val.pt')
         
         with open(config_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
             
         Model = import_class(config['model'])
         model_args = config.get('model_args', {})
-        self.action_model = Model(**model_args).to(self.device)
+        self.action_model = ActionInference(
+            Model(**model_args), weights_path, self.backend,
+            os.path.join(self.base_dir, 'work_dir/runtime_cache'),
+        )
+        print_diagnostics(self.backend, self.pose_stage, self.action_model.stage, self.face_stage)
+        print(f"Identity        : {'ENABLED' if self.identity_enabled else 'DISABLED'}")
+        if self.identity_enabled:
+            print(f"Identity rate   : <= {1.0 / self.identity_interval:.1f} Hz")
+            print(f"Face det size   : {self.face_det_size}x{self.face_det_size}")
+        preview_label = {'window': 'OpenCV Window', 'web': 'Web MJPEG', 'none': 'DISABLED'}[self.preview]
+        print(f"Preview         : {preview_label}")
+        if self.event_sender.enabled:
+            print(f"Event Backend   : {self.event_sender.backend_url}")
+            print("Event Delivery  : asynchronous (bounded queue)\n")
+        else:
+            print("Event Backend   : DISABLED (standalone)\n")
+        print(f"Model init      : {self.action_model.model_initialize_ms:.1f} ms")
+        print(f"Model warmup    : {self.action_model.model_warmup_ms:.1f} ms\n")
         
-        weights = torch.load(weights_path, map_location=self.device)
-        weights = OrderedDict([[k.split('module.')[-1], v] for k, v in weights.items()])
-        self.action_model.load_state_dict(weights, strict=False)
-        self.action_model.eval()
-        
-    def load_known_faces(self, data_dir="register face"):
-        if os.path.exists(data_dir):
-            print(f"[*] Đang đọc dữ liệu khuôn mặt từ '{data_dir}'...")
-            for item in os.listdir(data_dir):
-                item_path = os.path.join(data_dir, item)
-                if os.path.isdir(item_path):
-                    name = item
-                    embeddings = []
-                    for filename in os.listdir(item_path):
-                        if filename.endswith(('.jpg', '.png', '.jpeg')):
-                            img_path = os.path.join(item_path, filename)
-                            img = cv2.imread(img_path)
-                            faces = self.app.get(img)
-                            if len(faces) > 0:
-                                embeddings.append(faces[0].embedding)
-                    if len(embeddings) > 0:
-                        self.known_faces[name] = np.mean(embeddings, axis=0)
-                elif item.endswith(('.jpg', '.png', '.jpeg')):
-                    name = os.path.splitext(item)[0]
-                    img_path = os.path.join(data_dir, item)
-                    img = cv2.imread(img_path)
-                    faces = self.app.get(img)
-                    if len(faces) > 0:
-                        self.known_faces[name] = faces[0].embedding
+    def load_known_faces(self, data_dir=None):
+        # Identity worker owns model initialization and registered embeddings.
+        return
 
     def send_event_to_backend(self, event_type, confidence=0.9, identity_status="UNKNOWN", identity_name=None):
         throttle_key = f"{event_type}_{identity_name}"
-        now = time.time()
+        now = time.monotonic()
         if now - self.last_sent_time.get(throttle_key, 0) < 5.0:
             return
         self.last_sent_time[throttle_key] = now
@@ -233,62 +279,50 @@ class FallDetectionSystem:
             "identity_name": identity_name
         }
         
-        def post_request():
-            try:
-                requests.post(self.BACKEND_URL, json=data, timeout=2)
-            except Exception as e:
-                print(f"[CẢNH BÁO] Không thể gửi sự kiện tới Backend: {e}")
-                
-        threading.Thread(target=post_request, daemon=True).start()
+        self.event_sender.enqueue(data)
 
-    def process_person(self, frame, x1, y1, x2, y2, track_id):
-        crop_w, crop_h = x2 - x1, y2 - y1
+    def process_person(self, frame, x1, y1, x2, y2, track_id, frame_sequence=None,
+                       source_time_s=None, overlay_frame=None):
+        overlay_frame = frame if overlay_frame is None else overlay_frame
+        if not self.identity_enabled:
+            cv2.rectangle(overlay_frame, (x1, y1), (x2, y2), (255, 255, 0), 2)
+            return
         crop_frame = frame[y1:y2, x1:x2]
-        
-        name_display = "Unknown"
-        face_color = (0, 0, 255)
-        
-        if track_id != -1 and track_id in self.track_identities:
-            name_display = self.track_identities[track_id]["name"]
-            best_score = self.track_identities[track_id]["score"]
+        processed_before = self.identity_stage.frames_processed
+        previous_state = self.identity_stage.result.state
+        self.identity_stage.submit(crop_frame.copy(), (x1, y1, x2, y2),
+                                   source_time_s=source_time_s, frame_sequence=frame_sequence)
+        result = self.identity_stage.poll()
+        if result.state != previous_state and self.log_level in {"debug", "info"}:
+            detail = f" | {result.name} | similarity={result.confidence:.2f}" if result.name else ""
+            print(f"[Identity] {previous_state.value} → {result.state.value}{detail}")
+        if self.identity_stage.frames_processed != processed_before:
+            self.current_identity_ms = result.inference_ms
+            if result.timestamp != self._last_identity_event_timestamp:
+                if result.state == IdentityState.LOCKED_KNOWN:
+                    self.send_event_to_backend("PERSON_RECOGNIZED", result.confidence, "KNOWN", result.name)
+                elif result.state == IdentityState.LOCKED_UNKNOWN:
+                    self.send_event_to_backend("UNKNOWN_PERSON", 0.9, "UNKNOWN")
+                self._last_identity_event_timestamp = result.timestamp
+        name_display = result.state.value
+        face_color = (0, 165, 255)
+        if result.state == IdentityState.LOCKED_KNOWN:
+            name_display = f"{result.name} ({result.confidence:.2f})"
             face_color = (0, 255, 0)
-            name_display = f"{name_display} ({best_score:.2f})"
-        else:
-            if track_id not in self.track_last_face_check or (self.frame_count - self.track_last_face_check.get(track_id, 0) >= 15):
-                faces = self.app.get(crop_frame)
-                if len(faces) > 0:
-                    main_face = max(faces, key=lambda f: (f.bbox[2]-f.bbox[0]) * (f.bbox[3]-f.bbox[1]))
-                    best_score = 0
-                    for name, known_emb in self.known_faces.items():
-                        score = compute_similarity(known_emb, main_face.embedding)
-                        if score > best_score:
-                            best_score = score
-                            name_display = name
-                    
-                    if best_score > 0.45:
-                        face_color = (0, 255, 0)
-                        if track_id != -1:
-                            self.track_identities[track_id] = {"name": name_display, "score": best_score}
-                        self.send_event_to_backend("PERSON_RECOGNIZED", best_score, "KNOWN", name_display)
-                        name_display = f"{name_display} ({best_score:.2f})"
-                    else:
-                        self.send_event_to_backend("UNKNOWN_PERSON", 0.9, "UNKNOWN")
-                        name_display = "Unknown"
-                
-                if track_id != -1:
-                    self.track_last_face_check[track_id] = self.frame_count
-
-        cv2.rectangle(frame, (x1, y1), (x2, y2), face_color, 2)
-        cv2.putText(frame, name_display, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, face_color, 2)
+        elif result.state == IdentityState.LOCKED_UNKNOWN:
+            name_display = "Unknown"
+            face_color = (0, 0, 255)
+        cv2.rectangle(overlay_frame, (x1, y1), (x2, y2), face_color, 2)
+        cv2.putText(overlay_frame, name_display, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, face_color, 2)
         
-    def detect_fall(self):
+    def detect_fall(self, current_source_time_s):
         # 1. LOGIC KIỂM DUYỆT (HARDCODE STATE MACHINE)
-        if self.pending_event is not None and len(self.kpts_buffer) > 0:
+        if self.pending_event is not None and self.pose_samples:
             event = self.pending_event
-            elapsed = time.time() - event["start_time"]
+            elapsed = current_source_time_s - event["started_source_time_s"]
             
             # Lấy raw keypoints ở frame hiện tại để làm thước đo tỷ lệ cơ thể
-            current_kpts = self.kpts_buffer[-1].copy()
+            current_kpts = self.pose_samples[-1].keypoints.copy()
             
             # Tính chiều dài lưng (Khoảng cách từ Cổ index 2 đến Hông index 0)
             torso_len = np.linalg.norm(current_kpts[2] - current_kpts[0])
@@ -314,9 +348,9 @@ class FallDetectionSystem:
             if elapsed >= 2.0 and event["state"] == "FALL_DETECTED":
                 event["anchor_kpts"] = current_kpts
                 event["state"] = "WARNING_PENDING"
-                event["next_check_time"] = event["start_time"] + 3.0
+                event["next_check_source_time_s"] = event["started_source_time_s"] + 3.0
                 
-            elif event["state"] == "WARNING_PENDING" and time.time() >= event["next_check_time"]:
+            elif event["state"] == "WARNING_PENDING" and current_source_time_s >= event["next_check_source_time_s"]:
                 if has_moved(current_kpts, event["anchor_kpts"], torso_len):
                     self.pending_event = None # Khớp xê dịch mạnh -> Bẻ lái hủy
                 else:
@@ -324,9 +358,9 @@ class FallDetectionSystem:
                     self.current_action = "Co the nga (Cho...)"
                     self.action_color = (0, 165, 255) # Cam
                     event["anchor_kpts"] = current_kpts
-                    event["next_check_time"] = event["start_time"] + 5.0
+                    event["next_check_source_time_s"] = event["started_source_time_s"] + 5.0
                     
-            elif event["state"] == "WARNING" and time.time() >= event["next_check_time"]:
+            elif event["state"] == "WARNING" and current_source_time_s >= event["next_check_source_time_s"]:
                 if has_moved(current_kpts, event["anchor_kpts"], torso_len):
                     self.pending_event = None
                 else:
@@ -338,15 +372,15 @@ class FallDetectionSystem:
                     self.send_event_to_backend("FALL_CONFIRMED", event["conf"])
                     
                     event["anchor_kpts"] = current_kpts
-                    event["next_check_time"] = time.time() + 2.0
+                    event["next_check_source_time_s"] = current_source_time_s + 2.0
                     
-            elif event["state"] == "ALERT" and time.time() >= event["next_check_time"]:
+            elif event["state"] == "ALERT" and current_source_time_s >= event["next_check_source_time_s"]:
                 # Cuốn chiếu kiểm tra mỗi 2 giây
                 if has_moved(current_kpts, event["anchor_kpts"], torso_len):
                     self.pending_event = None
                 else:
                     event["anchor_kpts"] = current_kpts
-                    event["next_check_time"] = time.time() + 2.0
+                    event["next_check_source_time_s"] = current_source_time_s + 2.0
 
             # Khôi phục trạng thái an toàn nếu bị hủy
             if self.pending_event is None:
@@ -355,8 +389,8 @@ class FallDetectionSystem:
                 
         # 2. LOGIC ĐÁNH LỬA AI (Chỉ chạy khi Hàng chờ trống)
         else:
-            if len(self.timestamp_buffer) > 0 and (time.time() - self.timestamp_buffer[0] >= 2.0):
-                raw_array = np.array(self.kpts_buffer)
+            if source_span_s(self.pose_samples, current_source_time_s) >= 2.0:
+                raw_array = np.array([sample.keypoints for sample in self.pose_samples])
                 
                 kpt = clean_out_of_bounds_data(raw_array)
                 kpt = interpolate_missing(kpt)
@@ -368,10 +402,11 @@ class FallDetectionSystem:
                 data_numpy = kpt.transpose(2, 0, 1) 
                 data_numpy = data_numpy[:, :, :, np.newaxis] 
 
-                data_tensor = torch.FloatTensor(data_numpy).unsqueeze(0).to(self.device) 
-                
-                with torch.no_grad():
+                data_tensor = torch.from_numpy(data_numpy).unsqueeze(0).float()
+
+                with torch.inference_mode():
                     output = self.action_model(data_tensor)
+                    self.current_sda_gcn_ms = self.action_model.last_inference_ms
                     prob = F.softmax(output, dim=1).squeeze()
                     pred_idx = torch.argmax(prob).item()
                     conf = float(prob[pred_idx]) 
@@ -379,10 +414,10 @@ class FallDetectionSystem:
                     if pred_idx == 0: # AI Báo Ngã
                         # Cơ chế Lock-out: Bỏ sự kiện vào hàng chờ
                         self.pending_event = {
-                            "start_time": time.time(),
+                            "started_source_time_s": current_source_time_s,
                             "state": "FALL_DETECTED",
                             "anchor_kpts": None,
-                            "next_check_time": 0,
+                            "next_check_source_time_s": 0,
                             "conf": conf
                         }
                         self.current_action = f"Phat hien nga ({conf:.2f}) - Kiem tra..."
@@ -394,30 +429,59 @@ class FallDetectionSystem:
                         self.action_color = (0, 255, 0) # Xanh
 
                 # TRẢ VỀ ĐÚNG VỊ TRÍ CŨ TRONG CODE GỐC: Chỉ cắt buffer SAU KHI AI đã chạy
-                current_time = time.time()
-                while len(self.timestamp_buffer) > 0 and (current_time - self.timestamp_buffer[0] > 1.0):
-                    self.timestamp_buffer.pop(0)
-                    self.kpts_buffer.pop(0)
+                while self.pose_samples and (current_source_time_s - self.pose_samples[0].source_time_s > 1.0):
+                    self.pose_samples.popleft()
 
         # 3. CHỐNG TRÀN RAM (Bảo vệ dự phòng cho hệ thống)
-        current_time = time.time()
-        while len(self.timestamp_buffer) > 0 and (current_time - self.timestamp_buffer[0] > 2.5):
-            self.timestamp_buffer.pop(0)
-            self.kpts_buffer.pop(0)
+        while self.pose_samples and (current_source_time_s - self.pose_samples[0].source_time_s > 2.5):
+            self.pose_samples.popleft()
 
     def run(self):
-        print("[*] Đang kết nối trực tiếp tới Camera máy tính...")
-        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-        if not cap.isOpened():
-            print("[LỖI] Không thể mở camera!")
-            return
+        self.frame_source = create_source(self.source_spec, self.source_fps_override)
+        self.frame_source.start()
+        metadata = self.frame_source.metadata
+        print("\n[Source]")
+        print(f"Type          : {'Camera' if metadata.kind == SourceKind.CAMERA else 'Video'}")
+        if metadata.kind == SourceKind.CAMERA:
+            print(f"Index         : {self.source_spec.value}")
+        else:
+            print(f"File          : {metadata.name}")
+        print(f"Resolution    : {metadata.width}x{metadata.height}")
+        print(f"Source FPS    : {metadata.source_fps or 'unknown'}")
+        if metadata.frame_count is not None:
+            print(f"Frames        : {metadata.frame_count}")
+            print(f"Duration      : {metadata.duration_s:.3f} s")
+        print(f"Vision FPS    : {self.target_vision_fps}")
+        print(f"Clock         : {metadata.timestamp_strategy}")
+        if metadata.kind == SourceKind.VIDEO_FILE:
+            print("Playback      : realtime")
+        scheduler = FixedRateScheduler(self.target_vision_fps)
+        last_capture_sequence = 0
+        capture_dropped = 0
 
-        print("[*] Hệ thống đã sẵn sàng. Truy cập stream tại: http://localhost:8001/video_feed")
+        if self.preview == "web":
+            print("[*] Web preview: http://127.0.0.1:8001/")
+        elif self.preview == "window":
+            print("[*] OpenCV preview đã sẵn sàng. Nhấn q để thoát.")
+        else:
+            print("[*] Preview disabled; Vision inference đang chạy.")
         global latest_frame
+        fps_window_started = time.perf_counter()
+        fps_window_frames = 0
+        sda_window_samples = []
+        identity_window_samples = []
         
         while True:
-            ret, frame = cap.read()
-            if not ret: break
+            scheduler.wait()
+            vision_started = time.perf_counter()
+            snapshot = self.frame_source.store.wait_newer(last_capture_sequence, scheduler.interval)
+            if snapshot is None or snapshot.sequence == last_capture_sequence:
+                if self.frame_source.ended:
+                    break
+                continue
+            capture_dropped += max(0, snapshot.sequence - last_capture_sequence - 1) if last_capture_sequence else 0
+            last_capture_sequence = snapshot.sequence
+            frame = snapshot.frame.copy()
             
             h, w = frame.shape[:2]
             scale = min(self.orig_w / w, self.orig_h / h)
@@ -429,23 +493,35 @@ class FallDetectionSystem:
             frame = cv2.copyMakeBorder(frame, pad_h // 2, pad_h - pad_h // 2, pad_w // 2, pad_w - pad_w // 2, cv2.BORDER_CONSTANT, value=(0, 0, 0))
 
             self.frame_count += 1
+            self.current_identity_ms = None
+            if self.identity_stage and not self._gallery_status_logged:
+                gallery = self.identity_stage.poll_status()
+                if gallery:
+                    print("\n[Identity Gallery]")
+                    print(f"Persons         : {gallery['persons']}")
+                    print(f"Images          : {gallery['images']}")
+                    print(f"Cached          : {gallery['cached']}")
+                    print(f"Recomputed      : {gallery['recomputed']}")
+                    print(f"Skipped         : {gallery['skipped']}")
+                    print(f"Load time       : {gallery['gallery_ms']:.0f} ms")
+                    print(f"Identity ready  : {gallery['ready_ms']:.0f} ms")
+                    self._gallery_status_logged = True
             
-            timestamp_ms = int(time.time() * 1000)
-            
-            if not hasattr(self, 'last_timestamp_ms'):
-                self.last_timestamp_ms = 0
-            if timestamp_ms <= self.last_timestamp_ms:
-                timestamp_ms = self.last_timestamp_ms + 1
-            self.last_timestamp_ms = timestamp_ms
+            timestamp_ms = self.pose_timestamp_adapter.convert(snapshot.source_time_s)
 
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            self._pose_submissions[timestamp_ms] = PoseSubmission(
+                snapshot.source_time_s, snapshot.sequence, time.perf_counter(), frame.copy())
+            while len(self._pose_submissions) > 8:
+                self._pose_submissions.pop(next(iter(self._pose_submissions)))
             self.pose_model.detect_async(mp_image, timestamp_ms)
 
-            person_found = False
-            
-            if self.latest_pose_result and self.latest_pose_result.pose_landmarks:
-                person_found = True
-                landmarks = self.latest_pose_result.pose_landmarks[0]
+            pose_packet = self.pose_store.latest()
+            new_pose_packet = bool(pose_packet and pose_packet.frame_sequence > self._last_pose_sequence)
+            if new_pose_packet:
+                self._last_pose_sequence = pose_packet.frame_sequence
+            if new_pose_packet and pose_packet.result.pose_landmarks:
+                landmarks = pose_packet.result.pose_landmarks[0]
                 
                 kpts = extract_from_landmarks(landmarks)
                 
@@ -461,42 +537,150 @@ class FallDetectionSystem:
                 y2 = min(self.orig_h, int(y_max * self.orig_h) + pad)
                 
                 if (x2 - x1) >= 20 and (y2 - y1) >= 20:
-                    self.process_person(frame, x1, y1, x2, y2, track_id=1)
+                    self.process_person(pose_packet.frame, x1, y1, x2, y2, track_id=None,
+                                        frame_sequence=pose_packet.frame_sequence,
+                                        source_time_s=pose_packet.source_time_s,
+                                        overlay_frame=frame)
                 
-                self.kpts_buffer.append(kpts)
-                self.timestamp_buffer.append(time.time())
+                self.pose_samples.append(PoseSample(pose_packet.source_time_s, kpts))
 
-            if not person_found:
-                if len(self.kpts_buffer) > 0:
-                    last_kpts = self.kpts_buffer[-1].copy()
+            elif new_pose_packet:
+                if self.identity_stage:
+                    identity_before = self.identity_stage.result
+                    self.identity_stage.update_presence(None, pose_packet.source_time_s)
+                    if identity_before.state != self.identity_stage.result.state and self.log_level in {"debug", "info"}:
+                        label = identity_before.name or identity_before.state.value
+                        print(f"[Identity] {label} left scene → reset")
+                if self.pose_samples:
+                    last_kpts = self.pose_samples[-1].keypoints.copy()
                 else:
                     last_kpts = np.zeros((25, 3), dtype=np.float32)
                 
-                self.kpts_buffer.append(last_kpts)
-                self.timestamp_buffer.append(time.time())
+                self.pose_samples.append(PoseSample(pose_packet.source_time_s, last_kpts))
                 
                 if self.pending_event is None:
                     self.current_action = "Khong nga (Lost)"
                     self.action_color = (0, 255, 0)
 
-            self.detect_fall()
+            self.current_sda_gcn_ms = None
+            if self.pose_samples:
+                self.detect_fall(self.pose_samples[-1].source_time_s)
+            if self.current_sda_gcn_ms is not None:
+                sda_window_samples.append(self.current_sda_gcn_ms)
+            if self.current_identity_ms is not None:
+                identity_window_samples.append(self.current_identity_ms)
             
             cv2.putText(frame, f"Action: {self.current_action}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, self.action_color, 2)
-            cv2.putText(frame, f"Buffer: {len(self.kpts_buffer)} frames / 2.0s", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(frame, f"Buffer: {len(self.pose_samples)} frames / 2.0s", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+            self.total_vision_ms = (time.perf_counter() - vision_started) * 1000.0
+            fps_window_frames += 1
+            fps_elapsed = time.perf_counter() - fps_window_started
+            self.effective_fps = fps_window_frames / fps_elapsed if fps_elapsed else 0.0
+            if self.preview == "window":
+                cv2.imshow("SDA-GCN Vision", frame)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+            if self.frame_count % 30 == 0:
+                sda_metric = f"{self.current_sda_gcn_ms:.1f}" if self.current_sda_gcn_ms is not None else "N/A"
+                identity_metric = f"{self.current_identity_ms:.1f}" if self.current_identity_ms is not None else "N/A"
+                sda_average = f"{np.mean(sda_window_samples):.1f}" if sda_window_samples else "N/A"
+                identity_average = f"{np.mean(identity_window_samples):.1f}" if identity_window_samples else "N/A"
+                identity_label = "DISABLED"
+                if self.identity_stage:
+                    result = self.identity_stage.result
+                    identity_label = result.state.value
+                    if result.state == IdentityState.LOCKED_KNOWN:
+                        identity_label += f":{result.name}({result.confidence:.2f})"
+                if self.log_level in {"debug", "info"}:
+                    source_progress = f" | Source={snapshot.source_time_s:.1f}/{metadata.duration_s:.1f}s" if metadata.duration_s else ""
+                    print(f"[Metrics] FPS={self.effective_fps:.1f}/{self.target_vision_fps:.0f}{source_progress} | "
+                          f"Pose={self.pose_inference_ms:.0f}ms | Fall={sda_average}ms | "
+                          f"ID={identity_label} | Drop={capture_dropped} | Miss={scheduler.deadline_miss_count}")
+                if self.log_level == "debug":
+                    print(f"[Metrics Debug] capture_fps={self.frame_source.capture_fps:.1f} "
+                          f"source_frame_index={snapshot.source_frame_index} source_time_s={snapshot.source_time_s:.3f} "
+                          f"playback_drift_ms={getattr(self.frame_source, 'playback_drift_ms', 0.0):.1f} "
+                          f"mediapipe_timestamp_ms={self.pose_timestamp_adapter.last_timestamp_ms} "
+                          f"identity_ms={identity_average} identity_hz={self.identity_stage.effective_hz if self.identity_stage else 0.0:.2f} "
+                          f"identity_submitted={self.identity_stage.frames_submitted if self.identity_stage else 0} "
+                          f"identity_processed={self.identity_stage.frames_processed if self.identity_stage else 0} "
+                          f"identity_dropped={self.identity_stage.frames_dropped if self.identity_stage else 0} "
+                          f"identity_ready={self.identity_stage.ready if self.identity_stage else False}")
+                fps_window_started = time.perf_counter()
+                fps_window_frames = 0
+                sda_window_samples.clear()
+                identity_window_samples.clear()
             
             latest_frame = frame.copy()
 
-        cap.release()
-        self.pose_model.close()
+        if metadata.kind == SourceKind.VIDEO_FILE:
+            final_packet = self.frame_source.store.latest()
+            print(f"[Source EOF] source_time={final_packet.source_time_s:.3f}s | "
+                  f"playback_wall={self.frame_source.playback_elapsed_s:.3f}s")
+        self.shutdown()
+
+    def shutdown(self):
+        if self.frame_source:
+            self.frame_source.stop()
+            self.frame_source = None
+        if self.identity_stage:
+            self.identity_stage.stop()
+            self.identity_stage = None
+        if self.pose_model:
+            self.pose_model.close()
+            self.pose_model = None
         cv2.destroyAllWindows()
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Realtime Vision-only fall detection")
+    parser.add_argument("--device", choices=("auto", "cuda", "amd", "intel", "cpu"), default="auto",
+                        help="Hardware backend override (default: auto)")
+    parser.add_argument("--preview", choices=("window", "web", "none"), default="window",
+                        help="Annotated preview mode (default: window)")
+    parser.add_argument("--send-events", action="store_true", help="Enable asynchronous P-227 event delivery")
+    parser.add_argument("--backend-url", default="http://127.0.0.1:8000/api/v1/vision/events",
+                        help="Event endpoint used with --send-events")
+    parser.add_argument("--identity", choices=("on", "off"), default="on",
+                        help="Enable InsightFace identity recognition (default: on)")
+    parser.add_argument("--source", default="0",
+                        help="Camera index or local video path (default: 0)")
+    parser.add_argument("--source-fps", type=float,
+                        help="Override video FPS when metadata is invalid")
+    parser.add_argument("--vision-fps", type=float, default=15.0, help="Fall pipeline target rate (default: 15)")
+    parser.add_argument("--identity-interval", type=float, default=0.5, help="Minimum identity submit interval in seconds")
+    parser.add_argument("--face-det-size", type=int, default=416, help="InsightFace detector input size (default: 416)")
+    parser.add_argument("--rebuild-face-cache", action="store_true", help="Recompute every registered face embedding")
+    parser.add_argument("--log-level", choices=("debug", "info", "warning", "error"), default="info")
+    parser.add_argument("--identity-debug", action="store_true", help="Log each identity matching attempt")
+    return parser.parse_args()
+
+
 def main():
-    threading.Thread(target=run_flask, daemon=True).start()
-    
-    system = FallDetectionSystem()
-    system.init_models()
-    system.load_known_faces()
-    system.run()
+    args = parse_args()
+    try:
+        source_spec = parse_source(args.source)
+    except ValueError as exc:
+        raise SystemExit(f"[Source Error] {exc}")
+    if args.source_fps is not None and args.source_fps <= 0:
+        raise SystemExit("[Source Error] --source-fps must be positive")
+    if args.preview == "web":
+        threading.Thread(target=run_flask, daemon=True).start()
+
+    system = FallDetectionSystem(args.device, args.preview, args.backend_url if args.send_events else None,
+                                 args.identity, args.vision_fps, args.identity_interval, args.face_det_size,
+                                 args.rebuild_face_cache, args.log_level, args.identity_debug,
+                                 source_spec, args.source_fps)
+    try:
+        system.init_models()
+        system.load_known_faces()
+        system.run()
+    finally:
+        system.shutdown()
+        system.event_sender.close()
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BackendResolutionError as exc:
+        raise SystemExit(f"[Vision Runtime Error] {exc}")

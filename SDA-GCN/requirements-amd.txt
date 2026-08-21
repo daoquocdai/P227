@@ -1,0 +1,6 @@
+# Linux: install the matching PyTorch ROCm wheel from pytorch.org first.
+# Windows DirectML:
+-r requirements.txt
+torch-directml; platform_system == "Windows"
+onnxruntime-directml; platform_system == "Windows"
+onnxruntime; platform_system != "Windows"

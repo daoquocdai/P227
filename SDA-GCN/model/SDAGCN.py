@@ -213,7 +213,9 @@ class EdgeConv(nn.Module):
         N, C, V = x.size()
         if idx is None:
             idx = self.knn(x, k=k)
-        device = x.get_device()
+        # x.get_device() returns -1 on CPU; x.device is portable across CPU,
+        # CUDA/ROCm, DirectML and model conversion/tracing.
+        device = x.device
         
         idx_base = torch.arange(0, N, device=device).view(-1, 1, 1) * V
         

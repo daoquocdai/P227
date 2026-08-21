@@ -1,5 +1,4 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['GLOG_minloglevel'] = '2'
 
@@ -12,6 +11,7 @@ import mediapipe as mp
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor
 from ultralytics import YOLO  # Thêm thư viện YOLO
+from extractkpt.common.cleaning import clean_out_of_bounds_data
 
 # ==============================
 # Mediapipe Modules
@@ -22,16 +22,6 @@ TOTAL_JOINTS = 25  # Chuẩn NTU RGB+D
 # ==============================
 # CÁC HÀM TIỀN XỬ LÝ DỮ LIỆU (MỚI THÊM)
 # ==============================
-def clean_out_of_bounds_data(data):
-    """
-    Làm sạch các điểm khớp bị văng ra khỏi video (AI đoán mò).
-    Ép mọi giá trị X và Y chỉ được nằm trong khoảng 0.0 đến 1.0.
-    """
-    clean_data = data.copy()
-    clean_data[:, :, 0] = np.clip(clean_data[:, :, 0], 0.0, 1.0) # Trục X
-    clean_data[:, :, 1] = np.clip(clean_data[:, :, 1], 0.0, 1.0) # Trục Y
-    return clean_data
-
 def normalize_skeleton_dynamic(kpts_array):
     """
     Chuẩn hóa từng khung hình (Frame-wise Normalization):
