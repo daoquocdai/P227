@@ -1,10 +1,20 @@
 # Cài đặt, vận hành và troubleshooting
 
-Xem [QUICKSTART.md](../QUICKSTART.md) nếu chỉ cần luồng chạy ngắn nhất.
+Tài liệu này áp dụng cho runtime SDA hiện tại trên nhánh `develop`. Xem
+[QUICKSTART.md](../QUICKSTART.md) nếu chỉ cần luồng chạy ngắn nhất.
 
-## 1. Dependency profiles
+## 1. Yêu cầu
 
-Yêu cầu Python 3.11 64-bit và Node.js 20+.
+- Git.
+- Python 3.11 64-bit.
+- Node.js 20+ và npm.
+- Windows 10/11 hoặc Linux 64-bit.
+- Webcam, video local hoặc RTSP nếu dùng source thật.
+- Đủ model assets trong `SDA-GCN` như mô tả bên dưới.
+
+## 2. Tạo môi trường Python
+
+Chạy từ thư mục gốc repository:
 
 ```cmd
 python -m venv .venv
@@ -12,27 +22,45 @@ python -m venv .venv
 python -m pip install --upgrade pip
 ```
 
-Chọn một profile:
+Chỉ chọn **một** profile phù hợp với máy:
 
 ```cmd
-python -m pip install -r requirements/vision-intel.txt
-python -m pip install -r requirements/vision-cuda.txt
-python -m pip install -r requirements/vision-cpu.txt
+rem Intel Iris Xe / Windows
+python -m pip install -r requirements\vision-intel.txt
+
+rem Hoặc NVIDIA CUDA 12.4
+python -m pip install -r requirements\vision-cuda.txt
+
+rem Hoặc AMD / Windows DirectML
+python -m pip install -r requirements\vision-amd.txt
+
+rem Hoặc CPU
+python -m pip install -r requirements\vision-cpu.txt
 ```
 
-Sau khi chọn đúng một profile:
+Không trộn nhiều profile trong cùng `.venv`. Nếu cài nhầm, tạo lại môi trường
+thay vì uninstall riêng Torch, ONNX Runtime hoặc OpenCV.
+
+Cài Identity và public SDA package:
 
 ```cmd
-python -m pip install --no-deps -r requirements/vision-identity.txt
+python -m pip install --no-deps -r requirements\vision-identity.txt
+python -m pip install -e .\SDA-GCN
+python -m pip check
 ```
 
-Không cài nhiều profile trong cùng `.venv`. Nếu cài nhầm, xóa toàn bộ `.venv`
-và tạo lại theo [Quickstart](../QUICKSTART.md); không uninstall riêng từng biến
-thể ONNX Runtime/OpenCV vì chúng dùng chung module Python.
+InsightFace được cài bằng `--no-deps` để không kéo thêm ONNX Runtime/OpenCV gây
+xung đột. Chỉ nên có một package `onnxruntime*` và một OpenCV trong môi trường.
 
-`requirements/base.txt` chỉ dành cho backend/test không chạy Real Vision.
+Nếu cần chạy pytest và Ruff:
 
-Frontend:
+```cmd
+python -m pip install -r requirements\dev.txt
+```
+
+`requirements/base.txt` chỉ phù hợp cho backend/test không chạy native Vision.
+
+## 3. Frontend và file môi trường
 
 ```cmd
 cd frontend
@@ -41,42 +69,45 @@ cd ..
 copy /Y .env.example .env
 ```
 
-## 2. Cấu hình canonical production
+Không commit `.env`, API key, database, snapshots hoặc face embeddings.
+
+## 4. Cấu hình runtime
+
+`.env.example` là cấu hình mẫu chuẩn. Baseline an toàn:
 
 ```dotenv
 APP_ENV=development
-APP_HOST=127.0.0.1
+APP_HOST=0.0.0.0
 APP_PORT=8000
+FRONTEND_PORT=5173
 CORS_ORIGINS=http://localhost:5173
+API_BASE_URL=http://localhost:8000
 DATABASE_URL=sqlite:///./data/app.db
 
-VISION_ENGINE=canonical
+VISION_ENGINE=sda
 VISION_DEVICE=auto
-VISION_YOLO_PATH=yolov8n.pt
-VISION_CONFIG_PATH=../../SDA-GCN/config/production.yaml
-VISION_CHECKPOINT_PATH=../../SDA-GCN/weights/fall-detection-joint.pt
-VISION_MODEL_CACHE_DIR=data/vision-cache
-
 VISION_IDENTITY_ENABLED=false
 VISION_IDENTITY_PROVIDER=auto
 VISION_INSIGHTFACE_ROOT=~/.insightface
+
+ALERT_AGENT_ENABLED=false
 ```
 
-Path Vision tương đối được resolve từ `src/vision`. Không thêm
-`VISION_KNOWN_FACES_DIR`; production known-person data lấy từ SQLite.
+- `VISION_ENGINE=sda` là production engine duy nhất được hỗ trợ.
+- `VISION_DEVICE` nhận `auto`, `cpu`, `cuda`, `amd`, `intel`.
+- Core application không cần OpenAI API key khi Alert Agent OFF.
+- Identity nên để OFF cho đến khi `buffalo_l` sẵn sàng.
+- Uvicorn CLI bên dưới truyền host/port trực tiếp; các đối số CLI đó thắng giá
+  trị `APP_HOST`/`APP_PORT` trong `.env`.
 
-Các setting temporal target-rate/buffer còn tồn tại trong config để tương thích
-cũ nhưng canonical production không đọc chúng. Scheduling thực tế là even
-source-frame eligibility + latest slot capacity 1.
+## 5. Model assets
 
-## 3. Model assets
-
-Fall pipeline cần:
+Fall Detection sử dụng assets do SDA package sở hữu:
 
 ```text
-src/vision/yolov8n.pt
-SDA-GCN/config/production.yaml
-SDA-GCN/weights/fall-detection-joint.pt
+SDA-GCN/yolov8n.pt
+SDA-GCN/work_dir/fall_detection/fall/config.yaml
+SDA-GCN/work_dir/fall_detection/fall/runs-best_val.pt
 ```
 
 Identity cần:
@@ -85,44 +116,42 @@ Identity cần:
 <VISION_INSIGHTFACE_ROOT>/models/buffalo_l/
 ```
 
-Giữ Identity OFF nếu bộ model chưa tồn tại. Fall không phụ thuộc InsightFace.
-Không sửa model graph, weights, preprocessing, window, class mapping hoặc
-threshold để né lỗi artifact.
+Integrated Identity lấy gallery từ SQLite `persons` và `face_profiles`; không
+cần `VISION_KNOWN_FACES_DIR`. Không đổi checkpoint, preprocessing, window hoặc
+class mapping chỉ để bỏ qua lỗi asset.
 
-## 4. Device selection
+## 6. Device selection
 
-`VISION_DEVICE=auto`:
+Với `VISION_DEVICE=auto`, runtime chọn backend khả dụng và báo kết quả thực tế
+qua startup log và Vision status. Profile dependency quyết định các provider có
+thể sử dụng:
 
-1. NVIDIA CUDA;
-2. Intel OpenVINO GPU;
-3. CPU fallback.
+| Profile | Mục đích |
+|---|---|
+| Intel | OpenVINO cho action model; DirectML/CPU cho Identity |
+| NVIDIA | CUDA Torch và ONNX Runtime GPU |
+| AMD Windows | Torch DirectML và ONNX Runtime DirectML |
+| CPU | Portable CPU, cũng là profile Docker |
 
-Trong Intel profile:
+MediaPipe Pose chạy CPU. Privacy detector one-shot ưu tiên đường chạy an toàn;
+không suy luận device chỉ từ tên package đã cài.
 
-- YOLO: OpenVINO Intel GPU;
-- SDA-GCN: OpenVINO Intel GPU;
-- MediaPipe Pose: CPU;
-- InsightFace: DirectML nếu khả dụng, CPU fallback;
-- one-shot privacy detector: CPU provider để tránh DirectML native crash.
+## 7. Khởi động native
 
-Luôn kiểm tra startup/status logs để biết provider thực tế.
-
-## 5. Khởi động
-
-Backend:
+Terminal 1, từ thư mục gốc:
 
 ```cmd
 .venv\Scripts\python.exe -m uvicorn src.main:app --host 127.0.0.1 --port 8000
 ```
 
-Frontend:
+Terminal 2:
 
 ```cmd
 cd frontend
 npm.cmd run dev
 ```
 
-Sau startup:
+Kiểm tra:
 
 ```cmd
 curl http://127.0.0.1:8000/health
@@ -130,54 +159,62 @@ curl http://127.0.0.1:8000/api/v1/status
 curl http://127.0.0.1:8000/api/v1/cameras
 ```
 
-Backend tự restore desired Camera/Vision/Identity state. Camera source lỗi được
-cô lập và không làm FastAPI startup fail.
+- Web: <http://localhost:5173>
+- Swagger: <http://127.0.0.1:8000/docs>
 
-## 6. Runtime status
+Backend restore persisted Camera/Vision/Identity desired state. Một source lỗi
+không làm toàn bộ FastAPI startup fail.
+
+## 8. Runtime status
 
 ```text
-GET /api/v1/cameras/{id}/runtime/status
-GET /api/v1/cameras/{id}/vision/status
+GET /api/v1/cameras/{camera_id}/runtime/status
+GET /api/v1/cameras/{camera_id}/vision/status
 ```
 
-Camera status phản ánh capture health. Vision status độc lập:
+Camera status có `status`, `error`, `capture_fps`, `source_frames_read` và
+`frames_published`. Vision status độc lập và có thể là `disabled`,
+`waiting_for_source`, `running`, `error`.
 
-- `disabled`;
-- `waiting_for_source`;
-- `running`;
-- `error`.
+Các trường chính gồm `processed_frames`, `last_processed_frame_id`,
+`current_error`, `identity_enabled`, `realtime` và `hardware`. `realtime` chứa
+`vision_fps`, `vision_processing_latency_ms`, `vision_frames_processed` cùng
+stage metrics từ SDA. `pending=0` và `max_pending=1` là compatibility metrics;
+production scheduling thực tế lấy latest snapshot theo fixed-rate scheduler.
 
-Realtime Vision metrics quan trọng:
+## 9. Controls
 
-- `vision_frames_seen`;
-- `vision_frames_eligible`;
-- `vision_frames_offered`;
-- `vision_frames_overwritten`;
-- `vision_frames_processed`;
-- `pending`/`max_pending`;
-- `vision_drop_ratio`;
-- `vision_fps`;
-- `vision_result_staleness`.
+- Vision ON bật Fall Detection.
+- `Hiện khung` chỉ ảnh hưởng presentation.
+- `Phát hiện người lạ` là camera-level Identity setting cho mọi viewer.
+- Identity OFF không ảnh hưởng Fall hoặc privacy detection cho Fall snapshot.
 
-`max_pending` phải không vượt 1.
+## 10. Kiểm thử
 
-## 7. Controls
+Sau khi đã cài `requirements/dev.txt`:
 
-- Vision ON: Fall Detection luôn ON.
-- `Hiện khung`: presentation-only, không restart runtime/model.
-- `Phát hiện người lạ`: camera-level Identity inference setting; thay đổi ảnh
-  hưởng mọi viewer của camera đó.
-- Identity OFF không ảnh hưởng Fall hoặc one-shot privacy detection cho Fall
-  snapshot.
+```cmd
+.venv\Scripts\python.exe -m pytest -q
+.venv\Scripts\python.exe -m ruff check src tests
+.venv\Scripts\python.exe -m ruff format --check src tests
+cd frontend
+npm.cmd run build
+cd ..
+git diff --check
+```
 
-## 8. Runtime data và backup
+Xem checklist đầy đủ tại [testing.md](testing.md).
+
+## 11. Runtime data và backup
+
+Runtime data chính:
 
 ```text
 data/app.db
 snapshots/
 ```
 
-Backup sau khi dừng backend:
+Dừng backend trước khi backup:
 
 ```cmd
 if not exist backup mkdir backup
@@ -185,65 +222,93 @@ copy data\app.db backup\app-backup.db
 xcopy snapshots backup\snapshots\ /E /I
 ```
 
-Không xóa alerts/events/snapshots trong quá trình troubleshooting nếu chưa có
-backup và yêu cầu rõ ràng.
+Không xóa database, alerts, events hoặc snapshots nếu chưa backup và chưa xác
+định chính xác dữ liệu cần xóa.
 
-## 9. Troubleshooting
+## 12. Docker Compose
 
-### Frontend đồng loạt `ECONNREFUSED`
+Docker Compose chạy backend bằng CPU profile và frontend qua web server. Phù
+hợp nhất với video file hoặc RTSP; webcam index trên Docker Desktop/Windows có
+thể không được chuyển vào container, nên dùng native khi demo webcam USB.
 
-Nếu `/alerts`, `/cameras`, `/overview` cùng lỗi, backend không listen:
+Chuẩn bị `.env`, thư mục dữ liệu và khởi động:
+
+```cmd
+copy /Y .env.example .env
+if not exist data mkdir data
+if not exist snapshots mkdir snapshots
+docker compose up --build --detach
+docker compose ps
+docker compose logs --follow --tail=200
+```
+
+Truy cập:
+
+- Frontend: <http://localhost:5173>
+- Backend health: <http://localhost:8000/health>
+- Swagger: <http://localhost:8000/docs>
+
+Compose mount `data/`, `snapshots/` và demo files dưới `frontend/public/`.
+Backend container ép `VISION_DEVICE=cpu` và
+`VISION_IDENTITY_PROVIDER=cpu`. Identity mặc định OFF.
+
+Muốn bật Identity trong Docker:
+
+1. Đặt `VISION_IDENTITY_ENABLED=true` trong `.env`.
+2. Đảm bảo model `buffalo_l` tồn tại trong named volume
+   `insightface_models` tại `/home/appuser/.insightface/models/buffalo_l/`.
+3. Recreate backend container và kiểm tra startup log.
+
+Dừng dịch vụ:
+
+```cmd
+docker compose down
+```
+
+Lệnh này không xóa named volume. Chỉ dùng `docker compose down --volumes` khi
+chủ động muốn xóa model volume và đã xác nhận dữ liệu không cần giữ.
+
+## 13. Troubleshooting
+
+### Backend hoặc frontend báo `ECONNREFUSED`
 
 ```cmd
 curl http://127.0.0.1:8000/health
 netstat -ano | findstr :8000
 ```
 
-### Port 8000 bị giữ
+Nếu nhiều API cùng lỗi, kiểm tra backend trước. Không chạy hai backend cùng ghi
+một SQLite database.
 
-```cmd
-netstat -ano | findstr :8000
-tasklist /FI "PID eq <PID>"
-```
+### Camera đen hoặc không có preview
 
-Xác định đúng process trước khi dừng. Không chạy hai backend cùng ghi một DB.
+1. Kiểm tra runtime `status` và `error`.
+2. Kiểm tra `/preview` trả `200 image/jpeg`, `X-Frame-Id` tăng.
+3. Xác nhận source path/index/RTSP hợp lệ.
+4. Đóng ứng dụng khác đang giữ webcam.
 
-### Camera đen
-
-Kiểm tra lần lượt:
-
-1. camera `status=online`;
-2. `stream_ready=true`;
-3. `/preview` trả `200 image/jpeg` và `X-Frame-Id` tăng;
-4. MJPEG trả `multipart/x-mixed-replace`;
-5. source file/index/RTSP hợp lệ;
-6. không có process khác giữ webcam.
-
-Raw preview không phụ thuộc Vision. Nếu preview cũng đen/lỗi, đừng debug model
-trước capture/source.
+Raw preview không phụ thuộc Vision; nếu preview lỗi, xử lý source trước model.
 
 ### Vision lỗi hoặc chậm
 
-Đọc `current_error`, device diagnostics và realtime metrics. Latest-slot drop là
-expected khi Vision chậm hơn capture; raw stream phải tiếp tục và memory không
-tăng theo thời gian.
+Kiểm tra `current_error`, `realtime`, `hardware` và startup diagnostics. Khi
+Vision chậm hơn capture, fixed-rate scheduler đọc latest snapshot và có thể bỏ
+frame trung gian; raw stream vẫn phải tiếp tục.
 
-Không tăng queue, đổi window hoặc tune threshold để che throughput.
+Kiểm tra ba SDA assets ở mục 5. Không tăng queue hoặc đổi temporal window để
+che lỗi throughput.
 
 ### Identity không bật
 
-Kiểm tra:
-
-- `buffalo_l` tồn tại dưới configured root;
-- ONNX Runtime provider có trong log;
-- camera Vision đang enabled;
-- persisted camera Identity state;
-- FaceGallery có active face profiles.
+- Xác nhận `buffalo_l` đúng dưới configured root.
+- Kiểm tra effective ONNX provider trong hardware/startup log.
+- Bật Vision trước Identity.
+- Kiểm tra persisted Identity state và active face profiles trong SQLite.
 
 ### Có event nhưng không có snapshot
 
-Đây có thể là privacy fail-closed đúng thiết kế. Snapshot bị omit nếu không tìm
-được face/head ROI an toàn. Event, alert và SSE vẫn phải tồn tại.
+Đây có thể là privacy fail-closed đúng thiết kế. Event, alert và SSE vẫn được
+giữ khi không tìm được vùng blur an toàn hoặc media write thất bại.
 
 ### SQLite integrity
 
@@ -251,15 +316,16 @@ Kiểm tra:
 python -c "import sqlite3; c=sqlite3.connect('data/app.db'); print(c.execute('PRAGMA integrity_check').fetchone()[0])"
 ```
 
-Kết quả mong đợi là `ok`.
+Kết quả mong đợi: `ok`.
 
-## 10. Docker
-
-Docker Compose dùng CPU profile và phù hợp với file/RTSP hơn webcam index trên
-Windows:
+### Docker không healthy
 
 ```cmd
-docker compose up --build --detach
-docker compose logs --follow --tail=200
-docker compose down
+docker compose ps
+docker compose logs backend --tail=200
+docker compose config
 ```
+
+Kiểm tra port trùng, quyền ghi `data/`/`snapshots/`, model assets trong image và
+giá trị `.env`. Nếu chỉ Identity lỗi, giữ Identity OFF để xác nhận Fall/runtime
+cốt lõi trước.

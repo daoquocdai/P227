@@ -1,129 +1,116 @@
 # GuardianCam — Architecture Diagrams
 
-Các sơ đồ dưới đây phản ánh production runtime hiện tại.
+Các sơ đồ dưới đây phản ánh production runtime dùng `sda_vision` hiện tại.
 
 ## 1. Runtime
 
 ```mermaid
 flowchart LR
-    SRC[Webcam / Video / RTSP] --> CAP[CameraRuntime sole capture owner]
-    CAP --> RAW[Raw FrameHub latest]
+    SRC[Webcam / Video / RTSP] --> SESSION[sda_vision VisionSession per camera]
+    SESSION --> RAWCB[on_source_frame callback]
+    RAWCB --> RAW[Raw FrameHub latest]
     RAW --> PREVIEW[Preview JPEG]
-    RAW --> MJPEG[MJPEG source cadence]
-    CAP --> ELIGIBLE[Even source-frame eligibility]
-    ELIGIBLE --> SLOT[LatestFrameSlot capacity 1]
-    SLOT --> WORKER[Per-camera Vision worker]
-    WORKER --> PIPE[Canonical Vision pipeline]
-    PIPE --> POLICY[VisionProductPolicy]
+    RAW --> MJPEG[MJPEG]
+    SESSION --> VISION[Pose + SDA-GCN + optional Identity]
+    VISION --> RESULTCB[on_result_frame callback]
+    RESULTCB --> MAP[Application VisionResult mapping]
+    MAP --> WORKER[Bounded SdaEventMediaWorker]
+    WORKER --> POLICY[VisionProductPolicy]
     POLICY --> SNAP[Exact-frame privacy snapshot]
-    SNAP --> PROCESSED[Processed FrameHub]
-    POLICY --> DISPATCH[Thread-safe dispatcher]
+    SNAP --> DISPATCH[Thread-safe dispatcher]
     DISPATCH --> SINK[Async event sink]
     SINK --> SERVICE[EventService]
     SERVICE --> DB[(SQLite)]
     SERVICE --> SSE[SSE]
-    PREVIEW --> UI[React]
-    MJPEG --> UI
-    DB --> UI
-    SSE --> UI
+    PREVIEW --> CLIENT[Client]
+    MJPEG --> CLIENT
+    DB --> CLIENT
+    SSE --> CLIENT
 ```
 
-## 2. Stream overlay
+## 2. Session scheduling
 
 ```mermaid
 flowchart TD
-    RAW[Current raw FramePacket] --> CHECK{Latest result exists?}
+    CAPTURE[Source capture thread] --> STORE[Latest source snapshot store]
+    CAPTURE --> CALLBACK[Raw callback immediately]
+    CALLBACK --> HUB[Raw FrameHub]
+    CLOCK[Fixed-rate Vision scheduler] --> READ[Read newest snapshot]
+    STORE --> READ
+    READ -->|No newer frame| WAIT[Wait next tick]
+    READ -->|New frame| INFER[Vision inference]
+    INFER --> RESULT[VisionFrameResult]
+```
+
+Capture không chờ inference. Scheduler lấy snapshot mới nhất nên không tạo
+queue frame vô hạn khi Vision chậm.
+
+## 3. Stream overlay
+
+```mermaid
+flowchart TD
+    RAW[Current raw FramePacket] --> CHECK{Latest result hợp lệ?}
     RESULT[Latest VisionResult] --> CHECK
-    CHECK -->|different epoch| PLAIN[Render raw]
-    CHECK -->|future or age > 0.75s| PLAIN
-    CHECK -->|same epoch and fresh| OVERLAY[Render raw + latest overlay]
+    CHECK -->|khác camera/epoch| PLAIN[Render raw]
+    CHECK -->|future hoặc age > 0.75s| PLAIN
+    CHECK -->|cùng epoch và fresh| OVERLAY[Render raw + overlay]
     FLAGS[Viewer boxes/identity flags] --> OVERLAY
     OVERLAY --> JPEG[MJPEG JPEG]
     PLAIN --> JPEG
 ```
 
-## 3. Vision and events
+## 4. Identity gallery
 
 ```mermaid
 flowchart LR
-    FRAME[Eligible packet] --> YOLO[YOLO person]
-    YOLO --> CROP[Person crop]
-    CROP --> POSE[MediaPipe Pose CPU]
-    POSE --> WINDOW[Source-time window]
-    WINDOW --> RESAMPLE[64-frame resample]
-    RESAMPLE --> GCN[SDA-GCN]
-    GCN --> FALL[Fall state machine]
-    CROP --> IDGATE{Identity enabled?}
-    IDGATE -->|yes| FACE[InsightFace]
-    FACE --> RETRY[Per-track retry/cache]
-    RETRY --> KNOWN[Known / Locked Unknown]
-    FALL --> RESULT[VisionResult]
-    KNOWN --> RESULT
-    RESULT --> PRODUCT[Threshold/cooldown policy]
-    PRODUCT --> PRIVACY[Privacy-safe snapshot]
-    PRIVACY --> EVENT[Event adapter/dispatcher]
+    DB[(persons + face_profiles)] --> PROVIDER[SqliteFaceGalleryProvider]
+    PROVIDER --> COORD[FaceGalleryCoordinator]
+    COORD --> PUBLISH[SdaGalleryPublisher]
+    PUBLISH --> SNAP[IdentityGallerySnapshot]
+    SNAP --> S1[VisionSession camera 1]
+    SNAP --> S2[VisionSession camera N]
 ```
 
-## 4. Source discontinuity
-
-```mermaid
-sequenceDiagram
-    participant C as CameraRuntime
-    participant S as LatestFrameSlot
-    participant V as Vision worker
-    participant P as Pipeline session
-
-    C->>S: epoch N boundary, discontinuity=true
-    C->>S: newer epoch N packet overwrites pending
-    Note over S: discontinuity remains sticky
-    S->>V: latest packet + discontinuity=true
-    V->>P: process observation
-    P->>P: keep control-plane flags/generation
-    P->>P: reset temporal fall/face/tracking state
-    C->>S: next normal packet
-    S->>V: discontinuity=false
-```
+Integrated mode chỉ dùng supplied gallery từ SQLite. Filesystem/NPZ chỉ dành
+cho SDA CLI standalone.
 
 ## 5. Identity OFF race protection
 
 ```mermaid
 sequenceDiagram
-    participant UI as Camera UI
+    participant UI as Client
     participant API as Cameras API
     participant DB as SQLite desired state
-    participant M as Vision manager
-    participant E as In-flight inference
-    participant ES as EventService
+    participant R as SdaSessionRegistry
+    participant S as VisionSession
+    participant E as Event boundary
 
-    E->>E: computing possible Unknown
     UI->>API: Identity OFF
     API->>DB: persist OFF first
-    API->>M: invalidate generation/cache
-    E-->>M: stale Unknown result
-    M->>M: strip identity metadata/event
-    ES->>DB: final persisted gate if event was queued
-    Note over M,ES: Fall event is preserved
+    API->>R: set_identity_enabled(false)
+    R->>S: stop/reset Identity stage
+    S-->>R: possible in-flight result
+    R->>R: omit identity event/metadata
+    E->>DB: reject invalid Unknown before persistence
+    Note over R,E: Fall event remains independent
 ```
 
-## 6. Snapshot privacy and optional media
+## 6. Snapshot privacy và optional media
 
 ```mermaid
 flowchart TD
-    EVENT[Fall or Unknown event] --> EXACT{Exact-frame face bbox?}
+    EVENT[Fall/Unknown event] --> EXACT{Exact-frame face bbox?}
     EXACT -->|yes| BLUR[Blur face ROI]
     EXACT -->|no| FULL[CPU full-frame detector]
-    FULL -->|miss| CROP[Person crop + upscale]
-    CROP -->|miss| ROTATE[Rotate +90 / -90]
-    ROTATE -->|miss| POSE[Pose/head safe ROI]
+    FULL -->|miss| CROP[Person crop / rotated crops]
+    CROP -->|miss| POSE[Pose/head safe ROI]
     POSE -->|miss| OMIT[Omit snapshot]
     FULL -->|found| BLUR
     CROP -->|found| BLUR
-    ROTATE -->|found| BLUR
     POSE -->|safe| BLUR
     BLUR --> MEDIA[Optional media savepoint]
     OMIT --> PERSIST[Persist event + alert]
-    MEDIA -->|success| PERSIST
-    MEDIA -->|failure| PERSIST
+    MEDIA --> PERSIST
     PERSIST --> SSE[SSE alert]
 ```
 
@@ -134,17 +121,17 @@ sequenceDiagram
     participant APP as FastAPI lifespan
     participant DB as SQLite
     participant RT as LocalRuntime
-    participant VIS as Vision manager
-    participant CAM as CameraRuntime
+    participant G as FaceGalleryCoordinator
+    participant REG as SdaSessionRegistry
 
     APP->>DB: initialize/migrate
-    APP->>RT: create services and bind dispatcher
-    RT->>DB: load FaceGallery and desired state
-    loop each desired Vision ON
-        RT->>VIS: enable session + restore Identity
-    end
+    APP->>APP: start event sink/dispatcher
+    APP->>RT: create runtime
+    RT->>G: load and publish supplied gallery
+    APP->>REG: start event-media worker
+    APP->>RT: restore persisted state
     loop each desired Camera ON
-        RT->>CAM: start source
+        RT->>REG: create VisionSession/source
     end
-    Note over APP,CAM: one unavailable source does not fail application startup
+    Note over APP,REG: one unavailable source does not fail application startup
 ```

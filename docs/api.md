@@ -1,82 +1,72 @@
 # API contract
 
-Base URL: `/api/v1`. `/docs` và `/openapi.json` là schema runtime chính xác nhất.
+Base URL: `/api/v1`. `/docs` và `/openapi.json` là schema runtime chính xác
+nhất khi API thay đổi.
 
-## 1. System
+## System và Authentication
 
 | Method | Path | Ý nghĩa |
 |---|---|---|
-| `GET` | `/health` | Process health/environment |
+| `GET` | `/health` | Process health và môi trường |
 | `GET` | `/api/v1/status` | Service readiness |
-| `GET` | `/api/v1/overview` | Overview metrics/cameras/alerts |
+| `GET` | `/api/v1/overview` | Tổng quan hệ thống |
+| `POST` | `/api/v1/auth/login` | Đăng nhập, trả `token` và `user` |
+| `GET` | `/api/v1/auth/me` | Người dùng của Bearer token |
+| `POST` | `/api/v1/auth/change-password` | Đổi mật khẩu hiện tại |
+| `POST` | `/api/v1/auth/logout` | Thu hồi session; trả `204` |
 
-## 2. Cameras
+Endpoint cần đăng nhập nhận `Authorization: Bearer <token>`. Token sai trả
+`401`; tài khoản bị vô hiệu hóa hoặc thiếu quyền trả `403`.
+
+## Cameras
 
 | Method | Path | Ý nghĩa |
 |---|---|---|
 | `GET` | `/api/v1/cameras` | Danh sách desired + observed state |
-| `GET` | `/api/v1/cameras/{id}` | Camera detail |
-| `PATCH` | `/api/v1/cameras/{id}` | Update name/location/source |
-| `PATCH` | `/api/v1/cameras/{id}/source` | Update source và restart nếu desired ON |
-| `DELETE` | `/api/v1/cameras/{id}` | Xóa camera inactive nếu không bị history constraint |
-| `POST` | `/api/v1/cameras/{id}/start` | Persist Camera ON và start capture |
-| `POST` | `/api/v1/cameras/{id}/stop` | Persist Camera OFF và stop capture |
-| `GET` | `/api/v1/cameras/{id}/runtime/status` | Capture status/metrics |
-| `GET` | `/api/v1/cameras/{id}/preview` | Latest raw JPEG |
-| `GET` | `/api/v1/cameras/{id}/stream` | MJPEG stream |
+| `GET` | `/api/v1/cameras/{camera_id}` | Chi tiết camera |
+| `PATCH` | `/api/v1/cameras/{camera_id}` | Cập nhật tên, vị trí và source |
+| `PATCH` | `/api/v1/cameras/{camera_id}/source` | Đổi source; restart nếu desired ON |
+| `DELETE` | `/api/v1/cameras/{camera_id}` | Xóa camera đã tắt, không vướng history |
+| `POST` | `/api/v1/cameras/{camera_id}/start` | Persist ON và start; trả `202` |
+| `POST` | `/api/v1/cameras/{camera_id}/stop` | Persist OFF và stop |
+| `GET` | `/api/v1/cameras/{camera_id}/runtime/status` | Capture/runtime metrics |
+| `GET` | `/api/v1/cameras/{camera_id}/preview` | Latest raw JPEG |
+| `GET` | `/api/v1/cameras/{camera_id}/stream` | MJPEG stream |
 
-Stream query parameters:
+Source hỗ trợ `video_file`, `webcam`, `rtsp`. Stream nhận `boxes=true` và
+`identity=true`; hai flag chỉ điều khiển presentation. Preview trả `404` trước
+frame đầu tiên; stream trả `409` nếu camera chưa online.
 
-| Parameter | Default | Scope |
-|---|---:|---|
-| `boxes` | `true` | Per-viewer presentation only |
-| `identity` | `true` | Per-viewer display only; camera gate vẫn thắng |
-
-Fall display luôn ON trong current UI/API. Các presentation flags không restart
-camera, Vision hoặc model.
-
-Preview trả `404` trước frame đầu tiên. Stream trả `409` nếu camera chưa online.
-
-## 3. Vision controls
+## Vision controls
 
 | Method | Path | Ý nghĩa |
 |---|---|---|
-| `POST` | `/api/v1/cameras/{id}/vision/enable` | Persist + enable Vision |
-| `POST` | `/api/v1/cameras/{id}/vision/disable` | Persist + disable/reset Vision session |
-| `GET` | `/api/v1/cameras/{id}/vision/status` | Structured result/device/realtime metrics |
-| `PATCH` | `/api/v1/cameras/{id}/vision/identity` | Camera-level Unknown workflow gate |
+| `POST` | `/api/v1/cameras/{camera_id}/vision/enable` | Persist và bật inference |
+| `POST` | `/api/v1/cameras/{camera_id}/vision/disable` | Persist, tắt và reset inference state |
+| `GET` | `/api/v1/cameras/{camera_id}/vision/status` | Device, result và metrics |
+| `PATCH` | `/api/v1/cameras/{camera_id}/vision/identity` | Bật/tắt Unknown workflow |
 
-Identity payload:
+Identity payload là `{ "enabled": false }`. Khi tắt, state được persist trước
+khi runtime workflow bị hủy. Fall Detection không phụ thuộc Identity.
 
-```json
-{ "enabled": false }
-```
-
-Identity setting ảnh hưởng mọi viewer của camera. OFF được persist trước khi
-runtime workflow bị hủy để chặn queued/in-flight Unknown commit. Fall không bị
-ảnh hưởng.
-
-## 4. Alerts
+## Alerts
 
 | Method | Path | Ý nghĩa |
 |---|---|---|
-| `GET` | `/api/v1/alerts` | Alerts persisted |
-| `GET` | `/api/v1/alerts/{id}` | Alert detail |
-| `GET` | `/api/v1/alerts/stream` | SSE ready/alert/heartbeat |
-| `PATCH` | `/api/v1/alerts/{id}` | Review status/note |
-| `POST` | `/api/v1/alerts/{id}/read` | Mark read |
-| `POST` | `/api/v1/alerts/confirm` | Compatibility review endpoint |
+| `GET` | `/api/v1/alerts` | Cảnh báo đã persist |
+| `GET` | `/api/v1/alerts/{alert_id}` | Chi tiết cảnh báo |
+| `GET` | `/api/v1/alerts/stream` | SSE `ready`, `alert`, heartbeat |
+| `PATCH` | `/api/v1/alerts/{alert_id}` | Review status/note |
+| `POST` | `/api/v1/alerts/{alert_id}/read` | Đánh dấu đã đọc |
+| `POST` | `/api/v1/alerts/confirm` | Compatibility endpoint cũ |
 
-SSE chỉ publish alert sau persistence thành công. Rejected Unknown khi Identity
-OFF không được persist hoặc broadcast. Fall luôn bypass Identity lookup.
+Compatibility endpoint nhận query `alert_id` và `feedback`. SSE chỉ phát sau
+persistence. `snapshot_url` có thể `null`; alert vẫn hợp lệ.
 
-Snapshot URL có thể `null` nếu privacy/write/media step không an toàn/thành
-công. Alert vẫn hợp lệ.
+## Vision event ingestion
 
-## 5. Internal Vision ingestion compatibility
-
-`POST /api/v1/vision/events` nhận event từ integration ngoài. Internal Local Hub
-dùng in-process dispatcher, không HTTP loopback.
+`POST /api/v1/vision/events` nhận event ngoài và trả `202`; Local Hub bình
+thường dùng in-process dispatcher, không HTTP loopback.
 
 ```json
 {
@@ -84,72 +74,78 @@ dùng in-process dispatcher, không HTTP loopback.
   "event_id": "incident-id:fall_confirmed",
   "camera_id": "camera-id",
   "camera_location": "Phòng khách",
-  "event_type": "FALL_SUSPECTED",
+  "event_type": "FALL_CONFIRMED",
   "occurred_at": "2026-08-15T10:00:00Z",
   "confidence": 0.91,
   "track_id": "37",
   "identity_status": "UNKNOWN",
   "identity_name": null,
   "snapshot_path": null,
+  "immobile_seconds": null,
   "metadata": {}
 }
 ```
 
-Cùng `event_id` là idempotent.
+Event type: `FALL_SUSPECTED`, `FALL_CONFIRMED`, `UNKNOWN_PERSON`,
+`PERSON_RECOGNIZED`, `INACTIVITY_DETECTED`, `CAMERA_OFFLINE`, `CAMERA_ONLINE`.
+Cùng `event_id` được xử lý idempotent.
 
-## 6. Persons/FaceGallery
-
-| Method | Path | Ý nghĩa |
-|---|---|---|
-| `GET` | `/api/v1/persons` | Active/inactive persons |
-| `POST` | `/api/v1/persons` | Create person |
-| `PATCH` | `/api/v1/persons/{id}` | Update person |
-| `POST` | `/api/v1/persons/{id}/faces` | Validate image, create embedding/profile |
-| `DELETE` | `/api/v1/persons/{id}/faces/{face_id}` | Delete face profile |
-
-Face mutation refreshes in-memory `FaceGallery`. Enrollment image không trở
-thành public static asset mặc định.
-
-## 7. Settings
+## Persons và Face Gallery
 
 | Method | Path | Ý nghĩa |
 |---|---|---|
-| `GET` | `/api/v1/settings` | General/notifications/users/cameras |
-| `PATCH` | `/api/v1/settings/general` | Update retention/threshold/sensitive hours |
+| `GET` | `/api/v1/persons` | Danh sách người thân/face profile |
+| `POST` | `/api/v1/persons` | Tạo person; trả `201` |
+| `PATCH` | `/api/v1/persons/{person_id}` | Cập nhật person |
+| `POST` | `/api/v1/persons/{person_id}/faces` | Validate data URL, tạo embedding; trả `201` |
+| `DELETE` | `/api/v1/persons/{person_id}/faces/{face_id}` | Xóa face profile; trả `200` |
+
+Face mutation refreshes supplied gallery trong các SDA session. Ảnh enrollment
+không trở thành public static asset mặc định.
+
+## Settings
+
+| Method | Path | Ý nghĩa |
+|---|---|---|
+| `GET` | `/api/v1/settings` | General, notifications, users, cameras |
+| `PATCH` | `/api/v1/settings/general` | Retention, threshold, sensitive hours |
 | `PATCH` | `/api/v1/settings/notifications` | Notification preferences |
-| `POST` | `/api/v1/settings/users` | Create user |
-| `PATCH` | `/api/v1/settings/users/{id}` | Activate/deactivate user |
-| `PATCH` | `/api/v1/settings/users/{id}/permissions/{permission}` | Update permission |
-| `PATCH` | `/api/v1/settings/cameras/{id}` | Update Camera/Vision desired state |
+| `POST` | `/api/v1/settings/users` | Tạo user; trả `201` |
+| `PATCH` | `/api/v1/settings/users/{user_id}` | Kích hoạt/vô hiệu hóa user |
+| `PATCH` | `/api/v1/settings/users/{user_id}/permissions/{permission}` | Cập nhật quyền |
+| `PATCH` | `/api/v1/settings/cameras/{camera_id}` | Camera/Vision desired state |
 
-`stranger_threshold` và `fall_threshold` được `VisionProductPolicy` đọc live từ
-SQLite. Không cần restart camera/model.
+`stranger_threshold` nhận 50–99; `fall_threshold` nhận 70–99. Product policy
+đọc giá trị từ SQLite, không cần restart model.
 
-## 8. History
+## History và statistics
 
 | Method | Path | Ý nghĩa |
 |---|---|---|
-| `GET` | `/api/v1/history` | Persisted events/media audit |
+| `GET` | `/api/v1/history` | Event/media đã persist |
+| `GET` | `/api/v1/statistics` | Thống kê; chỉ admin |
 
-## 9. Status codes
+Statistics nhận `period=today|7d|30d|custom` (mặc định `7d`), cùng `start` và
+`end` dạng datetime cho custom range. API này yêu cầu Bearer token của admin đã
+hoàn tất đổi mật khẩu bắt buộc.
+
+## Status codes và invariants
 
 | Code | Ý nghĩa |
 |---|---|
-| `200` | Success |
-| `201` | Created |
-| `202` | Accepted/start requested |
-| `204` | Deleted |
-| `404` | Resource hoặc preview chưa tồn tại |
-| `409` | Runtime/state/history constraint |
-| `422` | Payload/source validation error |
+| `200` | Thành công |
+| `201` | Đã tạo |
+| `202` | Đã chấp nhận |
+| `204` | Thành công, không body |
+| `401` | Session không hợp lệ |
+| `403` | Tài khoản/quyền không hợp lệ |
+| `404` | Resource/preview không tồn tại |
+| `409` | Xung đột state, tên hoặc history |
+| `422` | Payload/source/query không hợp lệ |
 
-## 10. Invariants
-
-- Camera online phản ánh capture, không phản ánh Vision.
-- Vision error không làm Camera offline.
-- Start/Stop/Enable/Disable là persisted desired-state actions.
-- Raw preview khác event evidence snapshot.
-- RTSP credentials không được phản chiếu ra public payload.
-- Event ID idempotent.
-- Viewer count không làm tăng inference.
-- Identity OFF chặn Unknown ở runtime, commit boundary và EventService.
+- Camera online phản ánh source capture, không phản ánh Vision inference.
+- Vision error không làm camera khác hoặc FastAPI dừng.
+- Start/Stop/Enable/Disable thay đổi persisted desired state.
+- RTSP credentials không được phản chiếu trong public payload.
+- Viewer count không tạo thêm Vision session.
+- Identity OFF chặn Unknown trước persistence.

@@ -59,6 +59,7 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements/vision-intel.txt
 python -m pip install --no-deps -r requirements/vision-identity.txt
 python -m pip install -e .\SDA-GCN
+python -m pip install -r requirements/dev.txt
 cd frontend
 npm.cmd ci
 cd ..
@@ -71,14 +72,16 @@ Chọn đúng dependency profile:
 |---|---|
 | Intel Iris Xe / Windows | `requirements/vision-intel.txt` |
 | NVIDIA CUDA 12.4 | `requirements/vision-cuda.txt` |
-| CPU/Docker | `requirements/vision-cpu.txt` |
+| AMD / Windows DirectML | `requirements/vision-amd.txt` |
+| CPU | `requirements/vision-cpu.txt` |
 | Identity, cài sau profile với `--no-deps` | `requirements/vision-identity.txt` |
 | Backend/test không chạy Real Vision | `requirements/base.txt` |
 
 Repo không dùng `requirements.txt` chung vì Torch và ONNX Runtime phải khớp
 hardware. Luôn cài đúng một `vision-*.txt`, sau đó cài
-`vision-identity.txt` với `--no-deps` như Quickstart; `requirements/base.txt`
-không đủ để chạy Real Vision.
+`vision-identity.txt` với `--no-deps` như Quickstart. Cài thêm
+`requirements/dev.txt` nếu cần chạy pytest/Ruff; `requirements/base.txt` không
+đủ để chạy Real Vision.
 
 ## Cấu hình
 
@@ -95,18 +98,16 @@ VISION_IDENTITY_PROVIDER=auto
 VISION_INSIGHTFACE_ROOT=~/.insightface
 ```
 
-- `VISION_ENGINE=sda` là production path. `canonical` chỉ là rollback development
-  tạm thời; `mock` chỉ dùng cho test/smoke. SDA failure không fallback legacy.
+- `VISION_ENGINE=sda` là production path duy nhất được cấu hình hỗ trợ.
 - `VISION_DEVICE=auto` chọn CUDA → OpenVINO Intel GPU → CPU và log runtime thật.
 - Giữ `VISION_IDENTITY_ENABLED=false` nếu chưa có
   `<VISION_INSIGHTFACE_ROOT>/models/buffalo_l/`.
-- Runtime Identity vẫn dùng filesystem/NPZ đến Phase 4. Enrollment API/SQLite
-  tạm dùng legacy InsightFace encoder sau `FaceEmbeddingEncoder` boundary.
-- Các biến temporal target-rate/buffer cũ không điều khiển canonical production
-  path hiện tại.
+- Integrated Identity dùng `persons` và `face_profiles` trong SQLite làm nguồn
+  dữ liệu. Filesystem/NPZ chỉ còn dành cho SDA CLI standalone.
+- Các biến temporal target-rate/buffer cũ không điều khiển SDA production path.
 - Không commit `.env`, credential, database, snapshots hoặc dữ liệu sinh trắc.
 
-Legacy `src/vision` vẫn được giữ cho rollback/tests nhưng không thuộc production runtime.
+FastAPI truy cập SDA runtime qua `src/integrations/sda_vision.py`.
 
 ## Chạy ứng dụng
 
@@ -304,7 +305,7 @@ Mock tests không thay thế native runtime smoke.
 
 ```text
 P-227/
-├── src/                    # Production backend và canonical Vision
+├── src/                    # Production backend và SDA integration
 ├── frontend/               # React/Vite UI
 ├── database/schema.sql     # SQLite schema
 ├── tests/                  # API/service/Vision regressions
@@ -315,8 +316,8 @@ P-227/
 └── snapshots/              # Event evidence, không commit
 ```
 
-`src/vision/sda_gcn.py` là integration boundary duy nhất giữa pipeline và
-subsystem `SDA-GCN/`. Fall confirmation, cooldown và event vẫn thuộc P-227.
+`src/integrations/sda_vision.py` là integration boundary giữa FastAPI runtime
+và public package `SDA-GCN/sda_vision`.
 
 ## Privacy và persistence
 
@@ -337,10 +338,4 @@ subsystem `SDA-GCN/`. Fall confirmation, cooldown và event vẫn thuộc P-227.
 - [Architecture diagrams](docs/architecture_diagram.md)
 - [API](docs/api.md)
 - [Testing](docs/testing.md)
-- [Current implementation verification](docs/current-verification.md)
-- [Historical Intel benchmark](docs/vision-benchmark.md)
 - [Gate 1 report](docs/Gate1.md)
-
-## License
-
-Phần Vision tích hợp sử dụng giấy phép tại [src/vision/LICENSE](src/vision/LICENSE).

@@ -7,8 +7,8 @@ Hướng dẫn chạy hệ thống Phase 5 hiện tại trên Windows. Với web
 Yêu cầu Git, Python 3.11 64-bit và Node.js 20+.
 
 ```cmd
-git clone https://github.com/daoquocdai/P227.git
-cd P227
+git clone https://github.com/AI20K-Build-Phase-Cohort-3/P-227.git
+cd P-227
 python -m venv .venv
 .venv\Scripts\activate
 python -m pip install --upgrade pip
@@ -75,14 +75,14 @@ dùng `register face/` làm nguồn dữ liệu. CLI SDA standalone có thể v�
 Terminal 1:
 
 ```cmd
-cd /d <duong-dan-den-P227>
+cd /d <duong-dan-den-P-227>
 .venv\Scripts\python.exe -m uvicorn src.main:app --host 127.0.0.1 --port 8000
 ```
 
 Terminal 2:
 
 ```cmd
-cd /d <duong-dan-den-P227>\frontend
+cd /d <duong-dan-den-P-227>\frontend
 npm.cmd run dev
 ```
 
