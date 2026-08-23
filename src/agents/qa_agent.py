@@ -1,8 +1,7 @@
-from __future__ import annotations
-
 import asyncio
 import json
 import logging
+from datetime import datetime
 from typing import Any
 
 from src.agents.tools.qa_tools import QATools
@@ -11,11 +10,30 @@ from src.config import get_settings
 logger = logging.getLogger(__name__)
 
 
+
+def format_datetime(iso_str: str | None) -> str:
+    """Định dạng timestamp ISO thành chuỗi thời gian địa phương (UTC+7) (HH:MM:SS ngày DD/MM/YYYY)."""
+    if not iso_str:
+        return "chưa xác định"
+    try:
+        clean_iso = str(iso_str).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(clean_iso)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone()
+        return dt.strftime("%H:%M:%S ngày %d/%m/%Y")
+    except Exception:
+        parts = str(iso_str).split(".")[0].split("T")
+        if len(parts) == 2:
+            return f"{parts[1]} ngày {parts[0]}"
+        return str(iso_str)
+
+
+
 DOMAIN_KEYWORDS = [
-    "camera", "thiết bị", "luồng", "té ngã", "ngã", "fall", "người lạ", "lạ", "stranger",
-    "unknown", "người thân", "danh tính", "thành viên", "gia đình", "sự cố", "cảnh báo",
-    "tóm tắt", "timeline", "nhật ký", "lịch sử", "bảo vệ", "phòng khách", "phòng ngủ",
-    "sân", "cổng", "hành lang", "hệ thống", "trạng thái", "chào", "hi", "xin chào", "giúp"
+    "camera", "thiết bị", "luồng", "té ngã", "ngã", "te nga", "nga", "fall", "người lạ", "lạ", "nguoi la", "stranger",
+    "unknown", "người thân", "nguoi than", "danh tính", "danh tinh", "thành viên", "gia đình", "sự cố", "su co", "cảnh báo", "canh bao",
+    "tóm tắt", "tom tat", "timeline", "nhật ký", "nhat ky", "lịch sử", "lich su", "bảo vệ", "phòng khách", "phòng ngủ",
+    "sân", "cổng", "hành lang", "hệ thống", "he thong", "trạng thái", "trang thai", "chào", "hi", "xin chào", "giúp"
 ]
 
 PROMPT_INJECTION_PATTERNS = [
@@ -147,7 +165,7 @@ class SecurityQAAgent:
             collected_data["fall_incidents"] = falls
             if falls:
                 fall_lines = [
-                    f"• Té ngã tại {f['camera_name']} lúc {f['opened_at']} (Trạng thái: {f['status']})" for f in falls
+                    f"• Té ngã tại {f['camera_name']} lúc {format_datetime(f['opened_at'])} (Trạng thái: {f['status']})" for f in falls
                 ]
                 answer_parts.append(f"Ghi nhận {len(falls)} sự cố nghi ngờ té ngã gần nhất:\n" + "\n".join(fall_lines))
             else:
@@ -159,7 +177,7 @@ class SecurityQAAgent:
             collected_data["stranger_incidents"] = strangers
             if strangers:
                 stranger_lines = [
-                    f"• Người lạ xuất hiện {s['occurrence_count']} lần tại {s['camera_name']} ({s['location_label']})" for s in strangers
+                    f"• Người lạ xuất hiện {s['occurrence_count']} lần tại {s['camera_name']} ({s['location_label']}) lúc {format_datetime(s['opened_at'])}" for s in strangers
                 ]
                 answer_parts.append(f"Ghi nhận {len(strangers)} sự cố phát hiện người lạ gần nhất:\n" + "\n".join(stranger_lines))
             else:
@@ -185,11 +203,12 @@ class SecurityQAAgent:
                     type_str = "Té ngã" if inc["incident_type"] == "fall" else "Người lạ"
                     sev_str = (inc.get("alert_severity") or "medium").upper()
                     inc_lines.append(
-                        f"🔹 {idx}. [{type_str} - {sev_str}]\n   • Vị trí: {inc['camera_name']} ({inc['location_label']})\n   • Trạng thái: {inc['status']} (Ghi nhận {inc['occurrence_count']} lần)"
+                        f"🔹 {idx}. [{type_str} - {sev_str}]\n   • Vị trí: {inc['camera_name']} ({inc['location_label']})\n   • Thời gian: {format_datetime(inc['opened_at'])}\n   • Trạng thái: {inc['status']} (Ghi nhận {inc['occurrence_count']} lần)"
                     )
                 answer_parts.append("📋 TÓM TẮT SỰ CỐ GẦN NHẤT:\n\n" + "\n\n".join(inc_lines))
             else:
                 answer_parts.append("Hệ thống chưa ghi nhận sự cố té ngã hoặc người lạ nào trong nhật ký an ninh.")
+
 
         # 5. Danh sách người thân
         elif any(kw in q_lower for kw in ["người thân", "danh tính", "thành viên", "gia đình"]):

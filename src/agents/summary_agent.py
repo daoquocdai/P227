@@ -1,8 +1,7 @@
-from __future__ import annotations
-
 import asyncio
 import json
 import logging
+from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
@@ -10,6 +9,22 @@ from src.config import get_settings
 from src.database import database_connection
 
 logger = logging.getLogger(__name__)
+
+
+
+def format_datetime(iso_str: str | None) -> str:
+    """Định dạng timestamp ISO thành chuỗi thời gian địa phương (UTC+7)."""
+    if not iso_str:
+        return "chưa xác định"
+    try:
+        clean_iso = str(iso_str).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(clean_iso)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone()
+        return dt.strftime("%H:%M:%S ngày %d/%m/%Y")
+    except Exception:
+        return str(iso_str)
+
 
 
 class IncidentSummaryAgent:
