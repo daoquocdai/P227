@@ -23,15 +23,24 @@ bằng chứng được lưu cục bộ trong SQLite/snapshot storage.
   presentation. `Phát hiện người lạ` điều khiển toàn bộ identity workflow.
 - Event snapshot lấy đúng event frame và chỉ được lưu khi privacy blur an toàn.
 - Event/alert vẫn được lưu và phát SSE nếu snapshot hoặc media metadata lỗi.
-- CUDA được ưu tiên khi có; tiếp theo là OpenVINO Intel GPU; cuối cùng CPU.
-  InsightFace dùng DirectML hoặc CPU theo provider thực tế.
+- Action auto-selection thử NVIDIA CUDA, AMD ROCm/Windows DirectML, Intel
+  OpenVINO GPU, rồi CPU. Identity được resolve độc lập qua CUDAExecutionProvider,
+  Windows DirectML hoặc CPU theo capability thực tế.
+
+## Vấn đề, người dùng và luồng sản phẩm
+
+GuardianCam hỗ trợ gia đình/người chăm sóc không thể theo dõi camera liên tục.
+Người dùng đăng nhập, chọn camera, bật source và Vision, xem raw stream, nhận
+cảnh báo Fall/Unknown, rồi review trong Alerts/History. Family quản lý gallery
+người thân; Settings quản lý camera, threshold và tài khoản. Statistics chỉ
+dành cho admin. Repository không cung cấp số liệu thị trường đã kiểm chứng.
 
 ## Stack
 
 | Thành phần | Công nghệ |
 |---|---|
-| Vision | Ultralytics YOLO, MediaPipe, SDA-GCN, InsightFace |
-| Accelerator | CUDA, OpenVINO Intel GPU, ONNX Runtime DirectML, CPU fallback |
+| Vision | MediaPipe Pose, SDA-GCN, optional InsightFace |
+| Accelerator | CUDA, ROCm, DirectML, OpenVINO Intel GPU, CPU |
 | Backend | Python 3.11, FastAPI, Uvicorn, SSE |
 | Frontend | React, TypeScript, Vite |
 | Persistence | SQLite, local snapshot files |
@@ -99,7 +108,9 @@ VISION_INSIGHTFACE_ROOT=~/.insightface
 ```
 
 - `VISION_ENGINE=sda` là production path duy nhất được cấu hình hỗ trợ.
-- `VISION_DEVICE=auto` chọn CUDA → OpenVINO Intel GPU → CPU và log runtime thật.
+- `VISION_DEVICE=auto` chọn NVIDIA CUDA → AMD ROCm/Windows DirectML → Intel
+  OpenVINO GPU → CPU và log runtime thật. Chọn accelerator thủ công không khả
+  dụng sẽ báo lỗi thay vì âm thầm fallback.
 - Giữ `VISION_IDENTITY_ENABLED=false` nếu chưa có
   `<VISION_INSIGHTFACE_ROOT>/models/buffalo_l/`.
 - Integrated Identity dùng `persons` và `face_profiles` trong SQLite làm nguồn
@@ -176,15 +187,22 @@ inference riêng.
 | Hiện khung OFF | Chỉ ẩn bbox/overlay; inference và event vẫn chạy |
 | Phát hiện người lạ OFF | Tắt identity inference/retry/event/overlay; Fall không đổi |
 
-Unknown cần 5 face+embedding observations hợp lệ, cách nhau tối thiểu 1 giây
-source time. Face miss không tăng confirmation count. Unknown score trên UI là:
+Identity dùng các state `UNVERIFIED`, `KNOWN`, `UNKNOWN`, `LOCKED_KNOWN` và
+`LOCKED_UNKNOWN`. Known hợp lệ lock ngay; Unknown lock sau 3 lần mismatch có
+khuôn mặt dùng được, retry mỗi 1 giây source time. `LOCKED_UNKNOWN` được kiểm
+tra lại mỗi 15 giây và presence vắng 1,5 giây sẽ reset. Face miss là inconclusive
+và không tăng attempt. Recognition threshold nội bộ mặc định là cosine `0.45`.
+Unknown score ở ProductPolicy là:
 
 ```text
 Mức độ không khớp = 1 - clamp(closest known cosine similarity, 0, 1)
 ```
 
-Đây không phải calibrated probability. `general.stranger_threshold` được đọc
-từ database và áp dụng live, không cần restart.
+Đây không phải calibrated probability. Product threshold
+`general.stranger_threshold` mặc định 78% được đọc live từ SQLite và khác với
+recognition threshold `0.45`; fall threshold mặc định là 72%. Fall và Unknown
+có cooldown 60 giây; một Fall gần nhất cũng suppress notification Unknown trong
+60 giây cho cùng camera/epoch.
 
 ## API chính
 
@@ -311,7 +329,6 @@ P-227/
 ├── tests/                  # API/service/Vision regressions
 ├── docs/                   # Tài liệu kỹ thuật
 ├── SDA-GCN/                # Model, preprocessing, config, weight và public runtime
-├── tools/                  # Benchmark utilities
 ├── data/app.db             # Runtime data, không commit
 └── snapshots/              # Event evidence, không commit
 ```
@@ -329,6 +346,22 @@ và public package `SDA-GCN/sda_vision`.
 - Snapshot/media lỗi không rollback event/alert hoặc chặn SSE.
 - SQLite, snapshot và face embedding là dữ liệu nhạy cảm; backup database và
   snapshot cùng nhau.
+
+## Hỗ trợ, giới hạn và trạng thái bàn giao
+
+- Native Windows là đường khuyến nghị cho webcam và GPU. Docker hiện tại là
+  CPU-only; Docker Desktop/Windows không được cấu hình để bảo đảm USB webcam
+  passthrough.
+- Capability probe kiểm tra provider/device dùng được; package đã cài không tự
+  chứng minh GPU hoạt động. Repository không chứa bằng chứng AMD đã được kiểm
+  thử vật lý trên mọi cấu hình.
+- Snapshot là optional và fail-closed; GuardianCam không phải hệ thống an toàn
+  sinh mạng hay dịch vụ khẩn cấp.
+- Source code, README, architecture, setup, API và testing docs có trong repo.
+  Không có bằng chứng repository cho Live URL, pitch deck, video demo hoặc kết
+  quả evaluation, nên các deliverable đó không được tuyên bố hoàn tất.
+- Thông tin thành viên/Student ID không có nguồn đáng tin trong repository nên
+  không được suy đoán trong mục Team.
 
 ## Tài liệu
 

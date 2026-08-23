@@ -1,6 +1,15 @@
 target-version = "py311"
 line-length = 120
 
+# Only lint maintained GuardianCam application/runtime code.
+# SDA-GCN research, training, experiments, datasets, and model workspace
+# are intentionally outside the application Ruff quality gate.
+include = [
+    "src/**/*.py",
+    "tests/**/*.py",
+    "SDA-GCN/sda_vision/**/*.py",
+]
+
 [lint]
 select = ["E", "F", "I", "N", "W", "UP"]
 ignore = ["E501"]

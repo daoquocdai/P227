@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-import hashlib
-import time
-from typing import Any, Callable
-import warnings
+from typing import Any
 
 import numpy as np
 import torch
@@ -73,6 +72,7 @@ class ActionInference:
         if spec.backend == "openvino":
             try:
                 from openvino import Core, convert_model, save_model
+
                 cache_dir.mkdir(parents=True, exist_ok=True)
                 xml_path = cache_dir / f"sda_gcn_1x3x64x25x1_{fingerprint}.xml"
                 if not xml_path.exists():
@@ -91,6 +91,7 @@ class ActionInference:
         device: Any = spec.device
         if spec.backend == "torch_directml":
             import torch_directml
+
             device = torch_directml.device(int(str(spec.device).split(":", 1)[1]))
         self.device = torch.device(device) if isinstance(device, str) and spec.backend != "torch_directml" else device
         self.model = self.model.to(self.device)

@@ -1,4 +1,5 @@
 """OpenCV window and Flask MJPEG presentation for standalone sessions."""
+
 from __future__ import annotations
 
 import logging
@@ -39,21 +40,27 @@ class PreviewAdapter:
                 continue
             ok, encoded = cv2.imencode(".jpg", frame)
             if ok:
-                yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
-                       + encoded.tobytes() + b"\r\n")
+                yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + encoded.tobytes() + b"\r\n")
             time.sleep(0.03)
 
     def _run_web(self):
         from flask import Flask, Response
+
         app = Flask("sda_vision_preview")
-        app.add_url_rule("/video_feed", "video_feed", lambda: Response(
-            self._generate_frames(), mimetype="multipart/x-mixed-replace; boundary=frame"))
-        app.add_url_rule("/", "index", lambda: (
-            '<!doctype html><title>Vision Preview</title><img src="/video_feed" '
-            'style="max-width:100%;height:auto">'))
+        app.add_url_rule(
+            "/video_feed",
+            "video_feed",
+            lambda: Response(self._generate_frames(), mimetype="multipart/x-mixed-replace; boundary=frame"),
+        )
+        app.add_url_rule(
+            "/",
+            "index",
+            lambda: (
+                '<!doctype html><title>Vision Preview</title><img src="/video_feed" style="max-width:100%;height:auto">'
+            ),
+        )
         logging.getLogger("werkzeug").setLevel(logging.ERROR)
         app.run(host="127.0.0.1", port=8001, debug=False, use_reloader=False)
 
     def close(self):
         cv2.destroyAllWindows()
-

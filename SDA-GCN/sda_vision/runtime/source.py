@@ -2,20 +2,20 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from enum import Enum
-from pathlib import Path
 import threading
 import time
+import warnings
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from enum import StrEnum
+from pathlib import Path
 
 import cv2
-import warnings
 
 from .scheduler import LatestFrameStore
 
 
-class SourceKind(str, Enum):
+class SourceKind(StrEnum):
     CAMERA = "camera"
     VIDEO_FILE = "video_file"
     STREAM = "stream"
@@ -120,9 +120,12 @@ class CameraSource(FrameSource):
         reported_fps = float(capture.get(cv2.CAP_PROP_FPS))
         source_fps = reported_fps if 0 < reported_fps < 1000 else None
         self.metadata = SourceMetadata(
-            SourceKind.CAMERA, f"Camera {self.index}",
-            int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)), int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)),
-            source_fps, timestamp_strategy="monotonic",
+            SourceKind.CAMERA,
+            f"Camera {self.index}",
+            int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)),
+            int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+            source_fps,
+            timestamp_strategy="monotonic",
         )
         sequence = 0
         measured_at, measured_frames = time.perf_counter(), 0
@@ -134,10 +137,15 @@ class CameraSource(FrameSource):
                     break
                 sequence += 1
                 monotonic_now = time.monotonic()
-                packet = FramePacket(sequence, frame, monotonic_now, monotonic_now,
-                                     source_frame_index=sequence - 1,
-                                     wall_time_utc=datetime.now(timezone.utc),
-                                     source_epoch=self.source_epoch)
+                packet = FramePacket(
+                    sequence,
+                    frame,
+                    monotonic_now,
+                    monotonic_now,
+                    source_frame_index=sequence - 1,
+                    wall_time_utc=datetime.now(UTC),
+                    source_epoch=self.source_epoch,
+                )
                 self._publish(packet)
                 measured_frames += 1
                 elapsed = time.perf_counter() - measured_at
@@ -151,8 +159,9 @@ class CameraSource(FrameSource):
 
 
 class VideoFileSource(FrameSource):
-    def __init__(self, path: Path, source_fps_override: float | None = None,
-                 loop: bool = False, on_frame=None, initial_epoch=0):
+    def __init__(
+        self, path: Path, source_fps_override: float | None = None, loop: bool = False, on_frame=None, initial_epoch=0
+    ):
         super().__init__(on_frame, initial_epoch)
         self.path = Path(path)
         self.source_fps_override = source_fps_override
@@ -180,11 +189,18 @@ class VideoFileSource(FrameSource):
         frame_count_value = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
         frame_count = frame_count_value if frame_count_value > 0 else None
         self.metadata = SourceMetadata(
-            SourceKind.VIDEO_FILE, str(self.path),
-            int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)), int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)),
-            fps, frame_count, (frame_count / fps) if frame_count else None,
-            ("frame-index/explicit FPS" if self.source_fps_override
-             else "video POS_MSEC with frame-index/FPS fallback"),
+            SourceKind.VIDEO_FILE,
+            str(self.path),
+            int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)),
+            int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+            fps,
+            frame_count,
+            (frame_count / fps) if frame_count else None,
+            (
+                "frame-index/explicit FPS"
+                if self.source_fps_override
+                else "video POS_MSEC with frame-index/FPS fallback"
+            ),
         )
         playback_started = time.monotonic()
         previous_source_time = -1.0
@@ -207,8 +223,11 @@ class VideoFileSource(FrameSource):
                 fallback = frame_index / fps
                 if frame_index == 0:
                     source_time = 0.0
-                elif (not self.source_fps_override and pos_seconds > previous_source_time
-                      and abs(pos_seconds - fallback) <= max(1.0, 5.0 / fps)):
+                elif (
+                    not self.source_fps_override
+                    and pos_seconds > previous_source_time
+                    and abs(pos_seconds - fallback) <= max(1.0, 5.0 / fps)
+                ):
                     source_time = pos_seconds
                 else:
                     source_time = fallback
@@ -220,13 +239,25 @@ class VideoFileSource(FrameSource):
                         break
                 captured_monotonic = time.monotonic()
                 self.playback_drift_ms = (captured_monotonic - desired_monotonic) * 1000.0
-                packet = FramePacket(frame_index + 1, frame, source_time, captured_monotonic,
-                                     source_frame_index=frame_index, wall_time_utc=None,
-                                     source_epoch=self.source_epoch)
+                packet = FramePacket(
+                    frame_index + 1,
+                    frame,
+                    source_time,
+                    captured_monotonic,
+                    source_frame_index=frame_index,
+                    wall_time_utc=None,
+                    source_epoch=self.source_epoch,
+                )
                 # sequence remains globally monotonic across video epochs.
-                packet = FramePacket(self.store.published + 1, packet.frame, packet.source_time_s,
-                                     packet.captured_monotonic_s, packet.source_frame_index,
-                                     packet.wall_time_utc, packet.source_epoch)
+                packet = FramePacket(
+                    self.store.published + 1,
+                    packet.frame,
+                    packet.source_time_s,
+                    packet.captured_monotonic_s,
+                    packet.source_frame_index,
+                    packet.wall_time_utc,
+                    packet.source_epoch,
+                )
                 self._publish(packet)
                 previous_source_time = source_time
                 frame_index += 1
@@ -247,8 +278,7 @@ class StreamSource(FrameSource):
         super().__init__(on_frame, initial_epoch)
         self.uri = uri
         self.reconnect_delay = reconnect_delay
-        self.metadata = SourceMetadata(
-            SourceKind.STREAM, self.safe_name, timestamp_strategy="monotonic arrival")
+        self.metadata = SourceMetadata(SourceKind.STREAM, self.safe_name, timestamp_strategy="monotonic arrival")
 
     def start(self, timeout=5.0):
         self._thread = threading.Thread(target=self._run, name="vision-source", daemon=True)
@@ -277,10 +307,12 @@ class StreamSource(FrameSource):
                 continue
             self.error = None
             self.metadata = SourceMetadata(
-                SourceKind.STREAM, self.safe_name,
+                SourceKind.STREAM,
+                self.safe_name,
                 int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)),
                 int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)),
-                None, timestamp_strategy="monotonic arrival",
+                None,
+                timestamp_strategy="monotonic arrival",
             )
             frame_index = 0
             try:
@@ -291,9 +323,9 @@ class StreamSource(FrameSource):
                         break
                     now = time.monotonic()
                     sequence += 1
-                    self._publish(FramePacket(
-                        sequence, frame, now, now, frame_index,
-                        datetime.now(timezone.utc), self.source_epoch))
+                    self._publish(
+                        FramePacket(sequence, frame, now, now, frame_index, datetime.now(UTC), self.source_epoch)
+                    )
                     frame_index += 1
                     self._ready.set()
             finally:
@@ -303,9 +335,15 @@ class StreamSource(FrameSource):
         self.ended = True
 
 
-def create_source(spec: SourceSpec, source_fps_override: float | None = None,
-                  *, loop_video=False, reconnect_delay=1.0, on_frame=None,
-                  initial_epoch=0) -> FrameSource:
+def create_source(
+    spec: SourceSpec,
+    source_fps_override: float | None = None,
+    *,
+    loop_video=False,
+    reconnect_delay=1.0,
+    on_frame=None,
+    initial_epoch=0,
+) -> FrameSource:
     if spec.kind == SourceKind.CAMERA:
         return CameraSource(int(spec.value), on_frame, initial_epoch)
     if spec.kind == SourceKind.VIDEO_FILE:

@@ -1,6 +1,6 @@
 # Cài đặt, vận hành và troubleshooting
 
-Tài liệu này áp dụng cho runtime SDA hiện tại trên nhánh `develop`. Xem
+Tài liệu này áp dụng cho implementation trong current checkout. Xem
 [QUICKSTART.md](../QUICKSTART.md) nếu chỉ cần luồng chạy ngắn nhất.
 
 ## 1. Yêu cầu
@@ -46,11 +46,13 @@ Cài Identity và public SDA package:
 ```cmd
 python -m pip install --no-deps -r requirements\vision-identity.txt
 python -m pip install -e .\SDA-GCN
-python -m pip check
 ```
 
 InsightFace được cài bằng `--no-deps` để không kéo thêm ONNX Runtime/OpenCV gây
 xung đột. Chỉ nên có một package `onnxruntime*` và một OpenCV trong môi trường.
+`pip check` có thể vẫn báo dependency metadata `onnxruntime`/`opencv-python`
+thiếu vì tên package thay thế không khớp metadata của InsightFace. Không cài
+ORT CPU hoặc `opencv-python` trùng chỉ để xóa cảnh báo này.
 
 Nếu cần chạy pytest và Ruff:
 
@@ -105,7 +107,7 @@ ALERT_AGENT_ENABLED=false
 Fall Detection sử dụng assets do SDA package sở hữu:
 
 ```text
-SDA-GCN/yolov8n.pt
+SDA-GCN/pose_landmarker_full.task
 SDA-GCN/work_dir/fall_detection/fall/config.yaml
 SDA-GCN/work_dir/fall_detection/fall/runs-best_val.pt
 ```
@@ -135,6 +137,20 @@ thể sử dụng:
 
 MediaPipe Pose chạy CPU. Privacy detector one-shot ưu tiên đường chạy an toàn;
 không suy luận device chỉ từ tên package đã cài.
+
+Action auto-selection theo thứ tự NVIDIA CUDA → AMD ROCm/Windows DirectML →
+Intel OpenVINO GPU → CPU. Identity resolve độc lập: NVIDIA CUDAExecutionProvider,
+Windows DmlExecutionProvider cho Intel/AMD, rồi CPU; AMD Linux GPU Identity
+không có provider được hỗ trợ trong profile hiện tại. Manual selection không
+khả dụng sẽ fail rõ ràng. Đây là capability support từ code, không phải tuyên
+bố mọi hardware đã được kiểm thử vật lý.
+
+### Admin bootstrap lần đầu
+
+Trước lần chạy đầu, có thể đặt `ANTAM_INITIAL_ADMIN_PASSWORD` trong environment.
+Database bootstrap tạo `admin@example.local`, dùng giá trị đó hoặc fallback
+development `AnTam@123`, và bật `force_password_change`. UI yêu cầu đổi password
+tối thiểu 8 ký tự sau login. `.env.example` hiện chưa liệt kê biến tùy chọn này.
 
 ## 7. Khởi động native
 

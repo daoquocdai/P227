@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import os
-from pathlib import Path
 import time
-from typing import Callable
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
-
 
 CACHE_SCHEMA_VERSION = 1
 MATCHING_FORMAT_VERSION = "raw-embedding-person-mean-v1"
@@ -78,7 +77,11 @@ def _atomic_save(cache_path: Path, fingerprint: dict, entries: list[dict], embed
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = cache_path.with_name(cache_path.name + f".{os.getpid()}.tmp")
     metadata = json.dumps({"fingerprint": fingerprint, "entries": entries}, separators=(",", ":"))
-    matrix = np.stack(embeddings).astype(np.float32) if embeddings else np.empty((0, fingerprint["embedding_dimension"]), dtype=np.float32)
+    matrix = (
+        np.stack(embeddings).astype(np.float32)
+        if embeddings
+        else np.empty((0, fingerprint["embedding_dimension"]), dtype=np.float32)
+    )
     try:
         with temporary.open("wb") as stream:
             np.savez_compressed(stream, metadata=np.asarray(metadata), embeddings=matrix)
@@ -89,8 +92,9 @@ def _atomic_save(cache_path: Path, fingerprint: dict, entries: list[dict], embed
         temporary.unlink(missing_ok=True)
 
 
-def build_gallery(root: Path, cache_path: Path, fingerprint: dict, extractor,
-                  rebuild=False, info=print, warning=print, progress=False):
+def build_gallery(
+    root: Path, cache_path: Path, fingerprint: dict, extractor, rebuild=False, info=print, warning=print, progress=False
+):
     started = time.perf_counter()
     images = _scan(root)
     cached_entries = {} if rebuild else _load_cache(cache_path, fingerprint, warning)
@@ -128,8 +132,13 @@ def build_gallery(root: Path, cache_path: Path, fingerprint: dict, extractor,
         grouped.setdefault(entry["person"], []).append(embedding)
     known = {person: np.mean(values, axis=0) for person, values in grouped.items()}
     stats = GalleryStats(
-        persons=len(known), images=len(images), cached=cached, recomputed=recomputed,
-        skipped=skipped, valid_embeddings=len(embeddings),
-        elapsed_ms=(time.perf_counter() - started) * 1000.0, cache_saved=changed,
+        persons=len(known),
+        images=len(images),
+        cached=cached,
+        recomputed=recomputed,
+        skipped=skipped,
+        valid_embeddings=len(embeddings),
+        elapsed_ms=(time.perf_counter() - started) * 1000.0,
+        cache_saved=changed,
     )
     return known, stats

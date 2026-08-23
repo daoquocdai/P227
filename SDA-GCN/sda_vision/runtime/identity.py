@@ -2,25 +2,25 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from enum import Enum
-import multiprocessing as mp
-from pathlib import Path
-import queue
-import time
 import contextlib
 import io
+import multiprocessing as mp
 import os
+import queue
+import time
 import warnings
+from dataclasses import dataclass, replace
+from enum import StrEnum
+from pathlib import Path
 
 import cv2
 import numpy as np
 
-from .gallery import build_gallery, recognition_fingerprint
 from ..contracts import IdentityGallerySnapshot
+from .gallery import build_gallery, recognition_fingerprint
 
 
-class IdentityState(str, Enum):
+class IdentityState(StrEnum):
     UNVERIFIED = "UNVERIFIED"
     KNOWN = "KNOWN"
     UNKNOWN = "UNKNOWN"
@@ -136,12 +136,27 @@ def _apply_process_isolation(providers, priority, affinity):
     return status
 
 
-def _identity_process(input_queue, result_queue, status_queue, stop_event, ready_event,
-                      providers, data_dir, cache_path, det_size, threshold,
-                      rebuild_cache, debug, identity_debug, process_priority,
-                      cpu_affinity, gallery_mode, initial_gallery, gallery_queue):
-    isolation_status = _apply_process_isolation(
-        providers, process_priority, cpu_affinity)
+def _identity_process(
+    input_queue,
+    result_queue,
+    status_queue,
+    stop_event,
+    ready_event,
+    providers,
+    data_dir,
+    cache_path,
+    det_size,
+    threshold,
+    rebuild_cache,
+    debug,
+    identity_debug,
+    process_priority,
+    cpu_affinity,
+    gallery_mode,
+    initial_gallery,
+    gallery_queue,
+):
+    isolation_status = _apply_process_isolation(providers, process_priority, cpu_affinity)
     from insightface.app import FaceAnalysis
 
     process_started = time.perf_counter()
@@ -158,12 +173,15 @@ def _identity_process(input_queue, result_queue, status_queue, stop_event, ready
             app.prepare(ctx_id=0 if providers[0] != "CPUExecutionProvider" else -1, det_size=(det_size, det_size))
             model_ms = (time.perf_counter() - model_started) * 1000.0
     except Exception as exc:
-        _replace_latest(status_queue, {
-            "startup_error": str(exc),
-            "requested_providers": list(providers),
-            "effective_providers": [],
-            "execution": isolation_status,
-        })
+        _replace_latest(
+            status_queue,
+            {
+                "startup_error": str(exc),
+                "requested_providers": list(providers),
+                "effective_providers": [],
+                "execution": isolation_status,
+            },
+        )
         ready_event.set()
         return
 
@@ -190,8 +208,12 @@ def _identity_process(input_queue, result_queue, status_queue, stop_event, ready
     if gallery_mode == "filesystem":
         model_root = Path.home() / ".insightface" / "models" / "buffalo_l"
         known, gallery_stats = build_gallery(
-            root, Path(cache_path), recognition_fingerprint(model_root), extract,
-            rebuild=rebuild_cache, info=lambda message: print(message, flush=True),
+            root,
+            Path(cache_path),
+            recognition_fingerprint(model_root),
+            extract,
+            rebuild=rebuild_cache,
+            info=lambda message: print(message, flush=True),
             warning=lambda message: print(message, flush=True),
             progress=debug or rebuild_cache,
         )
@@ -200,20 +222,28 @@ def _identity_process(input_queue, result_queue, status_queue, stop_event, ready
     else:
         snapshot = initial_gallery or IdentityGallerySnapshot(0)
         gallery_version = snapshot.version
-        gallery_entries = tuple(
-            (entry.person_id, entry.name, entry.embedding) for entry in snapshot.entries)
-        gallery_stats = type("SuppliedGalleryStats", (), {
-            "elapsed_ms": 0.0,
-            "persons": len({entry[0] for entry in gallery_entries}),
-            "images": len(gallery_entries), "cached": len(gallery_entries),
-            "recomputed": 0, "skipped": 0,
-        })()
+        gallery_entries = tuple((entry.person_id, entry.name, entry.embedding) for entry in snapshot.entries)
+        gallery_stats = type(
+            "SuppliedGalleryStats",
+            (),
+            {
+                "elapsed_ms": 0.0,
+                "persons": len({entry[0] for entry in gallery_entries}),
+                "images": len(gallery_entries),
+                "cached": len(gallery_entries),
+                "recomputed": 0,
+                "skipped": 0,
+            },
+        )()
 
     ready_payload = {
-        "model_ms": model_ms, "gallery_ms": gallery_stats.elapsed_ms,
+        "model_ms": model_ms,
+        "gallery_ms": gallery_stats.elapsed_ms,
         "ready_ms": (time.perf_counter() - process_started) * 1000.0,
-        "persons": gallery_stats.persons, "images": gallery_stats.images,
-        "cached": gallery_stats.cached, "recomputed": gallery_stats.recomputed,
+        "persons": gallery_stats.persons,
+        "images": gallery_stats.images,
+        "cached": gallery_stats.cached,
+        "recomputed": gallery_stats.recomputed,
         "skipped": gallery_stats.skipped,
         "execution": isolation_status,
         "requested_providers": list(providers),
@@ -233,14 +263,15 @@ def _identity_process(input_queue, result_queue, status_queue, stop_event, ready
         if latest_gallery is not None:
             applied_at = time.perf_counter()
             gallery_version = latest_gallery.version
-            gallery_entries = tuple(
-                (entry.person_id, entry.name, entry.embedding)
-                for entry in latest_gallery.entries)
-            _replace_latest(status_queue, {
-                "gallery_version": gallery_version,
-                "gallery_entries": len(gallery_entries),
-                "gallery_apply_ms": (time.perf_counter() - applied_at) * 1000.0,
-            })
+            gallery_entries = tuple((entry.person_id, entry.name, entry.embedding) for entry in latest_gallery.entries)
+            _replace_latest(
+                status_queue,
+                {
+                    "gallery_version": gallery_version,
+                    "gallery_entries": len(gallery_entries),
+                    "gallery_apply_ms": (time.perf_counter() - applied_at) * 1000.0,
+                },
+            )
         try:
             job = input_queue.get(timeout=0.2)
         except queue.Empty:
@@ -260,10 +291,13 @@ def _identity_process(input_queue, result_queue, status_queue, stop_event, ready
         finished_wall = time.time()
         payload = {
             "known": bool(name is not None and score > threshold),
-            "face_found": bool(faces), "person_id": person_id,
-            "name": name, "confidence": score,
+            "face_found": bool(faces),
+            "person_id": person_id,
+            "name": name,
+            "confidence": score,
             "gallery_version": inference_gallery_version,
-            "bbox": job["bbox"], "timestamp": time.monotonic(),
+            "bbox": job["bbox"],
+            "timestamp": time.monotonic(),
             "inference_ms": (finished - started) * 1000.0,
             "inference_started_monotonic_s": started,
             "inference_finished_monotonic_s": finished,
@@ -272,8 +306,7 @@ def _identity_process(input_queue, result_queue, status_queue, stop_event, ready
             "source_time_s": job.get("source_time_s"),
             "frame_sequence": job.get("frame_sequence"),
             "association_id": job.get("association_id"),
-            "face_bbox": (tuple(int(round(value)) for value in main_face.bbox)
-                          if main_face is not None else None),
+            "face_bbox": (tuple(int(round(value)) for value in main_face.bbox) if main_face is not None else None),
         }
         if identity_debug:
             print("\n[Identity Match]")
@@ -288,12 +321,26 @@ def _identity_process(input_queue, result_queue, status_queue, stop_event, ready
 class IdentityStage:
     """Non-blocking facade; real tracking can replace bbox association later."""
 
-    def __init__(self, providers, data_dir, cache_path, det_size=416, interval=0.5,
-                 unknown_retry=1.0, locked_unknown_retry=15.0,
-                 max_unknown_attempts=3, absent_timeout=1.5, threshold=0.45,
-                 rebuild_cache=False, debug=False, identity_debug=False,
-                 process_priority="normal", cpu_affinity=None,
-                 gallery_mode="filesystem", gallery_snapshot=None):
+    def __init__(
+        self,
+        providers,
+        data_dir,
+        cache_path,
+        det_size=416,
+        interval=0.5,
+        unknown_retry=1.0,
+        locked_unknown_retry=15.0,
+        max_unknown_attempts=3,
+        absent_timeout=1.5,
+        threshold=0.45,
+        rebuild_cache=False,
+        debug=False,
+        identity_debug=False,
+        process_priority="normal",
+        cpu_affinity=None,
+        gallery_mode="filesystem",
+        gallery_snapshot=None,
+    ):
         if gallery_mode not in {"filesystem", "supplied"}:
             raise ValueError("identity gallery mode must be 'filesystem' or 'supplied'")
         if gallery_mode == "supplied" and gallery_snapshot is None:
@@ -302,6 +349,7 @@ class IdentityStage:
         if cpu_affinity is not None:
             try:
                 import psutil
+
                 allowed_affinity = psutil.Process().cpu_affinity()
             except (ImportError, OSError, AttributeError):
                 allowed_affinity = None
@@ -317,12 +365,28 @@ class IdentityStage:
         self._ready = context.Event()
         self._process = context.Process(
             target=_identity_process,
-            args=(self._inputs, self._results, self._status, self._stop, self._ready,
-                  providers, str(data_dir), str(cache_path), det_size, threshold,
-                  rebuild_cache, debug, identity_debug, process_priority,
-                  cpu_affinity, gallery_mode, gallery_snapshot,
-                  self._gallery_updates),
-            name="vision-identity", daemon=True,
+            args=(
+                self._inputs,
+                self._results,
+                self._status,
+                self._stop,
+                self._ready,
+                providers,
+                str(data_dir),
+                str(cache_path),
+                det_size,
+                threshold,
+                rebuild_cache,
+                debug,
+                identity_debug,
+                process_priority,
+                cpu_affinity,
+                gallery_mode,
+                gallery_snapshot,
+                self._gallery_updates,
+            ),
+            name="vision-identity",
+            daemon=True,
         )
         self.interval = interval
         self.unknown_retry = unknown_retry
@@ -345,8 +409,7 @@ class IdentityStage:
         self.cpu_affinity = cpu_affinity
         self.gallery_mode = gallery_mode
         self.gallery_snapshot = gallery_snapshot
-        self.gallery_version = (gallery_snapshot.version
-                                if gallery_snapshot is not None else "filesystem")
+        self.gallery_version = gallery_snapshot.version if gallery_snapshot is not None else "filesystem"
 
     def start(self):
         self._process.start()
@@ -358,7 +421,7 @@ class IdentityStage:
         ax1, ay1, ax2, ay2 = first
         bx1, by1, bx2, by2 = second
         intersection = max(0, min(ax2, bx2) - max(ax1, bx1)) * max(0, min(ay2, by2) - max(ay1, by1))
-        union = (ax2-ax1)*(ay2-ay1) + (bx2-bx1)*(by2-by1) - intersection
+        union = (ax2 - ax1) * (ay2 - ay1) + (bx2 - bx1) * (by2 - by1) - intersection
         return intersection / union if union else 0.0
 
     def update_presence(self, bbox, now=None):
@@ -377,8 +440,8 @@ class IdentityStage:
     def reset(self, *, preserve_association=False):
         association_id = getattr(self, "association_id", None) if preserve_association else None
         self.result = IdentityResult(
-            gallery_version=getattr(self, "gallery_version", None),
-            association_id=association_id)
+            gallery_version=getattr(self, "gallery_version", None), association_id=association_id
+        )
         self.failed_attempts = 0
         self.last_attempt_at = 0.0
         if not preserve_association:
@@ -408,11 +471,17 @@ class IdentityStage:
             return False
         self.last_attempt_at = now
         self.frames_submitted += 1
-        if _replace_latest(self._inputs, {"crop": crop, "bbox": bbox,
-                                         "source_time_s": source_time_s,
-                                         "frame_sequence": frame_sequence,
-                                         "gallery_version": self.gallery_version,
-                                         "association_id": self.association_id}):
+        if _replace_latest(
+            self._inputs,
+            {
+                "crop": crop,
+                "bbox": bbox,
+                "source_time_s": source_time_s,
+                "frame_sequence": frame_sequence,
+                "gallery_version": self.gallery_version,
+                "association_id": self.association_id,
+            },
+        ):
             self.frames_dropped += 1
         return True
 
@@ -439,8 +508,10 @@ class IdentityStage:
         if latest["known"]:
             # KNOWN is an explicit successful transition; locking is immediate.
             common = dict(
-                name=latest["name"], confidence=latest["confidence"],
-                timestamp=latest["timestamp"], bbox=latest["bbox"],
+                name=latest["name"],
+                confidence=latest["confidence"],
+                timestamp=latest["timestamp"],
+                bbox=latest["bbox"],
                 inference_ms=latest["inference_ms"],
                 source_time_s=latest.get("source_time_s"),
                 frame_sequence=latest.get("frame_sequence"),
@@ -450,17 +521,26 @@ class IdentityStage:
                 inference_finished_monotonic_s=latest.get("inference_finished_monotonic_s"),
                 inference_started_wall_time_s=latest.get("inference_started_wall_time_s"),
                 inference_finished_wall_time_s=latest.get("inference_finished_wall_time_s"),
-                person_id=latest.get("person_id"), gallery_version=gallery_version,
-                face_found=True, association_id=self.association_id)
+                person_id=latest.get("person_id"),
+                gallery_version=gallery_version,
+                face_found=True,
+                association_id=self.association_id,
+            )
             self.result = IdentityResult(IdentityState.KNOWN, **common)
             self.result = IdentityResult(IdentityState.LOCKED_KNOWN, **common)
             self.failed_attempts = 0
         elif latest.get("face_found"):
             self.failed_attempts += 1
-            state = IdentityState.LOCKED_UNKNOWN if self.failed_attempts >= self.max_unknown_attempts else IdentityState.UNKNOWN
+            state = (
+                IdentityState.LOCKED_UNKNOWN
+                if self.failed_attempts >= self.max_unknown_attempts
+                else IdentityState.UNKNOWN
+            )
             self.result = IdentityResult(
-                state=state, confidence=latest["confidence"],
-                timestamp=latest["timestamp"], bbox=latest["bbox"],
+                state=state,
+                confidence=latest["confidence"],
+                timestamp=latest["timestamp"],
+                bbox=latest["bbox"],
                 inference_ms=latest["inference_ms"],
                 source_time_s=latest.get("source_time_s"),
                 frame_sequence=latest.get("frame_sequence"),
@@ -470,16 +550,23 @@ class IdentityStage:
                 inference_finished_monotonic_s=latest.get("inference_finished_monotonic_s"),
                 inference_started_wall_time_s=latest.get("inference_started_wall_time_s"),
                 inference_finished_wall_time_s=latest.get("inference_finished_wall_time_s"),
-                gallery_version=gallery_version, face_found=True,
-                association_id=getattr(self, "association_id", None))
+                gallery_version=gallery_version,
+                face_found=True,
+                association_id=getattr(self, "association_id", None),
+            )
         else:
             # No usable face is inconclusive: retain the current state and
             # attempt count, but expose that this inference did not verify a face.
             self.result = replace(
-                self.result, timestamp=latest["timestamp"], bbox=latest["bbox"],
-                inference_ms=latest["inference_ms"], face_found=False,
-                face_bbox=None, face_bbox_frame_sequence=latest.get("frame_sequence"),
-                association_id=self.association_id)
+                self.result,
+                timestamp=latest["timestamp"],
+                bbox=latest["bbox"],
+                inference_ms=latest["inference_ms"],
+                face_found=False,
+                face_bbox=None,
+                face_bbox_frame_sequence=latest.get("frame_sequence"),
+                association_id=self.association_id,
+            )
         return self.result
 
     def update_gallery(self, snapshot):

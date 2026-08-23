@@ -7,12 +7,12 @@ compute provider works.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import importlib.util
 import platform
 import subprocess
-from typing import Callable, Optional, Sequence
 import warnings
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 
 
 class BackendResolutionError(RuntimeError):
@@ -81,7 +81,9 @@ def _windows_adapter_names() -> tuple[str, ...]:
         return ()
     try:
         command = [
-            "powershell", "-NoProfile", "-Command",
+            "powershell",
+            "-NoProfile",
+            "-Command",
             "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name",
         ]
         result = subprocess.run(command, capture_output=True, text=True, timeout=4, check=False)
@@ -97,6 +99,7 @@ def probe_capabilities() -> HardwareCapabilities:
     torch_name = ""
     try:
         import torch
+
         cuda_available = bool(torch.cuda.is_available())
         hip_available = bool(getattr(torch.version, "hip", None))
         if cuda_available:
@@ -109,6 +112,7 @@ def probe_capabilities() -> HardwareCapabilities:
     if importlib.util.find_spec("openvino") is not None:
         try:
             from openvino import Core
+
             core = Core()
             gpu_devices = [name for name in core.available_devices if name.split(".", 1)[0] == "GPU"]
             if gpu_devices:
@@ -126,6 +130,7 @@ def probe_capabilities() -> HardwareCapabilities:
         try:
             import torch
             import torch_directml
+
             count = int(torch_directml.device_count())
             for index in range(count):
                 name = str(torch_directml.device_name(index))
@@ -155,7 +160,7 @@ def probe_capabilities() -> HardwareCapabilities:
 
 def resolve_action_backend(
     requested: str = "auto",
-    capabilities: Optional[HardwareCapabilities] = None,
+    capabilities: HardwareCapabilities | None = None,
 ) -> BackendSpec:
     requested = requested.lower()
     if requested not in {"auto", "cuda", "amd", "intel", "cpu"}:
@@ -164,22 +169,60 @@ def resolve_action_backend(
     for note in caps.warnings:
         warnings.warn(note, RuntimeWarning, stacklevel=2)
 
-    def nvidia() -> Optional[BackendSpec]:
+    def nvidia() -> BackendSpec | None:
         if caps.torch_cuda and not caps.torch_hip:
-            return BackendSpec("torch_cuda", "cuda:0", "NVIDIA", "fp32", "CUDA", "NVIDIA CUDA is usable", caps.torch_device_name or "CUDA GPU", requested)
+            return BackendSpec(
+                "torch_cuda",
+                "cuda:0",
+                "NVIDIA",
+                "fp32",
+                "CUDA",
+                "NVIDIA CUDA is usable",
+                caps.torch_device_name or "CUDA GPU",
+                requested,
+            )
         return None
 
-    def amd() -> Optional[BackendSpec]:
+    def amd() -> BackendSpec | None:
         if caps.torch_cuda and caps.torch_hip:
-            return BackendSpec("torch_rocm", "cuda:0", "AMD", "fp32", "ROCm", "PyTorch ROCm is usable", caps.torch_device_name or "AMD GPU", requested)
+            return BackendSpec(
+                "torch_rocm",
+                "cuda:0",
+                "AMD",
+                "fp32",
+                "ROCm",
+                "PyTorch ROCm is usable",
+                caps.torch_device_name or "AMD GPU",
+                requested,
+            )
         if caps.has_amd_adapter and caps.directml_usable:
-            name = caps.directml_device_name or next(name for name in caps.adapter_names if "amd" in name.lower() or "radeon" in name.lower())
-            return BackendSpec("torch_directml", f"directml:{caps.directml_device_index}", "AMD", "fp32", "DirectML", "AMD adapter and DirectML operation are usable", name, requested)
+            name = caps.directml_device_name or next(
+                name for name in caps.adapter_names if "amd" in name.lower() or "radeon" in name.lower()
+            )
+            return BackendSpec(
+                "torch_directml",
+                f"directml:{caps.directml_device_index}",
+                "AMD",
+                "fp32",
+                "DirectML",
+                "AMD adapter and DirectML operation are usable",
+                name,
+                requested,
+            )
         return None
 
-    def intel() -> Optional[BackendSpec]:
+    def intel() -> BackendSpec | None:
         if caps.openvino_gpu:
-            return BackendSpec("openvino", "GPU", "Intel", "fp16", "OpenVINO GPU", "OpenVINO exposes a usable GPU device", caps.openvino_gpu_name or "GPU", requested)
+            return BackendSpec(
+                "openvino",
+                "GPU",
+                "Intel",
+                "fp16",
+                "OpenVINO GPU",
+                "OpenVINO exposes a usable GPU device",
+                caps.openvino_gpu_name or "GPU",
+                requested,
+            )
         return None
 
     if requested == "cuda":
@@ -204,15 +247,21 @@ def resolve_action_backend(
     if result is not None:
         return result
     if caps.has_amd_adapter and not caps.directml_usable:
-        warnings.warn("AMD GPU detected, but DirectML is unavailable; falling back to CPU.", RuntimeWarning, stacklevel=2)
+        warnings.warn(
+            "AMD GPU detected, but DirectML is unavailable; falling back to CPU.", RuntimeWarning, stacklevel=2
+        )
     if any("intel" in name.lower() for name in caps.adapter_names) and not caps.openvino_gpu:
-        warnings.warn("Intel GPU detected, but OpenVINO GPU is unavailable; falling back to CPU.", RuntimeWarning, stacklevel=2)
-    return BackendSpec("cpu", "cpu", "CPU", "fp32", "CPU", "No supported accelerator backend is usable", "CPU", requested)
+        warnings.warn(
+            "Intel GPU detected, but OpenVINO GPU is unavailable; falling back to CPU.", RuntimeWarning, stacklevel=2
+        )
+    return BackendSpec(
+        "cpu", "cpu", "CPU", "fp32", "CPU", "No supported accelerator backend is usable", "CPU", requested
+    )
 
 
 def resolve_backend(
     requested: str = "auto",
-    capabilities: Optional[HardwareCapabilities] = None,
+    capabilities: HardwareCapabilities | None = None,
 ) -> BackendSpec:
     """Backward-compatible alias for the Action-stage resolver."""
     return resolve_action_backend(requested, capabilities)
@@ -249,12 +298,16 @@ def resolve_face_providers(
         return FaceProviderSpec("ONNX Runtime CUDA", chain, "CUDA", "fp32", "CUDAExecutionProvider is available")
 
     if (
-        requested in {"intel", "amd", "directml"} and system == "Windows"
-        or requested == "auto" and (intel or amd_windows)
+        requested in {"intel", "amd", "directml"}
+        and system == "Windows"
+        or requested == "auto"
+        and (intel or amd_windows)
     ):
         if "DmlExecutionProvider" not in available:
             vendor = "Intel" if intel and requested != "amd" else "AMD"
-            raise FaceAccelerationError(f"{vendor} GPU is present but DmlExecutionProvider is unavailable for Identity.")
+            raise FaceAccelerationError(
+                f"{vendor} GPU is present but DmlExecutionProvider is unavailable for Identity."
+            )
         chain = ("DmlExecutionProvider",) + ((cpu,) if cpu in available else ())
         return FaceProviderSpec("ONNX Runtime DirectML", chain, "DirectML", "fp32", "DmlExecutionProvider is available")
 

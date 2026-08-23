@@ -1,9 +1,10 @@
 """Shared thin standalone CLI wiring for realtime entry points."""
+
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
 import uuid
+from datetime import UTC, datetime
 
 from . import VisionCallbacks, VisionSession, VisionSessionConfig
 from .adapters.http_events import EventSender
@@ -42,35 +43,51 @@ def parse_args(argv=None, description="Realtime Vision-only fall detection"):
 
 def run_cli(argv=None, *, raw_classifier=False):
     try:
-        args = parse_args(argv, "Realtime raw Vision-only fall detection" if raw_classifier
-                          else "Realtime Vision-only fall detection")
+        args = parse_args(
+            argv, "Realtime raw Vision-only fall detection" if raw_classifier else "Realtime Vision-only fall detection"
+        )
     except ValueError as exc:
         raise SystemExit(f"[Source Error] {exc}")
     sender = EventSender(args.backend_url if args.send_events else None)
     preview = PreviewAdapter(args.preview)
     config = VisionSessionConfig(
-        source=args.source, source_fps=args.source_fps, camera_id=args.camera_id,
-        camera_location=args.camera_location, device=args.device,
-        identity_enabled=args.identity == "on", vision_fps=args.vision_fps,
-        identity_interval=args.identity_interval, face_det_size=args.face_det_size,
-        rebuild_face_cache=args.rebuild_face_cache, log_level=args.log_level,
-        identity_debug=args.identity_debug, preview=args.preview,
+        source=args.source,
+        source_fps=args.source_fps,
+        camera_id=args.camera_id,
+        camera_location=args.camera_location,
+        device=args.device,
+        identity_enabled=args.identity == "on",
+        vision_fps=args.vision_fps,
+        identity_interval=args.identity_interval,
+        face_det_size=args.face_det_size,
+        rebuild_face_cache=args.rebuild_face_cache,
+        log_level=args.log_level,
+        identity_debug=args.identity_debug,
+        preview=args.preview,
         raw_classifier=raw_classifier,
     )
 
     def deliver(event):
-        sender.enqueue({
-            "event_id": str(uuid.uuid4()), "camera_id": config.camera_id,
-            "camera_location": config.camera_location, "event_type": event.event_type,
-            "occurred_at": datetime.now(timezone.utc).isoformat(),
-            "confidence": event.confidence,
-            "identity_status": event.identity_state or "UNKNOWN",
-            "identity_name": event.identity_name,
-        })
+        sender.enqueue(
+            {
+                "event_id": str(uuid.uuid4()),
+                "camera_id": config.camera_id,
+                "camera_location": config.camera_location,
+                "event_type": event.event_type,
+                "occurred_at": datetime.now(UTC).isoformat(),
+                "confidence": event.confidence,
+                "identity_status": event.identity_state or "UNKNOWN",
+                "identity_name": event.identity_name,
+            }
+        )
 
-    session = VisionSession(config, VisionCallbacks(
-        on_event=deliver if sender.enabled else None,
-        on_preview=preview.on_preview if args.preview != "none" else None))
+    session = VisionSession(
+        config,
+        VisionCallbacks(
+            on_event=deliver if sender.enabled else None,
+            on_preview=preview.on_preview if args.preview != "none" else None,
+        ),
+    )
     preview.stop_callback = session.request_stop
     preview.start()
     try:

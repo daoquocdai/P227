@@ -5,7 +5,6 @@ from __future__ import annotations
 import queue
 import threading
 import time
-from typing import Optional
 import warnings
 
 import requests
@@ -14,7 +13,7 @@ import requests
 class EventSender:
     """Deliver events off the inference thread through a bounded queue."""
 
-    def __init__(self, backend_url: Optional[str] = None, queue_size: int = 32):
+    def __init__(self, backend_url: str | None = None, queue_size: int = 32):
         self.backend_url = backend_url
         self._queue: queue.Queue = queue.Queue(maxsize=queue_size)
         self._stop = threading.Event()

@@ -1,6 +1,6 @@
-# GuardianCam Quickstart — Windows CMD
+# GuardianCam Quickstart — evaluator mới
 
-Hướng dẫn chạy hệ thống Phase 5 hiện tại trên Windows. Với webcam USB, nên chạy native.
+Native Windows là đường khuyến nghị cho webcam/GPU. Docker hiện tại chỉ chạy CPU.
 
 ## 1. Cài đặt
 
@@ -34,7 +34,6 @@ InsightFace không kéo thêm ORT/OpenCV xung đột:
 python -m pip install --no-deps -r requirements\vision-identity.txt
 python -m pip install -e .\SDA-GCN
 python -m pip install -r requirements\dev.txt
-python -m pip check
 python -m pip list | findstr /I "insightface onnxruntime opencv torch"
 cd frontend
 npm.cmd ci
@@ -43,6 +42,9 @@ copy /Y .env.example .env
 ```
 
 Chỉ nên có một gói `onnxruntime*` và một OpenCV (`opencv-contrib-python`).
+`pip check` có thể báo InsightFace thiếu `onnxruntime`/`opencv-python` dù profile
+đã cung cấp ORT hardware-specific và `opencv-contrib-python`; đây là metadata
+caveat. Không cài các package CPU/duplicate đó chỉ để làm `pip check` xanh.
 Baseline E2E an toàn trong `.env`:
 
 ```dotenv
@@ -70,7 +72,7 @@ dùng `register face/` làm nguồn dữ liệu. CLI SDA standalone có thể v�
 độ filesystem/NPZ. Muốn bật Identity, model
 `<VISION_INSIGHTFACE_ROOT>\models\buffalo_l\` phải sẵn sàng.
 
-## 3. Khởi động và API smoke
+## 3. Khởi động, đăng nhập và API smoke
 
 Terminal 1:
 
@@ -96,32 +98,55 @@ curl http://127.0.0.1:8000/api/v1/cameras
 
 Mở `http://localhost:5173` và `http://127.0.0.1:8000/docs`.
 
+Lần khởi tạo database đầu tiên tạo admin development
+`admin@example.local`. Password lấy từ `ANTAM_INITIAL_ADMIN_PASSWORD`; nếu chưa
+đặt thì fallback development là `AnTam@123`. Nên đặt biến môi trường này trước
+lần chạy backend đầu tiên. Đăng nhập rồi đổi ngay mật khẩu (tối thiểu 8 ký tự)
+khi UI bắt buộc. Fallback không phải credential production.
+
 ## 4. Checklist E2E tuần tự
 
 1. Khởi động backend, chờ `Application startup complete`.
 2. Khởi động frontend và xác nhận dashboard tải được.
-3. Chạy ba API smoke ở trên.
-4. Start webcam từ Camera UI.
-5. Xác nhận raw stream chuyển động bình thường.
-6. Tắt Vision: raw stream phải tiếp tục.
-7. Bật Vision: Fall Detection và overlay phải khởi động.
-8. Bật `Phát hiện người lạ`/Identity.
-9. Family Known: tạo person, thêm ảnh mặt hợp lệ, không restart camera/backend,
+3. Đăng nhập bằng admin bootstrap và hoàn tất đổi mật khẩu bắt buộc.
+4. Chạy ba API smoke ở trên.
+5. Start webcam từ Camera UI.
+6. Xác nhận raw stream chuyển động bình thường.
+7. Tắt Vision: raw stream phải tiếp tục.
+8. Bật Vision: Fall Detection và overlay phải khởi động.
+9. Bật `Phát hiện người lạ`/Identity.
+10. Family Known: tạo person, thêm ảnh mặt hợp lệ, không restart camera/backend,
    đứng trong khung; phải thấy `KNOWN`, đúng tên và không có Unknown alert.
-10. Unknown: dùng người chưa đăng ký; mong đợi
+11. Unknown: dùng người chưa đăng ký; mong đợi
     `UNVERIFIED → UNKNOWN → LOCKED_UNKNOWN`. Không có khuôn mặt dùng được thì
     không được thành Unknown. Kiểm tra Unknown alert/history; product warning có
     cooldown xấp xỉ 60 giây.
-11. Fall: chỉ dùng video ngã quay sẵn an toàn, **không tự ngã**. Mong đợi
+12. Fall: chỉ dùng video ngã quay sẵn an toàn, **không tự ngã**. Mong đợi
     candidate → confirmation → `FALL_CONFIRMED`, rồi kiểm tra History/Alert.
     Không hạ threshold để ép pass. Fall phải chạy với Known, Unknown hoặc khi
     Identity tắt.
-12. Kiểm tra snapshot/privacy theo chính sách hiện tại.
-13. Với Agent OFF, alert/history vẫn phải hoạt động.
-14. Stop camera, start lại và xác nhận stream/Vision phục hồi.
-15. Dừng frontend rồi backend bằng `Ctrl+C`; chờ shutdown hoàn tất.
+13. Kiểm tra snapshot/privacy theo chính sách hiện tại.
+14. Với Agent OFF, alert/history vẫn phải hoạt động.
+15. Stop camera, start lại và xác nhận stream/Vision phục hồi.
+16. Dừng frontend rồi backend bằng `Ctrl+C`; chờ shutdown hoàn tất.
 
-## 5. Quality checks
+Các control độc lập: Camera ON mở source; Vision ON bật Fall Detection;
+`Phát hiện người lạ` bật Identity/Unknown; `Hiện khung` chỉ đổi presentation,
+không bật/tắt model.
+
+## 5. Docker CPU-only
+
+```cmd
+docker compose up --build --detach
+docker compose ps
+```
+
+Mở `http://localhost:5173`. Compose ép `VISION_DEVICE=cpu` và
+`VISION_IDENTITY_PROVIDER=cpu`. Dùng video file/RTSP; cấu hình hiện tại không
+cam kết webcam USB passthrough trên Docker Desktop. Xem [setup](docs/setup.md)
+cho volume Identity và troubleshooting.
+
+## 6. Quality checks
 
 ```cmd
 .venv\Scripts\python.exe -m pytest -q
@@ -133,7 +158,7 @@ cd ..
 git diff --check
 ```
 
-## 6. Troubleshooting
+## 7. Troubleshooting
 
 - `ECONNREFUSED`/port 8000: dùng `curl /health` và `netstat -ano | findstr :8000`.
 - Camera busy/đen: đóng app khác giữ camera, kiểm tra quyền camera và raw MJPEG.

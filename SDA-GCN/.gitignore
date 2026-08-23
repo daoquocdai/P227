@@ -17,7 +17,8 @@ shape.py
 newdata/
 batch_inference.py
 eval_metrics.py
-pose_landmarker_full.task
+# Required by sda_vision at runtime, but not provisioned by this repository.
+# Fresh environments need the approved pose model at this path.
 cut_videos.py
 find_fn.py
 none.py

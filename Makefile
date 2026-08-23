@@ -15,7 +15,6 @@ endif
 BACKEND_HOST ?= 127.0.0.1
 BACKEND_PORT ?= 8000
 FRONTEND_DIR := frontend
-PYTHON_PATHS := src tests
 COMPOSE := docker compose
 VISION_PROFILE ?= cpu
 VISION_REQUIREMENTS := requirements/vision-$(VISION_PROFILE).txt
@@ -68,13 +67,13 @@ test: ## Run the complete Python test suite
 	$(PYTHON) -m pytest -q
 
 lint: ## Run Ruff lint checks
-	$(PYTHON) -m ruff check $(PYTHON_PATHS)
+	$(PYTHON) -m ruff check
 
 format: ## Format Python and apply safe Ruff fixes
-	$(PYTHON) -m ruff format $(PYTHON_PATHS)
+	$(PYTHON) -m ruff format
 
 format-check: ## Verify Python formatting without changing files
-	$(PYTHON) -m ruff format --check $(PYTHON_PATHS)
+	$(PYTHON) -m ruff format --check
 
 frontend-build: ## Type-check and build the production frontend
 	cd $(FRONTEND_DIR) && $(NPM) run build

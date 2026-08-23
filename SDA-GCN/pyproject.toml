@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "sda-vision"
 version = "0.1.0"
 description = "Reusable SDA-GCN pose, fall-detection, and identity runtime"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 
 [tool.setuptools.packages.find]
 where = ["."]

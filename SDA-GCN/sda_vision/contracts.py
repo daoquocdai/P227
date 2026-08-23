@@ -1,15 +1,16 @@
 """Stable public data contracts emitted by a Vision session."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import numpy as np
 
 
-class BBoxCoordinateSpace(str, Enum):
+class BBoxCoordinateSpace(StrEnum):
     SOURCE_PIXELS = "source_pixels"
 
 
@@ -113,15 +114,13 @@ class FrameTransform:
 
     @property
     def scale(self) -> float:
-        return min(self.inference_width / self.source_width,
-                   self.inference_height / self.source_height)
+        return min(self.inference_width / self.source_width, self.inference_height / self.source_height)
 
     @property
     def padding(self) -> tuple[int, int]:
         resized_width = int(self.source_width * self.scale)
         resized_height = int(self.source_height * self.scale)
-        return ((self.inference_width - resized_width) // 2,
-                (self.inference_height - resized_height) // 2)
+        return ((self.inference_width - resized_width) // 2, (self.inference_height - resized_height) // 2)
 
     def bbox_to_source(self, bbox: tuple[int, int, int, int] | None):
         if bbox is None:
@@ -129,10 +128,14 @@ class FrameTransform:
         pad_x, pad_y = self.padding
         x1, y1, x2, y2 = bbox
         mapped = (
-            round((x1 - pad_x) / self.scale), round((y1 - pad_y) / self.scale),
-            round((x2 - pad_x) / self.scale), round((y2 - pad_y) / self.scale),
+            round((x1 - pad_x) / self.scale),
+            round((y1 - pad_y) / self.scale),
+            round((x2 - pad_x) / self.scale),
+            round((y2 - pad_y) / self.scale),
         )
-        return (max(0, min(self.source_width, mapped[0])),
-                max(0, min(self.source_height, mapped[1])),
-                max(0, min(self.source_width, mapped[2])),
-                max(0, min(self.source_height, mapped[3])))
+        return (
+            max(0, min(self.source_width, mapped[0])),
+            max(0, min(self.source_height, mapped[1])),
+            max(0, min(self.source_width, mapped[2])),
+            max(0, min(self.source_height, mapped[3])),
+        )

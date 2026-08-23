@@ -15,8 +15,12 @@ nhất khi API thay đổi.
 | `POST` | `/api/v1/auth/change-password` | Đổi mật khẩu hiện tại |
 | `POST` | `/api/v1/auth/logout` | Thu hồi session; trả `204` |
 
-Endpoint cần đăng nhập nhận `Authorization: Bearer <token>`. Token sai trả
-`401`; tài khoản bị vô hiệu hóa hoặc thiếu quyền trả `403`.
+Frontend yêu cầu login cho toàn UI. Trong backend hiện tại, auth dependency chỉ
+được gắn trực tiếp vào `/auth/me`, `/auth/change-password` và endpoint
+admin-only `/statistics`; các router Camera/Alert/Person/Settings chưa enforce
+Bearer auth. Đây là contract code hiện tại, không phải khuyến nghị security.
+Token sai trả `401`; tài khoản bị vô hiệu hóa hoặc thiếu quyền trả `403` tại
+những endpoint có dependency.
 
 ## Cameras
 

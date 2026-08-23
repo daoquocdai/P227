@@ -139,7 +139,7 @@ Thumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 /tests/.tmp/
-/data/vision-cache/
+
 # Archives / temporary source bundles
 *.zip
 *.7z
@@ -152,5 +152,4 @@ SDA-GCN/work_dir/identity_cache/
 SDA-GCN/work_dir/runtime_cache/
 
 # Local model/cache artifacts
-*.engine
-*.bin
+SDA-GCN/**/*.bin

@@ -1,14 +1,15 @@
 # Gate 1 — GuardianCam Local Hub
 
-> Đây là artifact yêu cầu/scope của Gate 1 nên các cụm “V1” trong tài liệu này
-> chỉ phiên bản sản phẩm tại thời điểm Gate 1. Trạng thái runtime hiện hành,
-> với canonical Vision, được mô tả tại [architecture.md](architecture.md),
+> **HISTORICAL / SUPERSEDED DESIGN:** Đây là artifact yêu cầu/scope của Gate 1.
+> Các sơ đồ, `CameraRuntime`, YOLO và `requirements.txt` bên dưới mô tả thiết kế
+> hoặc bằng chứng lịch sử, không phải production architecture hiện tại. Trạng
+> thái runtime hiện hành được mô tả tại [architecture.md](architecture.md),
 > [setup.md](setup.md) và [testing.md](testing.md).
 
 > **Gate 1 submission:** Brief + PRD + Wireframe/UI Flow + GitHub Repo & AI Log Setup.
 
-> **Current implementation update:** raw frames được publish theo source cadence;
-> canonical Vision nhận even source frames qua `LatestFrameSlot` capacity 1.
+> **Current implementation pointer:** raw frames được publish theo source cadence;
+> SDA `VisionSession` đọc latest source snapshot theo scheduler 15 Hz mặc định.
 > Temporal AI dùng source/capture timestamps, Fall luôn ON khi Vision ON, và
 > Identity là camera-level Unknown workflow. Chi tiết hiện hành nằm trong các
 > tài liệu kỹ thuật được link phía trên.

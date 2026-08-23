@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from pathlib import Path
-import threading
 
 import numpy as np
 
@@ -39,6 +39,7 @@ class FaceEncoder:
         if not image_bytes or len(image_bytes) > 10 * 1024 * 1024:
             raise FaceEncodingError("Face image must be between 1 byte and 10 MB")
         import cv2
+
         image = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
         if image is None or image.ndim != 3:
             raise FaceEncodingError("Face image is invalid or unsupported")
@@ -66,22 +67,22 @@ class FaceEncoder:
         present = {item.name for item in model_dir.glob("*.onnx")} if model_dir.is_dir() else set()
         missing = sorted(required - present)
         if missing:
-            raise FaceEncodingError(
-                f"Missing local InsightFace buffalo_l resources: {', '.join(missing)}")
+            raise FaceEncodingError(f"Missing local InsightFace buffalo_l resources: {', '.join(missing)}")
         try:
             import onnxruntime as ort
             from insightface.app import FaceAnalysis
         except ImportError as exc:
             raise FaceEncodingError(f"InsightFace runtime is unavailable: {exc}") from exc
-        face_spec = resolve_face_providers(
-            self.config.device, probe_capabilities(), ort.get_available_providers())
+        face_spec = resolve_face_providers(self.config.device, probe_capabilities(), ort.get_available_providers())
         providers = list(face_spec.providers)
         app = FaceAnalysis(
-            name="buffalo_l", root=str(root),
-            allowed_modules=["detection", "recognition"], providers=providers)
+            name="buffalo_l", root=str(root), allowed_modules=["detection", "recognition"], providers=providers
+        )
         primary = providers[0][0] if isinstance(providers[0], tuple) else providers[0]
-        app.prepare(ctx_id=-1 if primary == "CPUExecutionProvider" else 0,
-                    det_size=(self.config.detector_size, self.config.detector_size))
+        app.prepare(
+            ctx_id=-1 if primary == "CPUExecutionProvider" else 0,
+            det_size=(self.config.detector_size, self.config.detector_size),
+        )
         effective = []
         for model in getattr(app, "models", {}).values():
             session = getattr(model, "session", None)

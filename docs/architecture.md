@@ -1,6 +1,6 @@
 # Kiến trúc kỹ thuật GuardianCam Local Hub
 
-Tài liệu này mô tả production runtime hiện tại trên nhánh `develop`. FastAPI
+Tài liệu này mô tả production runtime trong current checkout. FastAPI
 tích hợp public package `SDA-GCN/sda_vision` qua
 `src/integrations/sda_vision.py`. `src/vision` và `VisionManager` chỉ còn là
 explicit model-free test seam, không phải production path.
@@ -98,6 +98,12 @@ SQLite rỗng. Filesystem/NPZ chỉ thuộc SDA CLI standalone.
 Identity OFF được persist trước, dừng/reset Identity stage và chặn Unknown
 event/metadata trước persistence. Fall Detection không phụ thuộc Identity.
 
+Identity state là `UNVERIFIED`, `KNOWN`, `UNKNOWN`, `LOCKED_KNOWN`,
+`LOCKED_UNKNOWN`. Mặc định recognition threshold là cosine 0.45; Known lock
+ngay, Unknown lock sau 3 usable-face mismatches với retry 1 giây, revalidate
+locked Unknown sau 15 giây và reset presence sau 1,5 giây vắng. Không tìm thấy
+khuôn mặt dùng được là inconclusive, không phải mismatch.
+
 ## 7. Event, policy và snapshot
 
 ```text
@@ -111,7 +117,14 @@ VisionFrameResult
   -> SQLite -> SSE
 ```
 
-Unknown candidates cùng camera/epoch/track được coalesce. Nếu queue đầy,
+ProductPolicy chỉ xét Unknown khi có track/association,
+`LOCKED_UNKNOWN` và `identity_face_verified=true`. Nó đọc live threshold SQLite
+(mặc định stranger 78%, fall 72%); mismatch score là
+`1 - clamp(cosine similarity, 0, 1)`, không phải probability. Unknown/Fall có
+cooldown mặc định 60 giây, và Fall suppress Unknown notification gần đó.
+
+Unknown candidates cùng camera/epoch/track được coalesce ở pending và inflight.
+Semantic queue được phục vụ trước repeated candidates. Nếu semantic queue đầy,
 semantic event vẫn được dispatch nhưng có thể không có snapshot. Privacy worker
 chỉ lưu bằng chứng khi tạo được vùng blur an toàn. Snapshot/media lỗi không
 rollback event/alert và không chặn SSE. `EventService` persist trước broadcast;
