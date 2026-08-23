@@ -39,7 +39,7 @@ class AlertAgentOrchestrator:
 
     @property
     def enabled(self) -> bool:
-        return self.settings.alert_agent_enabled and bool(self.settings.openai_api_key)
+        return self.settings.alert_agent_enabled
 
     @property
     def queue_capacity(self) -> int:
@@ -49,16 +49,23 @@ class AlertAgentOrchestrator:
         self._queue = asyncio.Queue(maxsize=self.queue_capacity)
         self._accepting = True
         if not self.enabled:
-            logger.warning("Alert Agent disabled or OPENAI_API_KEY unavailable; baseline alerts remain active")
+            logger.warning("Alert Agent disabled; baseline alerts remain active")
             return
         if self.provider is None:
-            self.provider = OpenAIAlertAgentProvider(
-                api_key=self.settings.openai_api_key,
-                model=self.settings.alert_agent_model,
-                timeout_seconds=self.settings.alert_agent_timeout_seconds,
-                max_tool_steps=self.settings.alert_agent_max_tool_steps,
-            )
+            if self.settings.openai_api_key:
+                self.provider = OpenAIAlertAgentProvider(
+                    api_key=self.settings.openai_api_key,
+                    model=self.settings.alert_agent_model,
+                    timeout_seconds=self.settings.alert_agent_timeout_seconds,
+                    max_tool_steps=self.settings.alert_agent_max_tool_steps,
+                )
+            else:
+                from src.agents.alert_provider import DeterministicAlertAgentProvider
+
+                self.provider = DeterministicAlertAgentProvider()
+                logger.info("Using DeterministicAlertAgentProvider for local triage")
         self._consumer = asyncio.create_task(self._consume(), name="alert-agent-consumer")
+
 
     def enqueue(
         self, incident_id: str, external_event_id: str, alert_id: str, event_type: str, incident_version: int

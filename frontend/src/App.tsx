@@ -11,6 +11,8 @@ import { fetchAlerts } from "./features/alerts/alertService";
 import { API_BASE_URL } from "./api/client";
 import { logout, me, type AuthUser } from "./api/auth";
 import LoginPage from "./pages/LoginPage";
+import AgentChatWidget from "./components/AgentChatWidget";
+
 
 const navItems = [
   { label: "Tổng quan", path: "/", icon: Home, badge: undefined },
@@ -87,7 +89,8 @@ function DashboardApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
       <header className="topbar"><button className="icon-button menu-button" onClick={() => setMobileOpen(true)} aria-label="Mở menu"><Menu /></button><div className="topbar-spacer" />{activePath === "/alerts" && <span className="topbar-protection"><ShieldCheck /> Đang bảo vệ</span>}<div className="profile"><span className="avatar small">{user.name[0]}</span><span><strong>{user.name}</strong><small>{user.role === "admin" ? "Quản trị viên" : "Người chăm sóc"}</small></span></div><button className="logout-button" onClick={onLogout} title="Đăng xuất"><LogOut /><span>Đăng xuất</span></button></header>
       <div className={`route-content ${activeNav === "Tổng quan" ? "overview-route" : ""} ${activePath === "/history" ? "history-route" : ""} ${activePath === "/family" ? "family-route" : ""}`} key={`${activePath}-${routeRevision}`}><RouteContent path={activePath} /></div>
     </main>
-    {isMobileLayout && <nav className="mobile-bottom-nav" aria-label="Điều hướng nhanh trên điện thoại">{navItems.slice(0,4).map(({ label,path,icon:Icon }) => { const badge = path === "/alerts" ? unreadAlerts : 0; return <a key={path} href={path} className={activePath === path ? "active" : ""} onClick={(event) => { event.preventDefault(); navigate(path); }} aria-current={activePath === path ? "page" : undefined}><span className="mobile-nav-icon"><Icon />{badge > 0 ? <span className="mobile-nav-badge">{badge > 99 ? "99+" : badge}</span> : null}</span><span>{label}</span></a>; })}</nav>}
+    {isMobileLayout && <nav className="mobile-bottom-nav" aria-label="Điều hướng nhanh trên điện thoại">{navItems.slice(0, 4).map(({ label, path, icon: Icon }) => { const badge = path === "/alerts" ? unreadAlerts : 0; return <a key={path} href={path} className={activePath === path ? "active" : ""} onClick={(event) => { event.preventDefault(); navigate(path); }} aria-current={activePath === path ? "page" : undefined}><span className="mobile-nav-icon"><Icon />{badge > 0 ? <span className="mobile-nav-badge">{badge > 99 ? "99+" : badge}</span> : null}</span><span>{label}</span></a>; })}</nav>}
+    <AgentChatWidget />
   </div>;
 }
 
