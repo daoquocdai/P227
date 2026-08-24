@@ -119,9 +119,7 @@ class VisionManager:
             "last_result": None if result is None else asdict(result),
             "current_error": current_error,
             "last_error": last_error,
-            "identity_enabled": bool(
-                session and session.state.get("vision_identity_enabled", False)
-            ),
+            "identity_enabled": bool(session and session.state.get("vision_identity_enabled", False)),
             "event_dispatch": dispatch_status,
             "temporal": self._temporal_status(camera_id),
         }

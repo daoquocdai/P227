@@ -13,8 +13,8 @@ bằng chứng được lưu cục bộ trong SQLite/snapshot storage.
 - Camera và trạng thái Camera/Vision/Identity được lưu trong SQLite và tự khôi
   phục khi backend khởi động.
 - Raw MJPEG chạy theo source cadence, độc lập với tốc độ Vision.
-- Production dùng một pipeline canonical trong `src/vision`: YOLO,
-  MediaPipe Pose, SDA-GCN năm lớp và InsightFace tùy chọn.
+- Production dùng reusable `SDA-GCN/sda_vision`; FastAPI chỉ truy cập Vision
+  qua `src/integrations/sda_vision.py`.
 - Một capacity-one latest-frame slot cho mỗi camera giữ latency bounded khi
   inference chậm; không có queue/backlog trước Vision.
 - Video file dùng media/source timestamp; camera live dùng monotonic capture
@@ -23,15 +23,24 @@ bằng chứng được lưu cục bộ trong SQLite/snapshot storage.
   presentation. `Phát hiện người lạ` điều khiển toàn bộ identity workflow.
 - Event snapshot lấy đúng event frame và chỉ được lưu khi privacy blur an toàn.
 - Event/alert vẫn được lưu và phát SSE nếu snapshot hoặc media metadata lỗi.
-- CUDA được ưu tiên khi có; tiếp theo là OpenVINO Intel GPU; cuối cùng CPU.
-  InsightFace dùng DirectML hoặc CPU theo provider thực tế.
+- Action auto-selection thử NVIDIA CUDA, AMD ROCm/Windows DirectML, Intel
+  OpenVINO GPU, rồi CPU. Identity được resolve độc lập qua CUDAExecutionProvider,
+  Windows DirectML hoặc CPU theo capability thực tế.
+
+## Vấn đề, người dùng và luồng sản phẩm
+
+GuardianCam hỗ trợ gia đình/người chăm sóc không thể theo dõi camera liên tục.
+Người dùng đăng nhập, chọn camera, bật source và Vision, xem raw stream, nhận
+cảnh báo Fall/Unknown, rồi review trong Alerts/History. Family quản lý gallery
+người thân; Settings quản lý camera, threshold và tài khoản. Statistics chỉ
+dành cho admin. Repository không cung cấp số liệu thị trường đã kiểm chứng.
 
 ## Stack
 
 | Thành phần | Công nghệ |
 |---|---|
-| Vision | Ultralytics YOLO, MediaPipe, SDA-GCN, InsightFace |
-| Accelerator | CUDA, OpenVINO Intel GPU, ONNX Runtime DirectML, CPU fallback |
+| Vision | MediaPipe Pose, SDA-GCN, optional InsightFace |
+| Accelerator | CUDA, ROCm, DirectML, OpenVINO Intel GPU, CPU |
 | Backend | Python 3.11, FastAPI, Uvicorn, SSE |
 | Frontend | React, TypeScript, Vite |
 | Persistence | SQLite, local snapshot files |
@@ -43,7 +52,7 @@ bằng chứng được lưu cục bộ trong SQLite/snapshot storage.
 - Node.js 20+.
 - Windows 10/11 hoặc Linux 64-bit.
 - Webcam, video local hoặc RTSP nếu dùng source thật.
-- Các model canonical trong `src/vision`.
+- Model/runtime assets do package `sda_vision` sở hữu.
 - InsightFace `buffalo_l` chỉ khi bật Identity.
 
 ## Cài nhanh trên Windows
@@ -58,6 +67,8 @@ python -m venv .venv
 python -m pip install --upgrade pip
 python -m pip install -r requirements/vision-intel.txt
 python -m pip install --no-deps -r requirements/vision-identity.txt
+python -m pip install -e .\SDA-GCN
+python -m pip install -r requirements/dev.txt
 cd frontend
 npm.cmd ci
 cd ..
@@ -70,14 +81,16 @@ Chọn đúng dependency profile:
 |---|---|
 | Intel Iris Xe / Windows | `requirements/vision-intel.txt` |
 | NVIDIA CUDA 12.4 | `requirements/vision-cuda.txt` |
-| CPU/Docker | `requirements/vision-cpu.txt` |
+| AMD / Windows DirectML | `requirements/vision-amd.txt` |
+| CPU | `requirements/vision-cpu.txt` |
 | Identity, cài sau profile với `--no-deps` | `requirements/vision-identity.txt` |
 | Backend/test không chạy Real Vision | `requirements/base.txt` |
 
 Repo không dùng `requirements.txt` chung vì Torch và ONNX Runtime phải khớp
 hardware. Luôn cài đúng một `vision-*.txt`, sau đó cài
-`vision-identity.txt` với `--no-deps` như Quickstart; `requirements/base.txt`
-không đủ để chạy Real Vision.
+`vision-identity.txt` với `--no-deps` như Quickstart. Cài thêm
+`requirements/dev.txt` nếu cần chạy pytest/Ruff; `requirements/base.txt` không
+đủ để chạy Real Vision.
 
 ## Cấu hình
 
@@ -86,35 +99,26 @@ Copy `.env.example` thành `.env`. Cấu hình Vision chính:
 ```dotenv
 DATABASE_URL=sqlite:///./data/app.db
 
-VISION_ENGINE=canonical
+VISION_ENGINE=sda
 VISION_DEVICE=auto
-VISION_YOLO_PATH=yolov8n.pt
-VISION_CONFIG_PATH=../../SDA-GCN/config/production.yaml
-VISION_CHECKPOINT_PATH=../../SDA-GCN/weights/fall-detection-joint.pt
-VISION_MODEL_CACHE_DIR=data/vision-cache
 
 VISION_IDENTITY_ENABLED=false
 VISION_IDENTITY_PROVIDER=auto
 VISION_INSIGHTFACE_ROOT=~/.insightface
 ```
 
-- `VISION_ENGINE=canonical` là production path; `mock` chỉ dùng cho test/smoke.
-- `VISION_DEVICE=auto` chọn CUDA → OpenVINO Intel GPU → CPU và log runtime thật.
+- `VISION_ENGINE=sda` là production path duy nhất được cấu hình hỗ trợ.
+- `VISION_DEVICE=auto` chọn NVIDIA CUDA → AMD ROCm/Windows DirectML → Intel
+  OpenVINO GPU → CPU và log runtime thật. Chọn accelerator thủ công không khả
+  dụng sẽ báo lỗi thay vì âm thầm fallback.
 - Giữ `VISION_IDENTITY_ENABLED=false` nếu chưa có
   `<VISION_INSIGHTFACE_ROOT>/models/buffalo_l/`.
-- Known-person production lấy từ `persons`/`face_profiles` trong database qua
-  `FaceGallery`, không cần cấu hình thư mục ảnh thủ công.
-- Các biến temporal target-rate/buffer cũ không điều khiển canonical production
-  path hiện tại.
+- Integrated Identity dùng `persons` và `face_profiles` trong SQLite làm nguồn
+  dữ liệu. Filesystem/NPZ chỉ còn dành cho SDA CLI standalone.
+- Các biến temporal target-rate/buffer cũ không điều khiển SDA production path.
 - Không commit `.env`, credential, database, snapshots hoặc dữ liệu sinh trắc.
 
-Model bắt buộc:
-
-```text
-src/vision/yolov8n.pt
-SDA-GCN/config/production.yaml
-SDA-GCN/weights/fall-detection-joint.pt
-```
+FastAPI truy cập SDA runtime qua `src/integrations/sda_vision.py`.
 
 ## Chạy ứng dụng
 
@@ -142,15 +146,23 @@ endpoint nghĩa là backend không listen, không phải một API riêng trả 
 
 ## Kiến trúc runtime
 
+### Nguồn Identity gallery
+
+FastAPI tích hợp dùng SQLite `persons` và `face_profiles` làm source of truth.
+Backend phát snapshot có version gồm `person_id`, tên và embedding tới các SDA
+session khi startup và sau mutation Family; runtime không giữ ảnh enrollment.
+
+CLI standalone `SDA-GCN/realtime.py` vẫn dùng `register face/` và NPZ cache.
+Integrated session luôn chọn supplied-gallery rõ ràng và không fallback sang
+filesystem, kể cả khi SQLite gallery rỗng.
+
 ```mermaid
 flowchart LR
-    SOURCE[Webcam / Video / RTSP] --> CAPTURE[CameraRuntime]
-    CAPTURE --> RAW[Raw FrameHub]
+    SOURCE[Webcam / Video / RTSP] --> SDA[sda_vision source + 15 Hz Vision]
+    SDA --> RAW[Raw FrameHub]
     RAW --> STREAM[MJPEG / Preview]
-    CAPTURE --> SLOT[LatestFrameSlot capacity 1]
-    SLOT --> VISION[SynchronousVisionManager worker]
-    VISION --> PIPE[YOLO + Pose + SDA-GCN + Identity]
-    PIPE --> POLICY[VisionProductPolicy]
+    SDA --> ADAPTER[src/integrations/sda_vision.py]
+    ADAPTER --> POLICY[VisionProductPolicy]
     POLICY --> SNAP[Exact-frame privacy snapshot]
     SNAP --> PROCESSED[Processed FrameHub]
     POLICY --> DISPATCH[Thread-safe dispatcher]
@@ -175,15 +187,22 @@ inference riêng.
 | Hiện khung OFF | Chỉ ẩn bbox/overlay; inference và event vẫn chạy |
 | Phát hiện người lạ OFF | Tắt identity inference/retry/event/overlay; Fall không đổi |
 
-Unknown cần 5 face+embedding observations hợp lệ, cách nhau tối thiểu 1 giây
-source time. Face miss không tăng confirmation count. Unknown score trên UI là:
+Identity dùng các state `UNVERIFIED`, `KNOWN`, `UNKNOWN`, `LOCKED_KNOWN` và
+`LOCKED_UNKNOWN`. Known hợp lệ lock ngay; Unknown lock sau 3 lần mismatch có
+khuôn mặt dùng được, retry mỗi 1 giây source time. `LOCKED_UNKNOWN` được kiểm
+tra lại mỗi 15 giây và presence vắng 1,5 giây sẽ reset. Face miss là inconclusive
+và không tăng attempt. Recognition threshold nội bộ mặc định là cosine `0.45`.
+Unknown score ở ProductPolicy là:
 
 ```text
 Mức độ không khớp = 1 - clamp(closest known cosine similarity, 0, 1)
 ```
 
-Đây không phải calibrated probability. `general.stranger_threshold` được đọc
-từ database và áp dụng live, không cần restart.
+Đây không phải calibrated probability. Product threshold
+`general.stranger_threshold` mặc định 78% được đọc live từ SQLite và khác với
+recognition threshold `0.45`; fall threshold mặc định là 72%. Fall và Unknown
+có cooldown 60 giây; một Fall gần nhất cũng suppress notification Unknown trong
+60 giây cho cùng camera/epoch.
 
 ## API chính
 
@@ -304,19 +323,18 @@ Mock tests không thay thế native runtime smoke.
 
 ```text
 P-227/
-├── src/                    # Production backend và canonical Vision
+├── src/                    # Production backend và SDA integration
 ├── frontend/               # React/Vite UI
 ├── database/schema.sql     # SQLite schema
 ├── tests/                  # API/service/Vision regressions
 ├── docs/                   # Tài liệu kỹ thuật
 ├── SDA-GCN/                # Model, preprocessing, config, weight và public runtime
-├── tools/                  # Benchmark utilities
 ├── data/app.db             # Runtime data, không commit
 └── snapshots/              # Event evidence, không commit
 ```
 
-`src/vision/sda_gcn.py` là integration boundary duy nhất giữa pipeline và
-subsystem `SDA-GCN/`. Fall confirmation, cooldown và event vẫn thuộc P-227.
+`src/integrations/sda_vision.py` là integration boundary giữa FastAPI runtime
+và public package `SDA-GCN/sda_vision`.
 
 ## Privacy và persistence
 
@@ -329,6 +347,22 @@ subsystem `SDA-GCN/`. Fall confirmation, cooldown và event vẫn thuộc P-227.
 - SQLite, snapshot và face embedding là dữ liệu nhạy cảm; backup database và
   snapshot cùng nhau.
 
+## Hỗ trợ, giới hạn và trạng thái bàn giao
+
+- Native Windows là đường khuyến nghị cho webcam và GPU. Docker hiện tại là
+  CPU-only; Docker Desktop/Windows không được cấu hình để bảo đảm USB webcam
+  passthrough.
+- Capability probe kiểm tra provider/device dùng được; package đã cài không tự
+  chứng minh GPU hoạt động. Repository không chứa bằng chứng AMD đã được kiểm
+  thử vật lý trên mọi cấu hình.
+- Snapshot là optional và fail-closed; GuardianCam không phải hệ thống an toàn
+  sinh mạng hay dịch vụ khẩn cấp.
+- Source code, README, architecture, setup, API và testing docs có trong repo.
+  Không có bằng chứng repository cho Live URL, pitch deck, video demo hoặc kết
+  quả evaluation, nên các deliverable đó không được tuyên bố hoàn tất.
+- Thông tin thành viên/Student ID không có nguồn đáng tin trong repository nên
+  không được suy đoán trong mục Team.
+
 ## Tài liệu
 
 - [Quickstart](QUICKSTART.md)
@@ -337,10 +371,4 @@ subsystem `SDA-GCN/`. Fall confirmation, cooldown và event vẫn thuộc P-227.
 - [Architecture diagrams](docs/architecture_diagram.md)
 - [API](docs/api.md)
 - [Testing](docs/testing.md)
-- [Current implementation verification](docs/current-verification.md)
-- [Historical Intel benchmark](docs/vision-benchmark.md)
 - [Gate 1 report](docs/Gate1.md)
-
-## License
-
-Phần Vision tích hợp sử dụng giấy phép tại [src/vision/LICENSE](src/vision/LICENSE).

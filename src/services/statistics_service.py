@@ -246,9 +246,7 @@ class StatisticsService:
                 "name": row["name"],
                 "location": row["location_label"],
                 "alert_count": row["alert_count"],
-                "false_alarm_rate": (
-                    row["false_count"] / row["reviewed_count"] if row["reviewed_count"] else None
-                ),
+                "false_alarm_rate": (row["false_count"] / row["reviewed_count"] if row["reviewed_count"] else None),
             }
             for row in rows
         ]
@@ -359,9 +357,7 @@ class StatisticsService:
                     "vision_status": vision_status,
                     "vision_fps": realtime.get("vision_fps") if vision_enabled and processed >= 2 else None,
                     "vision_processing_latency_ms": (
-                        realtime.get("vision_processing_latency_ms")
-                        if vision_enabled and processed >= 1
-                        else None
+                        realtime.get("vision_processing_latency_ms") if vision_enabled and processed >= 1 else None
                     ),
                     "vision_drop_ratio": (
                         realtime.get("vision_drop_ratio") if vision_enabled and offered > 0 else None
@@ -502,9 +498,7 @@ class StatisticsService:
             if camera["max_pending"] is not None and camera["max_pending"] > 1:
                 reasons.append("Hàng đợi Vision vượt giới hạn 1")
             if reasons:
-                alerts.append(
-                    {"scope": "camera", "id": camera["id"], "name": camera["name"], "reasons": reasons}
-                )
+                alerts.append({"scope": "camera", "id": camera["id"], "name": camera["name"], "reasons": reasons})
         return alerts
 
 

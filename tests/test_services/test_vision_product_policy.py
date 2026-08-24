@@ -4,6 +4,7 @@ import time
 import numpy as np
 import pytest
 
+from src.config import get_settings
 from src.database import database_connection
 from src.models.frame import FramePacket
 from src.models.vision import VisionDetection, VisionEvent, VisionResult
@@ -33,6 +34,7 @@ def result(*, confidence=0.9, similarity=0.1, state="LOCKED_UNKNOWN"):
                     "identity_similarity": similarity,
                     "identity_state": state,
                     "identity_face_detected": True,
+                    "identity_face_verified": True,
                 },
             )
         ],
@@ -49,9 +51,7 @@ def unknown_result(**kwargs):
 
 def set_thresholds(stranger, fall):
     with database_connection() as connection:
-        row = connection.execute(
-            "SELECT value_json FROM system_settings WHERE setting_key = 'general'"
-        ).fetchone()
+        row = connection.execute("SELECT value_json FROM system_settings WHERE setting_key = 'general'").fetchone()
         values = json.loads(row["value_json"])
         values.update(stranger_threshold=stranger, fall_threshold=fall)
         connection.execute(
@@ -62,14 +62,10 @@ def set_thresholds(stranger, fall):
 
 def test_product_thresholds_gate_below_and_accept_equal_confidence():
     set_thresholds(stranger=80, fall=80)
-    below = VisionProductPolicy(notification_cooldown_seconds=0).apply(
-        result(confidence=0.79, similarity=0.21)
-    )
+    below = VisionProductPolicy(notification_cooldown_seconds=0).apply(result(confidence=0.79, similarity=0.21))
     assert below.events == []
 
-    equal = VisionProductPolicy(notification_cooldown_seconds=0).apply(
-        result(confidence=0.80, similarity=0.20)
-    )
+    equal = VisionProductPolicy(notification_cooldown_seconds=0).apply(result(confidence=0.80, similarity=0.20))
     assert {event.type for event in equal.events} == {"fall_confirmed", "unknown_person"}
 
 
@@ -83,9 +79,7 @@ def test_product_thresholds_gate_below_and_accept_equal_confidence():
         (1.25, 0.0),
     ],
 )
-def test_unknown_mismatch_score_is_one_minus_clamped_cosine_similarity(
-    similarity, expected_mismatch
-):
+def test_unknown_mismatch_score_is_one_minus_clamped_cosine_similarity(similarity, expected_mismatch):
     set_thresholds(stranger=0, fall=100)
     vision_result = result(confidence=0.0, similarity=similarity)
 
@@ -100,9 +94,7 @@ def test_unknown_requires_final_retry_state_and_has_cooldown():
     set_thresholds(stranger=78, fall=72)
     now = [100.0]
     policy = VisionProductPolicy(unknown_cooldown_seconds=60, clock=lambda: now[0])
-    assert not any(
-        event.type == "unknown_person" for event in policy.apply(unknown_result(state="PENDING")).events
-    )
+    assert not any(event.type == "unknown_person" for event in policy.apply(unknown_result(state="PENDING")).events)
     assert sum(event.type == "unknown_person" for event in policy.apply(unknown_result()).events) == 1
     assert not any(event.type == "unknown_person" for event in policy.apply(unknown_result()).events)
     now[0] += 59.9
@@ -112,9 +104,6 @@ def test_unknown_requires_final_retry_state_and_has_cooldown():
 
     different_track = unknown_result()
     different_track.detections[0].track_id = 8
-    assert not any(event.type == "unknown_person" for event in policy.apply(different_track).events)
-
-    now[0] += 60
     assert sum(event.type == "unknown_person" for event in policy.apply(different_track).events) == 1
 
 
@@ -131,7 +120,7 @@ def test_feature_boundary_clears_unknown_cooldown_for_a_fresh_workflow():
     policy.clear_camera("policy-camera")
     fresh = unknown_result()
     policy.apply(fresh)
-    assert not any(event.type == "unknown_person" for event in fresh.events)
+    assert sum(event.type == "unknown_person" for event in fresh.events) == 1
 
 
 def test_default_cooldown_uses_observation_time_not_processing_wall_clock():
@@ -188,6 +177,27 @@ def test_fall_and_unknown_share_one_minute_notification_slot_per_camera():
     now[0] += 0.1
     after = policy.apply(unknown_result())
     assert [event.type for event in after.events] == ["unknown_person"]
+
+
+def test_prior_unknown_never_suppresses_higher_priority_fall():
+    set_thresholds(stranger=78, fall=72)
+    now = [0.0]
+    policy = VisionProductPolicy(clock=lambda: now[0])
+    assert [event.type for event in policy.apply(unknown_result()).events] == ["unknown_person"]
+    now[0] = 10.0
+    fall = result(similarity=1.0)
+    assert [event.type for event in policy.apply(fall).events] == ["fall_confirmed"]
+
+
+def test_unknown_requires_verified_face_not_exact_frame_face_box():
+    set_thresholds(stranger=78, fall=100)
+    unverified = unknown_result()
+    unverified.detections[0].metadata["identity_face_verified"] = False
+    assert VisionProductPolicy().apply(unverified).events == []
+
+    verified = unknown_result()
+    verified.detections[0].metadata["identity_face_detected"] = False
+    assert [event.type for event in VisionProductPolicy().apply(verified).events] == ["unknown_person"]
 
 
 def test_known_identity_never_creates_unknown_person_event():
@@ -260,7 +270,9 @@ def test_exact_frame_snapshot_reaches_database_and_unknown_is_blurred(tmp_path, 
         ).fetchone()
     assert tuple(fall_media) == ("fall", fall.metadata["snapshot_path"])
     assert tuple(unknown_media) == ("unknown_person", 1, unknown.metadata["snapshot_path"])
-    snapshot_urls = {alert["snapshot_url"] for alert in alerts if alert["event_id"] in {"policy-fall", unknown.metadata["event_id"]}}
+    snapshot_urls = {
+        alert["snapshot_url"] for alert in alerts if alert["event_id"] in {"policy-fall", unknown.metadata["event_id"]}
+    }
     assert snapshot_urls == {
         f"/snapshots/{fall.metadata['snapshot_path']}",
         f"/snapshots/{unknown.metadata['snapshot_path']}",
@@ -276,13 +288,16 @@ def test_blur_faces_changes_only_clipped_valid_face_rois():
     assert count == 1
     assert np.any(output[:9, :8] != frame[:9, :8])
     assert np.array_equal(output[10:, 10:], frame[10:, 10:])
-    assert np.array_equal(frame[10:, 10:], np.indices((20, 20)).sum(axis=0).astype(np.uint8)[10:, 10:, None].repeat(3, axis=2) * 8)
+    assert np.array_equal(
+        frame[10:, 10:], np.indices((20, 20)).sum(axis=0).astype(np.uint8)[10:, 10:, None].repeat(3, axis=2) * 8
+    )
 
 
-def test_fall_snapshot_uses_one_shot_privacy_detector_for_stale_face_bbox(tmp_path, monkeypatch):
+@pytest.mark.parametrize("event_type", ["unknown_person", "fall_confirmed"])
+def test_sensitive_snapshot_uses_one_shot_privacy_detector_for_stale_face_bbox(tmp_path, monkeypatch, event_type):
     monkeypatch.setattr(event_snapshot, "SNAPSHOT_ROOT", tmp_path)
     vision_result = result()
-    vision_result.events = [VisionEvent("fall_confirmed", 0.9, {})]
+    vision_result.events = [VisionEvent(event_type, 0.9, {})]
     vision_result.detections[0].metadata.update(
         identity_face_bbox_xyxy=[1, 1, 5, 5],
         identity_face_bbox_frame_id=vision_result.frame_id - 1,
@@ -344,6 +359,8 @@ def test_fall_event_without_a_safe_face_omits_snapshot(tmp_path, monkeypatch):
     monkeypatch.setattr(event_snapshot, "SNAPSHOT_ROOT", tmp_path)
     vision_result = result()
     vision_result.events = [VisionEvent("fall_confirmed", 0.9, {})]
+    vision_result.detections[0].bbox_xyxy = None
+    vision_result.detections[0].metadata = {}
     packet = FramePacket(
         vision_result.camera_id,
         vision_result.frame_id,
@@ -354,7 +371,192 @@ def test_fall_event_without_a_safe_face_omits_snapshot(tmp_path, monkeypatch):
     event_snapshot.attach_event_snapshots(packet, vision_result, lambda _frame: [])
 
     assert "snapshot_path" not in vision_result.events[0].metadata
+    assert vision_result.events[0].metadata["snapshot_privacy_method"] == "no_safe_snapshot"
     assert list(tmp_path.iterdir()) == []
+
+
+def test_unknown_detector_miss_uses_conservative_current_person_blur(tmp_path, monkeypatch):
+    monkeypatch.setattr(event_snapshot, "SNAPSHOT_ROOT", tmp_path)
+    vision_result = result()
+    vision_result.events = [VisionEvent("unknown_person", 0.9, {})]
+    vision_result.metadata["geometry"] = {"scale": 1.0, "pad_x": 0, "pad_y": 0}
+    vision_result.detections[0].bbox_xyxy = (4, 5, 18, 22)
+    vision_result.detections[0].metadata = {}
+    packet = FramePacket(
+        vision_result.camera_id,
+        vision_result.frame_id,
+        vision_result.captured_at,
+        np.indices((24, 24)).sum(axis=0).astype(np.uint8)[..., None].repeat(3, axis=2) * 8,
+    )
+
+    event_snapshot.attach_event_snapshots(packet, vision_result, lambda _frame: [])
+
+    event = vision_result.events[0]
+    assert event.metadata["snapshot_privacy_method"] == "conservative_person_blur"
+    assert event.metadata["snapshot_blurred"] is True
+    assert event.metadata["snapshot_blurred_faces"] == 0
+    assert event.metadata["snapshot_blurred_regions"] == 1
+    assert (tmp_path / event.metadata["snapshot_path"]).is_file()
+
+
+def test_unknown_stale_face_bbox_is_not_used_on_current_event_frame(tmp_path, monkeypatch):
+    monkeypatch.setattr(event_snapshot, "SNAPSHOT_ROOT", tmp_path)
+    vision_result = result()
+    vision_result.events = [VisionEvent("unknown_person", 0.9, {})]
+    vision_result.metadata["geometry"] = {"scale": 1.0, "pad_x": 0, "pad_y": 0}
+    vision_result.detections[0].bbox_xyxy = (2, 2, 20, 22)
+    vision_result.detections[0].metadata.update(
+        identity_face_bbox_xyxy=(3, 3, 8, 8),
+        identity_face_bbox_frame_id=vision_result.frame_id - 1,
+    )
+    packet = FramePacket(
+        vision_result.camera_id,
+        vision_result.frame_id,
+        vision_result.captured_at,
+        np.indices((24, 24)).sum(axis=0).astype(np.uint8)[..., None].repeat(3, axis=2) * 8,
+    )
+
+    event_snapshot.attach_event_snapshots(packet, vision_result, lambda _frame: [])
+
+    event = vision_result.events[0]
+    assert event.metadata["snapshot_privacy_method"] == "conservative_person_blur"
+    assert event.metadata["snapshot_blurred_regions"] == 1
+
+
+def _unsafe_event_result(event_type):
+    vision_result = result()
+    vision_result.events = [VisionEvent(event_type, 0.9, {"event_id": f"debug-{event_type}", "track_id": 7})]
+    vision_result.detections[0].bbox_xyxy = None
+    vision_result.detections[0].metadata = {}
+    return vision_result
+
+
+def _event_packet(vision_result):
+    return FramePacket(
+        vision_result.camera_id,
+        vision_result.frame_id,
+        vision_result.captured_at,
+        np.indices((24, 24)).sum(axis=0).astype(np.uint8)[..., None].repeat(3, axis=2) * 8,
+    )
+
+
+def test_debug_bypass_saves_exact_unblurred_unknown_frame(tmp_path, monkeypatch):
+    monkeypatch.setattr(event_snapshot, "SNAPSHOT_ROOT", tmp_path)
+    vision_result = _unsafe_event_result("unknown_person")
+    packet = _event_packet(vision_result)
+
+    event_snapshot.attach_event_snapshots(
+        packet,
+        vision_result,
+        lambda _frame: [],
+        allow_unblurred_event_snapshot=True,
+    )
+
+    event = vision_result.events[0]
+    assert (tmp_path / event.metadata["snapshot_path"]).is_file()
+    assert event.metadata["snapshot_blurred"] is False
+    assert event.metadata["snapshot_privacy_bypass"] is True
+    assert event.metadata["snapshot_privacy_method"] == "unblurred_debug_bypass"
+
+
+def test_debug_enabled_still_prefers_blurred_unknown_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setattr(event_snapshot, "SNAPSHOT_ROOT", tmp_path)
+    vision_result = _unsafe_event_result("unknown_person")
+    packet = _event_packet(vision_result)
+
+    event_snapshot.attach_event_snapshots(
+        packet,
+        vision_result,
+        lambda _frame: [(2, 2, 12, 12)],
+        allow_unblurred_event_snapshot=True,
+    )
+
+    event = vision_result.events[0]
+    assert event.metadata["snapshot_blurred"] is True
+    assert event.metadata["snapshot_privacy_bypass"] is False
+    assert event.metadata["snapshot_privacy_method"] == "full_frame_detector"
+
+
+@pytest.mark.parametrize("event_type", ["unknown_person", "fall_confirmed"])
+def test_debug_bypass_snapshot_persists_for_sensitive_event(event_type, tmp_path, monkeypatch):
+    monkeypatch.setenv("VISION_ALLOW_UNBLURRED_EVENT_SNAPSHOT", "true")
+    get_settings.cache_clear()
+    monkeypatch.setattr(event_snapshot, "SNAPSHOT_ROOT", tmp_path)
+    monkeypatch.setattr("src.services.media_paths.SNAPSHOT_ROOT", tmp_path)
+    vision_result = _unsafe_event_result(event_type)
+    packet = _event_packet(vision_result)
+    event_snapshot.attach_event_snapshots(
+        packet,
+        vision_result,
+        lambda _frame: [],
+        allow_unblurred_event_snapshot=True,
+    )
+    event = vision_result.events[0]
+
+    adapted = VisionEventAdapter().adapt(vision_result)[0]
+    import asyncio
+
+    accepted = asyncio.run(EventService().create(adapted))
+    assert accepted.accepted is True
+    with database_connection() as connection:
+        media = connection.execute(
+            "SELECT relative_path, is_blurred, subject_type FROM media_assets WHERE event_id = ?",
+            (stable_uuid(event.metadata["event_id"], "event"),),
+        ).fetchone()
+    assert media is not None
+    assert tuple(media) == (
+        event.metadata["snapshot_path"],
+        0,
+        "fall" if event_type == "fall_confirmed" else "scene",
+    )
+
+
+def test_repository_rejects_bypass_metadata_when_setting_is_false(tmp_path, monkeypatch):
+    monkeypatch.setenv("VISION_ALLOW_UNBLURRED_EVENT_SNAPSHOT", "false")
+    get_settings.cache_clear()
+    monkeypatch.setattr(event_snapshot, "SNAPSHOT_ROOT", tmp_path)
+    monkeypatch.setattr("src.services.media_paths.SNAPSHOT_ROOT", tmp_path)
+    vision_result = _unsafe_event_result("fall_confirmed")
+    packet = _event_packet(vision_result)
+    event_snapshot.attach_event_snapshots(
+        packet,
+        vision_result,
+        lambda _frame: [],
+        allow_unblurred_event_snapshot=True,
+    )
+
+    import asyncio
+
+    asyncio.run(EventService().create(VisionEventAdapter().adapt(vision_result)[0]))
+    with database_connection() as connection:
+        metadata = json.loads(connection.execute("SELECT metadata_json FROM events").fetchone()["metadata_json"])
+        assert connection.execute("SELECT 1 FROM media_assets").fetchone() is None
+    assert metadata["snapshot_path"] is None
+
+
+@pytest.mark.parametrize("event_type", ["unknown_person", "fall_confirmed"])
+def test_secure_default_persists_alert_but_omits_unsafe_snapshot(event_type, tmp_path, monkeypatch):
+    monkeypatch.setenv("VISION_ALLOW_UNBLURRED_EVENT_SNAPSHOT", "false")
+    get_settings.cache_clear()
+    monkeypatch.setattr(event_snapshot, "SNAPSHOT_ROOT", tmp_path)
+    monkeypatch.setattr("src.services.media_paths.SNAPSHOT_ROOT", tmp_path)
+    vision_result = _unsafe_event_result(event_type)
+    event_snapshot.attach_event_snapshots(
+        _event_packet(vision_result),
+        vision_result,
+        lambda _frame: [],
+    )
+    assert "snapshot_path" not in vision_result.events[0].metadata
+
+    import asyncio
+
+    accepted = asyncio.run(EventService().create(VisionEventAdapter().adapt(vision_result)[0]))
+    assert accepted.accepted is True
+    assert asyncio.run(EventService().list_alerts())[0]["snapshot_url"] is None
+    with database_connection() as connection:
+        assert connection.execute("SELECT 1 FROM events").fetchone()
+        assert connection.execute("SELECT 1 FROM alerts").fetchone()
+        assert connection.execute("SELECT 1 FROM media_assets").fetchone() is None
 
 
 def test_rotated_crop_boxes_map_back_to_original_frame_coordinates():
@@ -402,9 +604,7 @@ def test_pose_head_fallback_uses_exact_frame_geometry_for_horizontal_subject():
         },
     )
 
-    boxes, method = event_snapshot._privacy_boxes(
-        np.zeros((100, 100, 3), dtype=np.uint8), vision_result, [], None
-    )
+    boxes, method = event_snapshot._privacy_boxes(np.zeros((100, 100, 3), dtype=np.uint8), vision_result, [], None)
 
     assert method == "pose_head_roi"
     x1, _y1, x2, _y2 = boxes[0]
@@ -436,10 +636,13 @@ def test_event_service_rechecks_persisted_identity_gate_before_db_and_notificati
     accepted = asyncio.run(EventService().create(request))
     assert accepted.accepted is False
     with database_connection() as connection:
-        assert connection.execute(
-            "SELECT 1 FROM events WHERE id = ?",
-            (stable_uuid(unknown.metadata["event_id"], "event"),),
-        ).fetchone() is None
+        assert (
+            connection.execute(
+                "SELECT 1 FROM events WHERE id = ?",
+                (stable_uuid(unknown.metadata["event_id"], "event"),),
+            ).fetchone()
+            is None
+        )
 
 
 def test_product_policy_live_settings_read_skips_database_bootstrap(monkeypatch):

@@ -5,7 +5,7 @@ from datetime import date
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from src.services.face_identity_service import FaceEnrollmentError
+from src.services.face_embedding_encoder import FaceEnrollmentError
 from src.services.person_service import FaceProfileNotFoundError, PersonNotFoundError, person_service
 
 router = APIRouter(prefix="/persons", tags=["Persons"])

@@ -27,7 +27,12 @@ SDA-GCN/**/__pycache__
 SDA-GCN/training
 SDA-GCN/tools
 SDA-GCN/data
-SDA-GCN/work_dir
+# Keep only the production action-model contract from the research workspace.
+SDA-GCN/work_dir/**
+!SDA-GCN/work_dir/fall_detection/
+!SDA-GCN/work_dir/fall_detection/fall/
+!SDA-GCN/work_dir/fall_detection/fall/config.yaml
+!SDA-GCN/work_dir/fall_detection/fall/runs-best_val.pt
 *.db
 *.db-*
 *.sqlite*

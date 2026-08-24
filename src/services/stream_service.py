@@ -1,4 +1,7 @@
 import asyncio
+import threading
+import time
+from collections import deque
 from collections.abc import Awaitable, Callable
 
 import cv2
@@ -9,7 +12,6 @@ VISION_OVERLAY_MAX_AGE_SECONDS = 0.75
 
 
 class StreamService:
-
     def __init__(
         self,
         frame_hub: FrameHub,
@@ -20,41 +22,30 @@ class StreamService:
 
         self.frame_hub = frame_hub
 
-        self.jpeg_quality = max(
-            1,
-            min(100, jpeg_quality)
-        )
+        self.jpeg_quality = max(1, min(100, jpeg_quality))
         self.vision = vision
         self.processed_frame_hub = processed_frame_hub
+        self._jpeg_lock = threading.Lock()
+        self._jpeg_samples = deque(maxlen=2048)
 
     def latest_jpeg(self, camera_id: str) -> tuple[bytes, int] | None:
         packet = self.frame_hub.get_latest(camera_id)
         if packet is None:
             return None
-        ok, encoded = cv2.imencode(
-            ".jpg",
-            packet.frame,
-            [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality],
-        )
-        if not ok:
+        encoded = self._encode_jpeg(packet.frame)
+        if encoded is None:
             return None
-        return encoded.tobytes(), packet.frame_id
+        return encoded, packet.frame_id
 
-    def mjpeg(
-        self,
-        camera_id: str
-    ):
+    def mjpeg(self, camera_id: str):
 
         last_frame_id = -1
 
         while True:
-
-            packet = (
-                self.frame_hub.wait_for_next(
-                    camera_id=camera_id,
-                    after_frame_id=last_frame_id,
-                    timeout=2.0,
-                )
+            packet = self.frame_hub.wait_for_next(
+                camera_id=camera_id,
+                after_frame_id=last_frame_id,
+                timeout=2.0,
             )
 
             if packet is None:
@@ -62,28 +53,11 @@ class StreamService:
 
             last_frame_id = packet.frame_id
 
-            ok, encoded = cv2.imencode(
-                ".jpg",
-                packet.frame,
-                [
-                    cv2.IMWRITE_JPEG_QUALITY,
-                    self.jpeg_quality
-                ]
-            )
-
-            if not ok:
+            jpg = self._encode_jpeg(packet.frame)
+            if jpg is None:
                 continue
 
-            jpg = encoded.tobytes()
-
-            yield (
-                b"--frame\r\n"
-                b"Content-Type: image/jpeg\r\n"
-                b"Cache-Control: no-cache\r\n"
-                b"\r\n"
-                + jpg
-                + b"\r\n"
-            )
+            yield (b"--frame\r\nContent-Type: image/jpeg\r\nCache-Control: no-cache\r\n\r\n" + jpg + b"\r\n")
 
     async def mjpeg_async(
         self,
@@ -109,7 +83,7 @@ class StreamService:
             last_frame_id = packet.frame_id
             frame = packet.frame
             if self.vision is not None:
-                from src.vision.renderer import render_vision
+                from src.presentation.vision_overlay import render_vision
 
                 result = self._fresh_vision_result(packet)
                 identity_enabled = getattr(self.vision, "is_identity_enabled", None)
@@ -127,14 +101,7 @@ class StreamService:
             if encoded is None:
                 continue
 
-            yield (
-                b"--frame\r\n"
-                b"Content-Type: image/jpeg\r\n"
-                b"Cache-Control: no-cache\r\n"
-                b"\r\n"
-                + encoded
-                + b"\r\n"
-            )
+            yield (b"--frame\r\nContent-Type: image/jpeg\r\nCache-Control: no-cache\r\n\r\n" + encoded + b"\r\n")
 
     def _fresh_vision_result(self, packet):
         latest_result = getattr(self.vision, "latest_result", None)
@@ -155,9 +122,18 @@ class StreamService:
         return result
 
     def _encode_jpeg(self, frame) -> bytes | None:
+        started = time.perf_counter()
         ok, encoded = cv2.imencode(
             ".jpg",
             frame,
             [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality],
         )
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        with self._jpeg_lock:
+            self._jpeg_samples.append((time.monotonic(), elapsed_ms))
         return encoded.tobytes() if ok else None
+
+    def jpeg_profile_samples(self) -> list[tuple[float, float]]:
+        """Return bounded encode timing samples for operational profiling."""
+        with self._jpeg_lock:
+            return list(self._jpeg_samples)

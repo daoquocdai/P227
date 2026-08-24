@@ -60,7 +60,7 @@ class CameraService:
         if kind == "rtsp":
             return public_id, source_uri
 
-        relative = Path(source_uri.replace("/", str(Path('/'))))
+        relative = Path(source_uri.replace("/", str(Path("/"))))
         candidates = [Path.cwd() / relative, Path.cwd() / "frontend" / "public" / relative]
         for candidate in candidates:
             if candidate.is_file():
@@ -69,7 +69,9 @@ class CameraService:
 
     def public_id(self, camera_id: str) -> str:
         with database_connection() as connection:
-            row = connection.execute("SELECT id, name FROM cameras WHERE id = ? OR name = ?", (camera_id, camera_id)).fetchone()
+            row = connection.execute(
+                "SELECT id, name FROM cameras WHERE id = ? OR name = ?", (camera_id, camera_id)
+            ).fetchone()
             if not row:
                 raise CameraNotFoundError(camera_id)
             return self._public_id(row)

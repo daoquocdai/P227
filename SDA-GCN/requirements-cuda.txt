@@ -1,0 +1,3 @@
+# Install the PyTorch CUDA wheel appropriate for the host from pytorch.org first.
+-r requirements.txt
+onnxruntime-gpu

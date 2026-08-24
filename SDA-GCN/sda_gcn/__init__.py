@@ -1,3 +1,0 @@
-from .runtime import DEFAULT_CHECKPOINT_PATH, DEFAULT_CONFIG_PATH, SdaGcnRuntime
-
-__all__ = ["DEFAULT_CHECKPOINT_PATH", "DEFAULT_CONFIG_PATH", "SdaGcnRuntime"]

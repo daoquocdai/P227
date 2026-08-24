@@ -1,68 +1,44 @@
 from src.config import get_settings
-from src.services.camera_runtime import CameraRuntime
 from src.services.camera_service import CameraNotFoundError, camera_service
-from src.services.face_identity_service import face_gallery
 from src.services.frame_hub import FrameHub
 from src.services.stream_service import StreamService
-from src.services.synchronous_vision_manager import SynchronousVisionManager
-from src.services.vision_manager import VisionManager
-from src.vision.adapters.mock import MockVisionEngine
-from src.vision.pipeline import CanonicalVisionPipeline
-
-
-def build_vision_engine(settings, mock_event_frame_ids: set[int] | None = None):
-    if settings.vision_engine == "mock":
-        return MockVisionEngine(emit_event_on_frame_ids=mock_event_frame_ids)
-
-    return CanonicalVisionPipeline(
-        yolo_path=settings.vision_yolo_path,
-        config_path=settings.vision_config_path,
-        checkpoint_path=settings.vision_checkpoint_path,
-        model_cache_dir=settings.vision_model_cache_dir,
-        known_faces_dir=settings.vision_known_faces_dir,
-        identity_enabled=settings.vision_identity_enabled,
-        identity_provider=settings.vision_identity_provider,
-        insightface_root=settings.vision_insightface_root,
-        device=settings.vision_device,
-        face_gallery=face_gallery,
-    )
 
 
 class LocalRuntime:
-
     def __init__(
         self,
         vision_engine=None,
         event_dispatcher=None,
-        mock_event_frame_ids: set[int] | None = None,
     ):
 
-        engine = vision_engine
-        sample_buffer = None
-        if engine is None:
-            settings = get_settings()
-            engine = build_vision_engine(settings, mock_event_frame_ids)
-
+        settings = get_settings()
         self.frame_hub = FrameHub()
         self.processed_frame_hub = FrameHub()
-        self.vision_sample_buffer = sample_buffer
+        if vision_engine is None:
+            from src.integrations.sda_vision import SdaCameraFacade, SdaSessionRegistry, SdaVisionFacade
 
-        if get_settings().vision_engine == "mock" or vision_engine is not None:
-            self.camera = CameraRuntime(self.frame_hub)
-            self.vision = VisionManager(
-                frame_hub=self.frame_hub,
-                engine=engine,
+            self.sda = SdaSessionRegistry(
+                self.frame_hub,
+                settings=settings,
                 event_dispatcher=event_dispatcher,
             )
+            from src.integrations.sda_identity import SdaGalleryPublisher
+            from src.services.face_gallery_provider import face_gallery_coordinator
+
+            self._face_gallery_coordinator = face_gallery_coordinator
+            self._sda_gallery_publisher = SdaGalleryPublisher(self.sda)
+            self._face_gallery_coordinator.set_publisher(self._sda_gallery_publisher)
+            self._face_gallery_coordinator.refresh_after_commit()
+            self.camera = SdaCameraFacade(self.sda)
+            self.vision = SdaVisionFacade(self.sda)
         else:
-            self.vision = SynchronousVisionManager(
-                engine,
-                event_dispatcher,
-                processed_frame_hub=self.processed_frame_hub,
-            )
-            self.camera = CameraRuntime(
-                self.frame_hub,
-                vision_processor=self.vision.process,
+            # Explicit model-free test seam; production always uses SDA.
+            from src.services.camera_runtime import CameraRuntime
+            from src.services.vision_manager import VisionManager
+
+            self.camera = CameraRuntime(self.frame_hub)
+            self.vision = VisionManager(
+                frame_hub=self.frame_hub, engine=vision_engine, event_dispatcher=event_dispatcher
             )
         self.stream = StreamService(
             self.frame_hub,
@@ -97,7 +73,10 @@ class LocalRuntime:
             if loop_video is None:
                 desired = next(item for item in camera_service.desired_states() if item["id"] == public_id)
                 loop_video = desired["loop_video"]
-            return self.camera.start(public_id, source, loop_video=loop_video)
+            options = {}
+            if hasattr(self, "sda"):
+                options["location"] = camera_service.get_camera(camera_id)["location"]
+            return self.camera.start(public_id, source, loop_video=loop_video, **options)
         except (CameraNotFoundError, ValueError, OSError) as exc:
             return self.camera.set_unavailable(public_id, str(exc))
 
@@ -119,7 +98,9 @@ class LocalRuntime:
         return self.vision.get_status(public_id)
 
     def restart_camera_if_enabled(self, camera_id: str) -> None:
-        desired = next(item for item in camera_service.desired_states() if item["id"] == camera_service.public_id(camera_id))
+        desired = next(
+            item for item in camera_service.desired_states() if item["id"] == camera_service.public_id(camera_id)
+        )
         if not desired["camera_enabled"]:
             return
         public_id = desired["id"]
@@ -130,3 +111,5 @@ class LocalRuntime:
     def stop(self):
         self.camera.stop_all()
         self.vision.stop()
+        if hasattr(self, "_face_gallery_coordinator"):
+            self._face_gallery_coordinator.clear_publisher(self._sda_gallery_publisher)

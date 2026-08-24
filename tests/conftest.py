@@ -1,5 +1,3 @@
-from unittest.mock import AsyncMock
-
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -32,7 +30,7 @@ async def client(preserve_application_database, monkeypatch):
     """Async API client with native AI isolated at the application boundary."""
     monkeypatch.setattr(
         "src.main.LocalRuntime",
-        lambda event_dispatcher, mock_event_frame_ids: LocalRuntime(
+        lambda event_dispatcher: LocalRuntime(
             vision_engine=MockVisionEngine(),
             event_dispatcher=event_dispatcher,
         ),
@@ -41,17 +39,3 @@ async def client(preserve_application_database, monkeypatch):
     async with app.router.lifespan_context(app):
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             yield ac
-
-
-@pytest.fixture
-def mock_llm():
-    """Mock LLM to avoid calling OpenAI during tests.
-
-    Usage in test:
-        def test_something(mock_llm):
-            # LLM calls will return mock response instead of hitting OpenAI
-            ...
-    """
-    mock = AsyncMock()
-    mock.ainvoke.return_value = AsyncMock(content="Mocked LLM response")
-    return mock

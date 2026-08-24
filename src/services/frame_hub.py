@@ -13,9 +13,7 @@ class FrameHub:
     """
 
     def __init__(self):
-        self._condition = threading.Condition(
-            threading.RLock()
-        )
+        self._condition = threading.Condition(threading.RLock())
 
         self._frames: dict[str, FramePacket] = {}
 
@@ -35,10 +33,7 @@ class FrameHub:
 
             self._condition.notify_all()
 
-    def get_latest(
-        self,
-        camera_id: str
-    ) -> FramePacket | None:
+    def get_latest(self, camera_id: str) -> FramePacket | None:
 
         with self._condition:
             return self._frames.get(camera_id)
@@ -70,22 +65,13 @@ class FrameHub:
         Dùng cho MJPEG để không encode lặp cùng 1 frame.
         """
 
-        deadline = (
-            None
-            if timeout is None
-            else time.monotonic() + timeout
-        )
+        deadline = None if timeout is None else time.monotonic() + timeout
 
         with self._condition:
-
             while True:
-
                 packet = self._frames.get(camera_id)
 
-                if (
-                    packet is not None
-                    and packet.frame_id > after_frame_id
-                ):
+                if packet is not None and packet.frame_id > after_frame_id:
                     return packet
 
                 if deadline is None:
@@ -113,9 +99,7 @@ class FrameHub:
         deadline = time.monotonic() + timeout
 
         with self._condition:
-
             while self._version <= after_version:
-
                 remaining = deadline - time.monotonic()
 
                 if remaining <= 0:

@@ -5,9 +5,7 @@ from src.database import BUILTIN_VIDEO_CAMERA_ID, database_connection, initializ
 
 def test_metrics_migration_is_idempotent_and_preserves_existing_data():
     with database_connection() as connection:
-        password_hash = connection.execute(
-            "SELECT password_hash FROM users WHERE role = 'admin' LIMIT 1"
-        ).fetchone()[0]
+        password_hash = connection.execute("SELECT password_hash FROM users WHERE role = 'admin' LIMIT 1").fetchone()[0]
         event_id = str(uuid4())
         connection.execute(
             """INSERT INTO events
@@ -21,13 +19,11 @@ def test_metrics_migration_is_idempotent_and_preserves_existing_data():
     initialize_database()
     with database_connection() as connection:
         assert connection.execute("SELECT count(*) FROM events WHERE id = ?", (event_id,)).fetchone()[0] == 1
-        assert connection.execute(
-            "SELECT password_hash FROM users WHERE role = 'admin' LIMIT 1"
-        ).fetchone()[0] == password_hash
+        assert (
+            connection.execute("SELECT password_hash FROM users WHERE role = 'admin' LIMIT 1").fetchone()[0]
+            == password_hash
+        )
         tables = {
-            row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            ).fetchall()
+            row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
         }
     assert {"hub_metrics", "operational_camera_metrics"} <= tables

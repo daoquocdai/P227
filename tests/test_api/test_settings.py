@@ -39,9 +39,7 @@ async def test_settings_persist_users_permissions_and_camera_state(client):
     assert stopped_camera["is_active"] is False
     assert stopped_camera["operational_status"] == "offline"
 
-    vision = await client.patch(
-        f"/api/v1/settings/cameras/{camera_id}", json={"vision_enabled": True}
-    )
+    vision = await client.patch(f"/api/v1/settings/cameras/{camera_id}", json={"vision_enabled": True})
     vision_camera = next(item for item in vision.json()["cameras"] if item["id"] == camera_id)
     assert vision_camera["vision_enabled"] is True
     assert vision_camera["vision_status"] == "waiting_for_source"
@@ -72,6 +70,7 @@ async def test_stranger_threshold_update_changes_live_product_decision_without_r
                     metadata={
                         "identity_state": "LOCKED_UNKNOWN",
                         "identity_face_detected": True,
+                        "identity_face_verified": True,
                         "identity_similarity": 0.4,
                     },
                 )

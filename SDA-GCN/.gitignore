@@ -1,0 +1,37 @@
+venv/
+data/
+models/
+register face/
+Videotrain/
+Videotrain_cut1/
+web_app/
+demo/
+Datast_Split/
+Dataset_Split/
+thi/
+fix_csv.py
+merge_features.py
+split_dataset.py
+update_labels.py
+shape.py
+newdata/
+batch_inference.py
+eval_metrics.py
+# Required by sda_vision at runtime, but not provisioned by this repository.
+# Fresh environments need the approved pose model at this path.
+cut_videos.py
+find_fn.py
+none.py
+ensemble2.py
+ensemble4.py
+ensemble6.py
+run_ensemble.sh
+testvd/
+yolov8n.pt
+*.mp4
+*.MOV
+*.avi
+*.bin
+extractkpt/checkpoint/
+work_dir/runtime_cache/
+work_dir/identity_cache/

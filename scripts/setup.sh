@@ -21,6 +21,7 @@ case "$VISION_PROFILE" in
 esac
 pip install -r "requirements/vision-${VISION_PROFILE}.txt"
 pip install --no-deps -r requirements/vision-identity.txt
+pip install -e ./SDA-GCN
 
 # Create .env if not exists
 if [ ! -f .env ]; then

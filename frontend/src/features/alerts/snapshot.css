@@ -5,6 +5,10 @@
   object-fit: cover;
 }
 
+.snapshot-scene.large > img {
+  object-fit: contain;
+}
+
 .snapshot-card-missing .snapshot-scene {
   display: grid;
   place-items: center;

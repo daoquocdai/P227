@@ -143,9 +143,7 @@ class VisionWorker:
                 continue
 
             previous_epoch = session.state.get("vision_source_epoch")
-            if packet.discontinuity or (
-                previous_epoch is not None and previous_epoch != packet.source_epoch
-            ):
+            if packet.discontinuity or (previous_epoch is not None and previous_epoch != packet.source_epoch):
                 session.state.clear()
             session.state["vision_source_epoch"] = packet.source_epoch
 
@@ -181,9 +179,7 @@ class VisionWorker:
                 raise RuntimeError("OpenCV could not encode the event snapshot")
             identity = f"{packet.camera_id}:{packet.frame_id}:{packet.captured_at}".encode()
             digest = hashlib.sha256(identity).hexdigest()[:16]
-            safe_camera = "".join(
-                char if char.isalnum() or char in "-_" else "-" for char in packet.camera_id
-            )
+            safe_camera = "".join(char if char.isalnum() or char in "-_" else "-" for char in packet.camera_id)
             filename = f"vision-{safe_camera}-{packet.frame_id}-{digest}.jpg"
             SNAPSHOT_ROOT.mkdir(parents=True, exist_ok=True)
             destination = SNAPSHOT_ROOT / filename

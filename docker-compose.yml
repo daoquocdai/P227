@@ -14,7 +14,7 @@ services:
       DATABASE_URL: sqlite:///./data/app.db
       CHROMA_PERSIST_DIR: ./data/chroma
       CORS_ORIGINS: http://localhost:${FRONTEND_PORT:-5173}
-      VISION_ENGINE: ${VISION_ENGINE:-canonical}
+      VISION_ENGINE: sda
       VISION_DEVICE: cpu
       VISION_IDENTITY_ENABLED: ${VISION_IDENTITY_ENABLED:-false}
       VISION_IDENTITY_PROVIDER: cpu

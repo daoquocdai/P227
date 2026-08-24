@@ -1,4 +1,4 @@
-# Intel Iris Xe / Windows profile. OpenVINO accelerates YOLO and SDA-GCN;
+# Intel Iris Xe / Windows profile. OpenVINO accelerates SDA-GCN;
 # DirectML accelerates InsightFace. CPU wheels remain the safe Torch fallback.
 --extra-index-url https://download.pytorch.org/whl/cpu
 -r base.txt
@@ -7,5 +7,3 @@ onnxruntime-directml==1.24.4; platform_system == "Windows"
 onnxruntime==1.26.0; platform_system != "Windows"
 openvino==2026.3.0
 torch==2.5.1+cpu
-torchvision==0.20.1+cpu
-ultralytics==8.4.110

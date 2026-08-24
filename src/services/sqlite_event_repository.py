@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
+from src.config import get_settings
 from src.database import database_connection
 from src.models.schemas import AlertReviewRequest, VisionEventAccepted, VisionEventRequest
 from src.services.event_presentation import event_description
@@ -42,7 +43,11 @@ class SQLiteEventRepository:
             else None
         )
         valid_snapshot = valid_snapshot_name(event.snapshot_path)
-        if event.event_type.startswith("FALL_") and not event.metadata.get("snapshot_blurred", False):
+        privacy_bypass = bool(event.metadata.get("snapshot_privacy_bypass", False))
+        privacy_acceptable = bool(event.metadata.get("snapshot_blurred", False)) or (
+            get_settings().vision_allow_unblurred_event_snapshot and privacy_bypass
+        )
+        if event.event_type in {"UNKNOWN_PERSON", "FALL_CONFIRMED"} and not privacy_acceptable:
             valid_snapshot = None
         metadata = dict(event.metadata)
         metadata.update(
@@ -352,7 +357,16 @@ class SQLiteEventRepository:
             return
         unknown = event.event_type == "UNKNOWN_PERSON"
         privacy_blurred = bool(event.metadata.get("snapshot_blurred", False))
-        subject = "fall" if event.event_type.startswith("FALL_") else "unknown_person" if unknown else "scene"
+        privacy_bypass = bool(event.metadata.get("snapshot_privacy_bypass", False))
+        subject = (
+            "fall"
+            if event.event_type.startswith("FALL_")
+            else "scene"
+            if unknown and privacy_bypass
+            else "unknown_person"
+            if unknown
+            else "scene"
+        )
         captured = event.occurred_at.astimezone(UTC)
         settings_row = connection.execute(
             "SELECT value_json FROM system_settings WHERE setting_key = 'general'"

@@ -1,9 +1,7 @@
 # NVIDIA CUDA 12.4 profile. The same canonical pipeline/model semantics are
-# used; auto selection keeps YOLO, SDA-GCN and Face on native CUDA providers.
+# used; auto selection keeps SDA-GCN and Face on native CUDA providers.
 --extra-index-url https://download.pytorch.org/whl/cu124
 -r base.txt
 
 onnxruntime-gpu==1.26.0
 torch==2.5.1+cu124
-torchvision==0.20.1+cu124
-ultralytics==8.4.110

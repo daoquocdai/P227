@@ -21,6 +21,11 @@ RUN python -m pip install --upgrade pip setuptools wheel \
     && python -m pip install -r requirements/vision-cpu.txt \
     && python -m pip install --no-deps -r requirements/vision-identity.txt
 
+# Install the local package separately so source-only edits can reuse the
+# expensive CPU dependency layer.
+COPY SDA-GCN ./SDA-GCN
+RUN python -m pip install -e ./SDA-GCN
+
 
 FROM python:3.11-slim AS runtime
 
