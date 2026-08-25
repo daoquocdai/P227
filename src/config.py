@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
+
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -41,6 +42,11 @@ class Settings(BaseSettings):
     vision_identity_provider: Literal["auto", "cpu", "cuda", "directml"] = "auto"
     vision_insightface_root: Path = Path.home() / ".insightface"
 
+    @field_validator("vision_engine", mode="before")
+    @classmethod
+    def validate_vision_engine(cls, value: Any) -> str:
+        return "sda"
+
     @field_validator("vision_device")
     @classmethod
     def validate_vision_device(cls, value: str) -> str:
@@ -48,6 +54,7 @@ class Settings(BaseSettings):
         if normalized in {"auto", "cpu", "cuda", "amd", "intel"}:
             return normalized
         raise ValueError("VISION_DEVICE must be auto, cpu, cuda, amd, or intel")
+
 
     # LLM
     openai_api_key: str = ""

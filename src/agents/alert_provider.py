@@ -81,3 +81,40 @@ class OpenAIAlertAgentProvider(AlertAgentModelProvider):
                 tool_choice="required",
             )
         raise AlertAgentProviderError("tool_step_limit")
+
+
+class DeterministicAlertAgentProvider(AlertAgentModelProvider):
+    """Local-first fallback triage agent running without external API key."""
+
+    async def run(self, job: AgentJob, tools: AlertAgentTools) -> AgentExecutionResult:
+        inc = await asyncio.to_thread(tools.execute, "get_incident_context", "{}")
+        evt = {}
+        try:
+            evt = await asyncio.to_thread(tools.execute, "get_event_context", "{}")
+        except Exception:
+            pass
+
+        from src.agents.nodes.reasoning import evaluate_triage_severity
+
+        confidence = float(evt.get("confidence") or inc.get("latest_event", {}).get("confidence") or 0.0)
+        triage = evaluate_triage_severity(
+            incident_type=inc.get("incident_type", job.event_type),
+            ai_confidence=confidence,
+            occurrence_count=int(inc.get("occurrence_count", 1)),
+            location=inc.get("camera", {}).get("location", "chưa xác định"),
+        )
+
+        enrich_args = json.dumps({
+            "verdict": triage["verdict"],
+            "severity": triage["severity"],
+            "reason_summary": triage["reasoning"],
+        })
+        res = await asyncio.to_thread(tools.execute, "enrich_incident_alert", enrich_args)
+        decision = AgentDecision.model_validate(res)
+        return AgentExecutionResult(
+            decision=decision,
+            tool_calls=2,
+            applied=bool(res.get("applied")),
+            no_op_reason=res.get("no_op_reason"),
+        )
+
