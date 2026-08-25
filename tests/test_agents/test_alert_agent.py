@@ -113,7 +113,7 @@ async def test_orchestrator_completes_without_blocking_baseline_alert():
     settings = Settings(
         _env_file=None,
         alert_agent_enabled=True,
-        openai_api_key="test-only",
+        gemini_api_key="test-only",
         alert_agent_queue_capacity=2,
         alert_agent_max_attempts=1,
         alert_agent_timeout_seconds=2,
@@ -137,7 +137,7 @@ async def test_orchestrator_completes_without_blocking_baseline_alert():
 @pytest.mark.asyncio
 async def test_bounded_queue_rejects_saturation_without_touching_alert():
     settings = Settings(
-        _env_file=None, alert_agent_enabled=True, openai_api_key="test-only", alert_agent_queue_capacity=1
+        _env_file=None, alert_agent_enabled=True, gemini_api_key="test-only", alert_agent_queue_capacity=1
     )
     orchestrator = AlertAgentOrchestrator(settings=settings, provider=SuccessfulProvider())
     orchestrator._queue = asyncio.Queue(maxsize=1)
@@ -151,7 +151,7 @@ async def test_provider_timeout_preserves_baseline_alert_and_records_failure():
     settings = Settings(
         _env_file=None,
         alert_agent_enabled=True,
-        openai_api_key="test-only",
+        gemini_api_key="test-only",
         alert_agent_timeout_seconds=0.05,
         alert_agent_max_attempts=1,
         alert_agent_shutdown_timeout_seconds=1,

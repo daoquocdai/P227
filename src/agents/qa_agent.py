@@ -1,9 +1,12 @@
 import asyncio
-import json
 import logging
 from datetime import datetime
 from typing import Any
 
+from google import genai
+from google.genai import types
+
+from src.agents.gemini_tools import gemini_tool_from_definitions
 from src.agents.tools.qa_tools import QATools
 from src.config import get_settings
 
@@ -58,10 +61,16 @@ SECURITY_VIOLATION_REJECTION = (
 class SecurityQAAgent:
     """Security Log Q&A Assistant Agent với 2 lớp: LLM Tool-Calling + Intent Fallback Engine."""
 
-    def __init__(self, api_key: str | None = None, model: str = "gpt-4o-mini") -> None:
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str = "gemini-3.5-flash-lite",
+        client: Any | None = None,
+    ) -> None:
         settings = get_settings()
-        self.api_key = api_key or settings.openai_api_key
-        self.model = model or settings.alert_agent_model
+        self.api_key = api_key or settings.gemini_api_key
+        self.model = model or settings.model_name
+        self._client = client
 
     async def answer(self, user_query: str) -> dict[str, Any]:
         """Tiếp nhận câu hỏi từ người dùng và trả về phản hồi thông minh."""
@@ -98,61 +107,55 @@ class SecurityQAAgent:
         return any(kw in q_lower for kw in DOMAIN_KEYWORDS)
 
     async def _answer_with_llm(self, query: str) -> dict[str, Any]:
-        from openai import AsyncOpenAI
-
-        client = AsyncOpenAI(api_key=self.api_key, timeout=10.0)
-
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "Bạn là Trợ lý An ninh GuardianCam. Bạn CHỈ trả lời các câu hỏi liên quan đến hệ thống "
-                    "an ninh gia đình, giám sát camera, sự cố té ngã, người lạ và người thân. "
-                    "Nếu câu hỏi KHÔNG liên quan đến các chủ đề này (ví dụ: thời tiết, nấu ăn, lập trình, kiến thức chung...), "
-                    "hãy lịch sự từ chối trả lời. Sử dụng các công cụ được cung cấp để đọc dữ liệu chính xác từ SQLite. "
-                    "Trả lời ngắn gọn, rõ ràng, lịch sự bằng tiếng Việt."
-                ),
-            },
-            {"role": "user", "content": query},
-        ]
-
-        tools = QATools.definitions()
-        response = await client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            tools=tools,
-            tool_choice="auto",
+        client = self._client or genai.Client(
+            api_key=self.api_key,
+            http_options=types.HttpOptions(timeout=10_000),
         )
+        contents: list[types.Content] = [
+            types.UserContent(parts=[types.Part.from_text(text=query)])
+        ]
+        tool = gemini_tool_from_definitions(QATools.definitions())
+        config = types.GenerateContentConfig(
+            system_instruction=(
+                "Bạn là Trợ lý An ninh GuardianCam. Bạn CHỈ trả lời các câu hỏi liên quan đến hệ thống "
+                "an ninh gia đình, giám sát camera, sự cố té ngã, người lạ và người thân. "
+                "Nếu câu hỏi KHÔNG liên quan, hãy lịch sự từ chối. Sử dụng công cụ để đọc dữ liệu "
+                "chính xác từ SQLite. Trả lời ngắn gọn, rõ ràng, lịch sự bằng tiếng Việt."
+            ),
+            tools=[tool],
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+        )
+        collected_data: dict[str, Any] = {}
 
-        message = response.choices[0].message
-        collected_data = {}
-
-        if message.tool_calls:
-            messages.append(message)
-            for tool_call in message.tool_calls:
-                func_name = tool_call.function.name
-                func_args = json.loads(tool_call.function.arguments or "{}")
-
-                result = self._execute_tool(func_name, func_args)
-                collected_data[func_name] = result
-
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": json.dumps(result, ensure_ascii=False),
-                    }
-                )
-
-            final_response = await client.chat.completions.create(
+        for _ in range(4):
+            response = await client.aio.models.generate_content(
                 model=self.model,
-                messages=messages,
+                contents=contents,
+                config=config,
             )
-            answer_text = final_response.choices[0].message.content or "Đã truy vấn dữ liệu an ninh thành công."
-        else:
-            answer_text = message.content or "Không tìm thấy dữ liệu liên quan."
+            function_calls = response.function_calls or []
+            if not function_calls:
+                answer_text = response.text
+                if not answer_text:
+                    raise ValueError("empty Gemini response")
+                return {"answer": answer_text, "data": collected_data}
 
-        return {"answer": answer_text, "data": collected_data}
+            model_content = response.candidates[0].content
+            if model_content is None:
+                raise ValueError("malformed Gemini function-call response")
+            contents.append(model_content)
+            response_parts = []
+            for function_call in function_calls:
+                func_name = function_call.name or ""
+                func_args = dict(function_call.args or {})
+                result = await asyncio.to_thread(self._execute_tool, func_name, func_args)
+                collected_data[func_name] = result
+                response_parts.append(
+                    types.Part.from_function_response(name=func_name, response={"result": result})
+                )
+            contents.append(types.Content(role="tool", parts=response_parts))
+
+        raise ValueError("Gemini Q&A tool step limit exceeded")
 
     async def _answer_with_fallback(self, query: str) -> dict[str, Any]:
         q_lower = query.lower()

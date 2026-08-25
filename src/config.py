@@ -2,7 +2,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
-
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -57,11 +56,11 @@ class Settings(BaseSettings):
 
 
     # LLM
-    openai_api_key: str = ""
-    model_name: str = "gpt-4o-mini"
+    gemini_api_key: str = ""
+    model_name: str = "gemini-3.5-flash-lite"
     llm_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     alert_agent_enabled: bool = False
-    alert_agent_model: str = "gpt-5-mini"
+    alert_agent_model: str = "gemini-3.5-flash-lite"
     alert_agent_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
     alert_agent_queue_capacity: int = Field(default=32, ge=1, le=1000)
     alert_agent_max_attempts: int = Field(default=2, ge=1, le=5)

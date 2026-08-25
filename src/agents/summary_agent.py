@@ -5,7 +5,6 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from src.config import get_settings
 from src.database import database_connection
 
 logger = logging.getLogger(__name__)
@@ -29,10 +28,6 @@ def format_datetime(iso_str: str | None) -> str:
 
 class IncidentSummaryAgent:
     """Agent tóm tắt diễn biến sự cố và tự động khởi tạo Timeline chi tiết."""
-
-    def __init__(self, api_key: str | None = None) -> None:
-        settings = get_settings()
-        self.api_key = api_key or settings.openai_api_key
 
     async def generate_summary(self, incident_id: str) -> dict[str, Any]:
         """Tạo timeline và tóm tắt cho một incident_id cụ thể."""

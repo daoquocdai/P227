@@ -1,4 +1,3 @@
-import pytest
 
 from src.agents.nodes.reasoning import evaluate_triage_severity
 

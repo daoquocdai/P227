@@ -3,9 +3,14 @@ from __future__ import annotations
 import asyncio
 import json
 from abc import ABC, abstractmethod
+from typing import Any
+
+from google import genai
+from google.genai import types
 
 from src.agents.alert_schemas import AgentDecision, AgentExecutionResult, AgentJob
 from src.agents.alert_tools import AlertAgentTools
+from src.agents.gemini_tools import gemini_tool_from_definitions
 
 SYSTEM_INSTRUCTIONS = """You are GuardianCam Alert Triage Agent.
 Review only the current persisted GuardianCam Incident. First call get_incident_context.
@@ -30,34 +35,69 @@ class AlertAgentModelProvider(ABC):
         raise NotImplementedError
 
 
-class OpenAIAlertAgentProvider(AlertAgentModelProvider):
-    def __init__(self, *, api_key: str, model: str, timeout_seconds: float, max_tool_steps: int) -> None:
-        from openai import AsyncOpenAI
-
-        self._client = AsyncOpenAI(api_key=api_key, timeout=timeout_seconds)
+class GeminiAlertAgentProvider(AlertAgentModelProvider):
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str,
+        timeout_seconds: float,
+        max_tool_steps: int,
+        client: Any | None = None,
+    ) -> None:
+        self._client = client or genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(timeout=int(timeout_seconds * 1000)),
+        )
         self._model = model
         self._max_tool_steps = max_tool_steps
 
     async def run(self, job: AgentJob, tools: AlertAgentTools) -> AgentExecutionResult:
-        response = await self._client.responses.create(
-            model=self._model,
-            instructions=SYSTEM_INSTRUCTIONS,
-            input=f"Review the persisted {job.event_type} incident assigned to this execution.",
-            tools=tools.definitions(),
-            tool_choice="required",
+        contents: list[types.Content] = [
+            types.UserContent(
+                parts=[
+                    types.Part.from_text(
+                        text=f"Review the persisted {job.event_type} incident assigned to this execution."
+                    )
+                ]
+            )
+        ]
+        tool = gemini_tool_from_definitions(tools.definitions())
+        config = types.GenerateContentConfig(
+            system_instruction=SYSTEM_INSTRUCTIONS,
+            tools=[tool],
+            tool_config=types.ToolConfig(
+                function_calling_config=types.FunctionCallingConfig(mode="ANY")
+            ),
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         )
         calls = 0
         for _ in range(self._max_tool_steps):
-            function_calls = [item for item in response.output if item.type == "function_call"]
+            response = await self._client.aio.models.generate_content(
+                model=self._model,
+                contents=contents,
+                config=config,
+            )
+            function_calls = response.function_calls or []
             if not function_calls:
                 raise AlertAgentProviderError("model_finished_without_enrichment")
-            outputs = []
+            model_content = response.candidates[0].content
+            if model_content is None:
+                raise AlertAgentProviderError("malformed_response")
+            contents.append(model_content)
+            response_parts = []
             for call in function_calls:
                 calls += 1
                 if calls > self._max_tool_steps:
                     raise AlertAgentProviderError("tool_step_limit")
-                result = await asyncio.to_thread(tools.execute, call.name, call.arguments)
-                if call.name == "enrich_incident_alert":
+                name = call.name or ""
+                arguments = dict(call.args or {})
+                try:
+                    raw_arguments = json.dumps(arguments, ensure_ascii=False)
+                except (TypeError, ValueError) as exc:
+                    raise AlertAgentProviderError("invalid_function_arguments") from exc
+                result = await asyncio.to_thread(tools.execute, name, raw_arguments)
+                if name == "enrich_incident_alert":
                     decision = AgentDecision.model_validate(result)
                     return AgentExecutionResult(
                         decision=decision,
@@ -65,21 +105,10 @@ class OpenAIAlertAgentProvider(AlertAgentModelProvider):
                         applied=bool(result.get("applied")),
                         no_op_reason=result.get("no_op_reason"),
                     )
-                outputs.append(
-                    {
-                        "type": "function_call_output",
-                        "call_id": call.call_id,
-                        "output": json.dumps(result, ensure_ascii=False),
-                    }
+                response_parts.append(
+                    types.Part.from_function_response(name=name, response={"result": result})
                 )
-            response = await self._client.responses.create(
-                model=self._model,
-                instructions=SYSTEM_INSTRUCTIONS,
-                previous_response_id=response.id,
-                input=outputs,
-                tools=tools.definitions(),
-                tool_choice="required",
-            )
+            contents.append(types.Content(role="tool", parts=response_parts))
         raise AlertAgentProviderError("tool_step_limit")
 
 

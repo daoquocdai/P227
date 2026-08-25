@@ -9,7 +9,7 @@ from src.database import BUILTIN_LAPTOP_CAMERA_ID, database_connection, initiali
 @pytest.mark.asyncio
 async def test_summary_agent_generation():
     initialize_database()
-    summary_agent = IncidentSummaryAgent(api_key="")
+    summary_agent = IncidentSummaryAgent()
 
     incident_id = str(uuid4())
     event_id = str(uuid4())

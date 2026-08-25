@@ -1,12 +1,8 @@
-from langchain_openai import ChatOpenAI
+from google import genai
 
 from src.config import get_settings
 
 
-def get_llm() -> ChatOpenAI:
+def get_llm() -> genai.Client:
     settings = get_settings()
-    return ChatOpenAI(
-        model=settings.model_name,
-        api_key=settings.openai_api_key,
-        temperature=settings.llm_temperature,
-    )
+    return genai.Client(api_key=settings.gemini_api_key)

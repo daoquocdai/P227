@@ -38,8 +38,8 @@ async def lifespan(app: FastAPI):
     alert_agent.start()
     event_service.set_agent_enqueue(alert_agent.enqueue)
     app.state.alert_agent = alert_agent
-    app.state.qa_agent = SecurityQAAgent(api_key=settings.openai_api_key, model=settings.alert_agent_model)
-    app.state.summary_agent = IncidentSummaryAgent(api_key=settings.openai_api_key)
+    app.state.qa_agent = SecurityQAAgent(api_key=settings.gemini_api_key, model=settings.model_name)
+    app.state.summary_agent = IncidentSummaryAgent()
     vision_event_sink.start()
     consumer = asyncio.create_task(vision_event_sink.consume(), name="vision-event-consumer")
     dispatcher = ThreadsafeVisionEventDispatcher(vision_event_sink)

@@ -8,7 +8,7 @@ from contextlib import suppress
 from src.agents.alert_provider import (
     AlertAgentModelProvider,
     AlertAgentProviderError,
-    OpenAIAlertAgentProvider,
+    GeminiAlertAgentProvider,
 )
 from src.agents.alert_schemas import AgentJob
 from src.agents.alert_tools import AlertAgentToolError, AlertAgentTools
@@ -52,9 +52,9 @@ class AlertAgentOrchestrator:
             logger.warning("Alert Agent disabled; baseline alerts remain active")
             return
         if self.provider is None:
-            if self.settings.openai_api_key:
-                self.provider = OpenAIAlertAgentProvider(
-                    api_key=self.settings.openai_api_key,
+            if self.settings.gemini_api_key:
+                self.provider = GeminiAlertAgentProvider(
+                    api_key=self.settings.gemini_api_key,
                     model=self.settings.alert_agent_model,
                     timeout_seconds=self.settings.alert_agent_timeout_seconds,
                     max_tool_steps=self.settings.alert_agent_max_tool_steps,
