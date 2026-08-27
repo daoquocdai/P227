@@ -76,7 +76,7 @@ class FrameSource:
         self._on_frame = on_frame
         self.source_epoch = int(initial_epoch)
 
-    def start(self, timeout=5.0):
+    def start(self, timeout=15.0):
         self._thread = threading.Thread(target=self._run, name="vision-source", daemon=True)
         self._thread.start()
         self._ready.wait(timeout)
@@ -112,7 +112,9 @@ class CameraSource(FrameSource):
         self.index = index
 
     def _run(self):
-        capture = cv2.VideoCapture(self.index, cv2.CAP_DSHOW)
+        capture = cv2.VideoCapture(self.index)
+        # capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        # capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         if not capture.isOpened():
             self.error = f"Camera {self.index} cannot open."
             self._ready.set()
