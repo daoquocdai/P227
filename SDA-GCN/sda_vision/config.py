@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from .contracts import IdentityGallerySnapshot
 
@@ -11,6 +12,7 @@ from .contracts import IdentityGallerySnapshot
 @dataclass(slots=True)
 class VisionSessionConfig:
     source: str = "0"
+    source_mode: Literal["managed", "external"] = "managed"
     source_fps: float | None = None
     camera_id: str = "standalone-camera"
     camera_location: str = "SDA-GCN Standalone"

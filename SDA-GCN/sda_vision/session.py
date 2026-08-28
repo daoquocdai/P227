@@ -36,7 +36,7 @@ from .runtime.hardware import (
 from .runtime.identity import IdentityStage, IdentityState
 from .runtime.inference import ActionInference, StageSpec, face_stage_spec, print_diagnostics
 from .runtime.scheduler import FixedRateScheduler
-from .runtime.source import SourceKind, create_source, parse_source
+from .runtime.source import ExternalFrameSource, SourceKind, create_source, parse_source
 from .runtime.timing import (
     LatestPoseStore,
     MediaPipeTimestampAdapter,
@@ -139,10 +139,11 @@ class VisionSession:
         self.identity_cpu_affinity = config.identity_cpu_affinity
         self.identity_gallery_mode = config.identity_gallery_mode
         self.identity_gallery_snapshot = config.identity_gallery_snapshot
-        self.source_spec = parse_source(config.source)
+        self.source_spec = parse_source(config.source) if config.source_mode == "managed" else None
         self.source_fps_override = config.source_fps
         self.identity_stage = None
         self.frame_source = None
+        self._last_source_status = None
 
         self.app = None
         self.pose_model = None
@@ -195,7 +196,7 @@ class VisionSession:
         self._event_source_time_s = 0.0
         self._event_source_epoch = 0
         self.latest_result = None
-        self._stop_requested = False
+        self._vision_stop_requested = False
         self._control_lock = threading.RLock()
         self._active_source_epoch = None
         self._profile_source_callback = deque(maxlen=4096)
@@ -800,11 +801,16 @@ class VisionSession:
 
     def run(self):
         try:
-            self._run()
+            self.start_source()
+            self.run_vision()
         finally:
             self.shutdown()
 
-    def _run(self):
+    def start_source(self):
+        if self.config.source_mode != "managed":
+            raise RuntimeError("External sessions must use start_external_source().")
+        if self.frame_source is not None:
+            return
         self.frame_source = create_source(
             self.source_spec,
             self.source_fps_override,
@@ -814,7 +820,48 @@ class VisionSession:
             initial_epoch=self.config.source_epoch,
         )
         self.frame_source.start()
-        metadata = self.frame_source.metadata
+
+    def start_external_source(self, source_epoch: int | None = None):
+        if self.config.source_mode != "external":
+            raise RuntimeError("Managed sessions cannot accept external frames.")
+        if self.frame_source is not None:
+            raise RuntimeError("External source is already active.")
+        epoch = self.config.source_epoch if source_epoch is None else int(source_epoch)
+        self.frame_source = ExternalFrameSource(self._source_frame_callback, epoch)
+        self.frame_source.start()
+
+    def submit_external_frame(self, frame):
+        source = self.frame_source
+        if not isinstance(source, ExternalFrameSource):
+            raise RuntimeError("External source is not active.")
+        source.publish_frame(frame)
+
+    def source_status(self) -> dict:
+        source = self.frame_source
+        if source is None:
+            return self._last_source_status or {
+                "running": False,
+                "ended": False,
+                "error": None,
+                "capture_fps": 0.0,
+                "source_epoch": self.config.source_epoch,
+            }
+        return {
+            "running": source.is_running,
+            "ended": bool(source.ended),
+            "error": source.error,
+            "capture_fps": source.capture_fps,
+            "source_epoch": source.source_epoch,
+        }
+
+    def run_vision(self):
+        if self.frame_source is None:
+            raise RuntimeError("Source must be started before Vision processing.")
+        source = self.frame_source
+        self._vision_stop_requested = False
+        self._scheduler_deadline_misses = 0
+        self._capture_frames_dropped = 0
+        metadata = source.metadata
         print("\n[Source]")
         print(f"Type          : {'Camera' if metadata.kind == SourceKind.CAMERA else 'Video'}")
         if metadata.kind == SourceKind.CAMERA:
@@ -846,12 +893,12 @@ class VisionSession:
         sda_window_samples = []
         identity_window_samples = []
 
-        while not self._stop_requested:
+        while not self._vision_stop_requested:
             scheduler.wait()
             vision_started = time.perf_counter()
-            snapshot = self.frame_source.store.wait_newer(last_capture_sequence, scheduler.interval)
+            snapshot = source.store.wait_newer(last_capture_sequence, scheduler.interval)
             if snapshot is None or snapshot.sequence == last_capture_sequence:
-                if self.frame_source.ended:
+                if source.ended:
                     break
                 continue
             capture_dropped += max(0, snapshot.sequence - last_capture_sequence - 1) if last_capture_sequence else 0
@@ -1110,9 +1157,9 @@ class VisionSession:
                     )
                 if self.log_level == "debug":
                     print(
-                        f"[Metrics Debug] capture_fps={self.frame_source.capture_fps:.1f} "
+                        f"[Metrics Debug] capture_fps={source.capture_fps:.1f} "
                         f"source_frame_index={snapshot.source_frame_index} source_time_s={snapshot.source_time_s:.3f} "
-                        f"playback_drift_ms={getattr(self.frame_source, 'playback_drift_ms', 0.0):.1f} "
+                        f"playback_drift_ms={getattr(source, 'playback_drift_ms', 0.0):.1f} "
                         f"mediapipe_timestamp_ms={self.pose_timestamp_adapter.last_timestamp_ms} "
                         f"identity_ms={identity_average} identity_hz={self.identity_stage.effective_hz if self.identity_stage else 0.0:.2f} "
                         f"identity_submitted={self.identity_stage.frames_submitted if self.identity_stage else 0} "
@@ -1128,17 +1175,17 @@ class VisionSession:
             self._capture_frames_dropped = capture_dropped
 
         if metadata.kind == SourceKind.VIDEO_FILE:
-            final_packet = self.frame_source.store.latest()
+            final_packet = source.store.latest()
             print(
                 f"[Source EOF] source_time={final_packet.source_time_s:.3f}s | "
-                f"playback_wall={self.frame_source.playback_elapsed_s:.3f}s"
+                f"playback_wall={source.playback_elapsed_s:.3f}s"
             )
 
-    def shutdown(self):
-        self._stop_requested = True
-        if self.frame_source:
-            self.frame_source.stop()
-            self.frame_source = None
+    def request_vision_stop(self):
+        self._vision_stop_requested = True
+
+    def shutdown_vision(self):
+        self._vision_stop_requested = True
         if self.identity_stage:
             self._last_identity_queue = {
                 "submitted": getattr(self.identity_stage, "frames_submitted", 0),
@@ -1155,8 +1202,26 @@ class VisionSession:
             self.action_model.close()
             self.action_model = None
 
+    def stop_source(self):
+        source = self.frame_source
+        if source is not None:
+            source.stop()
+            self._last_source_status = {
+                "running": False,
+                "ended": bool(source.ended),
+                "error": source.error,
+                "capture_fps": source.capture_fps,
+                "source_epoch": source.source_epoch,
+            }
+            self.frame_source = None
+
+    def shutdown(self):
+        self.request_vision_stop()
+        self.stop_source()
+        self.shutdown_vision()
+
     def request_stop(self):
-        self._stop_requested = True
+        self.request_vision_stop()
         source = self.frame_source
         if source is not None:
             source.request_stop()

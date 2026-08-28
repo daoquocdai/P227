@@ -1,7 +1,8 @@
 import { AlertTriangle, Camera, CameraOff, ChevronLeft, ChevronRight, Edit3, Expand, Minimize, RefreshCw, ShieldCheck, Trash2, Video, Wifi, X } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { deleteCamera, getCamera, getCameras, setCameraIdentity, updateCamera, type CameraDto, type CameraEventDto } from "../api/cameras";
+import { deleteCamera, getCamera, getCameras, getLatestCameraVision, setCameraIdentity, updateCamera, type CameraDto, type CameraEventDto, type CameraVisionResult } from "../api/cameras";
 import { CameraStream } from "../components";
+import { WebcamView } from "../features/webcam/WebcamView";
 import "./cameraViewer.css";
 import "./cameraApi.css";
 
@@ -20,6 +21,7 @@ export default function CameraPage() {
   const camerasRequestInFlight = useRef(false);
   const [showBoxes,setShowBoxes]=useState(()=>localStorage.getItem("camera.showBoxes")!=="false");
   const [recognitionEnabled,setRecognitionEnabled]=useState(false);
+  const [webcamVisionResult,setWebcamVisionResult]=useState<CameraVisionResult|null>(null);
 
   const load = async () => {
     if (camerasRequestInFlight.current) return;
@@ -46,6 +48,19 @@ export default function CameraPage() {
 
   const selected = feeds.find((feed) => feed.id === selectedId);
   useEffect(()=>{setRecognitionEnabled(Boolean(selected?.identity_enabled))},[selected?.id,selected?.identity_enabled]);
+  useEffect(() => {
+    setWebcamVisionResult(null);
+    if (!selected || selected.source_kind !== "webcam" || !selected.vision_enabled) return;
+    let cancelled = false;
+    const poll = () => { void getLatestCameraVision(selected.id).then((response) => {
+      const result = response.result;
+      const fresh = result && Date.now() / 1000 - result.processed_at <= 0.75 ? result : null;
+      if (!cancelled) setWebcamVisionResult(fresh);
+    }).catch(() => { if (!cancelled) setWebcamVisionResult(null); }); };
+    poll();
+    const timer = window.setInterval(poll, 200);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [selected?.id, selected?.source_kind, selected?.vision_enabled]);
   const todayEvents = events.filter((event) => isToday(event.occurred_at));
   const offline = !selected || selected.status !== "online";
   const navigate = (path: string) => { window.history.pushState({}, "", path); window.dispatchEvent(new PopStateEvent("popstate")); };
@@ -70,9 +85,9 @@ export default function CameraPage() {
     <header className="smart-camera-heading"><div><p>Không gian của bạn</p><h1>Camera</h1></div><span><ShieldCheck /> {feeds.filter((item) => item.status === "online").length}/{feeds.length} camera trực tuyến</span></header>
     <div className="smart-viewer-shell">
       <div className="smart-camera-viewer" key={selected.id} ref={viewerRef}>
-        <CameraStream cameraId={selected.id} streamReady={selected.stream_ready} streamUrl={selected.stream_url} showBoxes={showBoxes} showIdentity={recognitionEnabled} />
+        <LiveCameraView camera={selected} main result={webcamVisionResult} showBoxes={showBoxes} showIdentity={recognitionEnabled} />
         {selected.source_kind === "rtsp" && !selected.playback_url && !offline && <div className="smart-camera-offline"><Wifi /><strong>Camera RTSP đã được cấu hình</strong><span>Đang chờ Local Hub cung cấp luồng phát cho trình duyệt</span></div>}
-        {offline && <div className="smart-camera-offline"><CameraOff /><strong>{selected.status === "error" ? "Không thể mở camera" : "Camera đang ngoại tuyến"}</strong><span>{selected.error ?? (selected.last_seen_at ? `Lần cuối ${formatTime(selected.last_seen_at)}` : "Chưa có heartbeat")}</span></div>}
+        {offline && selected.source_kind !== "webcam" && <div className="smart-camera-offline"><CameraOff /><strong>{selected.status === "error" ? "Không thể mở camera" : "Camera đang ngoại tuyến"}</strong><span>{selected.error ?? (selected.last_seen_at ? `Lần cuối ${formatTime(selected.last_seen_at)}` : "Chưa có heartbeat")}</span></div>}
         <div className="smart-viewer-top"><span className={`smart-live ${offline ? "offline" : ""}`}><i /><span>{offline ? "Ngoại tuyến" : "Trực tiếp"}</span></span><button className="camera-fullscreen-button" onClick={toggleFullscreen} aria-label={fullscreen?"Thu nhỏ camera":"Phóng to toàn màn hình"} title={fullscreen?"Thoát toàn màn hình":"Toàn màn hình"}>{fullscreen?<Minimize/>:<Expand/>}</button></div>
         <div className="smart-viewer-bottom"><div><strong>{selected.name}</strong><span>{selected.location} · {selected.source}</span></div><time>{selected.last_seen_at ? formatTime(selected.last_seen_at) : "—"}</time></div>
       </div>
@@ -101,11 +116,17 @@ function EventRow({ event, onOpen }: { event: CameraEventDto; onOpen: () => void
 }
 
 function VideoThumbnail({ feed, showBoxes }: { feed: CameraDto; showBoxes: boolean }) {
-  const [failed,setFailed]=useState(false);
   return <span className={`video-thumbnail ${feed.status !== "online" ? "offline" : ""}`}>
-    {feed.stream_ready&&!failed?<CameraStream cameraId={feed.id} streamReady streamUrl={feed.stream_url} showBoxes={showBoxes} showIdentity={feed.identity_enabled} onError={()=>setFailed(true)}/>:<span className="camera-source-placeholder"><Camera /></span>}
+    {feed.source_kind === "webcam" ? <LiveCameraView camera={feed} showBoxes={false} showIdentity={false} /> : feed.stream_ready?<CameraStream cameraId={feed.id} streamReady streamUrl={feed.stream_url} showBoxes={showBoxes} showIdentity={feed.identity_enabled}/>:<span className="camera-source-placeholder"><Camera /></span>}
     <span className={`thumbnail-status ${feed.status !== "online" ? "offline" : ""}`}><i />{feed.status === "online" ? "Trực tiếp" : "Ngoại tuyến"}</span><span className="thumbnail-name">{feed.name}</span>
   </span>;
+}
+
+function LiveCameraView({ camera, main = false, result = null, showBoxes = true, showIdentity = true }: { camera: CameraDto; main?: boolean; result?: CameraVisionResult | null; showBoxes?: boolean; showIdentity?: boolean }) {
+  if (camera.source_kind === "webcam") {
+    return <WebcamView cameraId={camera.id} result={main ? result : null} showBoxes={main && showBoxes} showIdentity={main && showIdentity} />;
+  }
+  return <CameraStream cameraId={camera.id} streamReady={camera.stream_ready} streamUrl={camera.stream_url} showBoxes={showBoxes} showIdentity={showIdentity} />;
 }
 
 function editableSource(camera:CameraDto):string{if(camera.source_kind==="rtsp")return "";if(camera.source_kind==="webcam")return camera.source.replace(/^Webcam\s*/i,"");return camera.source}
