@@ -6,12 +6,11 @@ import warnings
 from collections import deque
 from pathlib import Path
 
-import cv2
-import numpy as np
-
 os.environ.setdefault("GLOG_minloglevel", "2")
 
+import cv2
 import mediapipe as mp
+import numpy as np
 import onnxruntime as ort
 import torch
 import torch.nn.functional as functional
@@ -23,6 +22,7 @@ from fusion.normalize_pose import normalize_pose
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from scipy.interpolate import interp1d
+from ultralytics import YOLO
 
 from .callbacks import VisionCallbacks
 from .config import VisionSessionConfig
@@ -45,6 +45,7 @@ from .runtime.timing import (
     PoseSubmission,
     source_span_s,
 )
+from .tracker import SimpleTracker
 
 warnings.filterwarnings("ignore", message=r"SymbolDatabase.GetPrototype\(\) is deprecated")
 
@@ -57,6 +58,23 @@ def import_class(import_str):
     except AttributeError:
         raise ImportError(f"Class {class_str} cannot be found")
 
+
+
+def compute_overlap_ratio(person_box, object_box):
+    """Intersection area divided by person-box area."""
+    x1_inter = max(person_box[0], object_box[0])
+    y1_inter = max(person_box[1], object_box[1])
+    x2_inter = min(person_box[2], object_box[2])
+    y2_inter = min(person_box[3], object_box[3])
+
+    inter_w = max(0, x2_inter - x1_inter)
+    inter_h = max(0, y2_inter - y1_inter)
+    inter_area = inter_w * inter_h
+    if inter_area == 0:
+        return 0.0
+
+    person_area = max(1, (person_box[2] - person_box[0]) * (person_box[3] - person_box[1]))
+    return inter_area / person_area
 
 def resample_frames(kpts_array, target_frames=64):
     frame_count, joint_count, coordinate_count = kpts_array.shape
@@ -123,7 +141,14 @@ class VisionSession:
     def __init__(self, config: VisionSessionConfig, callbacks: VisionCallbacks | None = None):
         self.config = config
         self.callbacks = callbacks or VisionCallbacks()
-        self.base_dir = str(config.package_root or Path(__file__).resolve().parents[1])
+
+        if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+            self.base_dir = os.path.join(sys._MEIPASS, "SDA-GCN")
+        else:
+            self.base_dir = str(config.package_root or Path(__file__).resolve().parents[1])
+        if self.base_dir not in sys.path:
+            sys.path.insert(0, self.base_dir)
+
         self.hardware_capabilities = probe_capabilities()
         self.backend = resolve_action_backend(config.device, self.hardware_capabilities)
         self.preview = config.preview
@@ -165,13 +190,23 @@ class VisionSession:
         self.pose_timestamp_adapter = MediaPipeTimestampAdapter()
         self._last_pose_sequence = 0
 
-        # States
+        # Legacy aggregate state kept for compatibility with existing tests/API semantics.
         self.pose_samples = deque()
         self.current_action = "Waiting for frames..."
         self.action_color = (255, 255, 255)
-
-        # BỘ ĐẾM SỰ KIỆN HARDCODE (HÀNG CHỜ)
         self.pending_event = None
+
+        # Multi-person state keyed by tracker id.
+        self.tracker = SimpleTracker(max_disappeared=5, max_distance=300)
+        self.pose_samples_by_track = {}
+        self.pending_events_by_track = {}
+        self.current_action_by_track = {}
+        self.action_color_by_track = {}
+
+        # Static-object / SLM enrichment state.
+        self.yolo_model = None
+        self.last_yolo_time = 0.0
+        self.yolo_cached_boxes = []
 
         # Constants
         self.orig_w = 1280
@@ -189,6 +224,7 @@ class VisionSession:
         self._gallery_status_logged = False
         self._current_packet = None
         self._latest_detection = None
+        self._latest_detections = []
         self._pending_generated_events = []
         self._pending_fall_diagnostics = []
         self._frame_transform = None
@@ -207,6 +243,7 @@ class VisionSession:
         self._profile_cycle = deque(maxlen=4096)
         self._scheduler_deadline_misses = 0
         self._capture_frames_dropped = 0
+
 
     def _pose_callback(self, result: vision.PoseLandmarkerResult, output_image: mp.Image, timestamp_ms: int):
         submission = self._pose_submissions.pop(timestamp_ms, None)
@@ -277,7 +314,7 @@ class VisionSession:
             base_options=base_options,
             running_mode=vision.RunningMode.LIVE_STREAM,
             result_callback=self._pose_callback,
-            num_poses=1,
+            num_poses=5,
             min_pose_detection_confidence=0.5,
             min_tracking_confidence=0.5,
         )
@@ -298,6 +335,24 @@ class VisionSession:
             self.backend,
             os.path.join(self.base_dir, "work_dir/runtime_cache"),
         )
+
+        print("[*] Initializing YOLOv8s for Static Objects...")
+        try:
+            self.yolo_model = YOLO("yolov8s.pt")
+            self.yolo_model.names[56] = "Ghế"
+            self.yolo_model.names[57] = "Sofa"
+            self.yolo_model.names[59] = "Giường"
+            self.yolo_model.names[60] = "Bàn ăn"
+            self.yolo_model.names[61] = "Bồn cầu"
+            self.yolo_model.names[62] = "Tivi"
+            self.yolo_model.names[68] = "Lò vi sóng"
+            self.yolo_model.names[69] = "Lò nướng"
+            self.yolo_model.names[71] = "Bồn rửa"
+            self.yolo_model.names[72] = "Tủ lạnh"
+        except Exception as exc:
+            self.yolo_model = None
+            warnings.warn(f"YOLO static-object model unavailable: {exc}", RuntimeWarning, stacklevel=2)
+
         print_diagnostics(self.backend, self.pose_stage, self.action_model.stage, self.face_stage)
         print(f"Identity        : {'ENABLED' if self.identity_enabled else 'DISABLED'}")
         if self.identity_enabled:
@@ -351,14 +406,24 @@ class VisionSession:
             self.identity_stage = stage
 
     def _reset_temporal_state(self):
+        # Legacy aggregate state.
         self.pose_samples.clear()
         self.pending_event = None
         self.current_action = "Waiting for frames..."
         self.action_color = (255, 255, 255)
+
+        # Multi-person state.
+        self.pose_samples_by_track.clear()
+        self.pending_events_by_track.clear()
+        self.current_action_by_track.clear()
+        self.action_color_by_track.clear()
+        self.tracker = SimpleTracker(max_disappeared=5, max_distance=300)
+
         self._pose_submissions.clear()
         self.pose_store.clear()
         self._last_pose_sequence = 0
         self._latest_detection = None
+        self._latest_detections = []
         self.latest_result = None
         self._pending_generated_events = []
         self._pending_fall_diagnostics = []
@@ -368,6 +433,7 @@ class VisionSession:
         self._last_identity_event_timestamp = 0.0
         if self.identity_stage is not None:
             self.identity_stage.reset()
+
 
     def set_inference_enabled(self, enabled: bool):
         enabled = bool(enabled)
@@ -399,6 +465,7 @@ class VisionSession:
                 self.config.identity_enabled = enabled
                 self._last_identity_event_timestamp = 0.0
                 self._latest_detection = None
+                self._latest_detections = []
                 if not enabled:
                     old_identity, self.identity_stage = self.identity_stage, None
                     self._identity_start_attempted = False
@@ -422,6 +489,7 @@ class VisionSession:
             stage = self.identity_stage
             self._last_identity_event_timestamp = 0.0
             self._latest_detection = None
+            self._latest_detections = []
             self._pending_generated_events = [
                 event
                 for event in self._pending_generated_events
@@ -435,9 +503,18 @@ class VisionSession:
         return
 
     def emit_event(
-        self, event_type, confidence=0.9, identity_status="UNKNOWN", identity_name=None, identity_person_id=None
+        self,
+        event_type,
+        confidence=0.9,
+        identity_status="UNKNOWN",
+        identity_name=None,
+        identity_person_id=None,
+        detection=None,
     ):
-        throttle_key = f"{event_type}_{identity_name}"
+        if detection is None:
+            detection = self._latest_detection
+        track_id = detection.association_id if detection else None
+        throttle_key = f"{event_type}_{identity_name}_{track_id if track_id is not None else ''}"
         now = time.monotonic()
         if now - self.last_sent_time.get(throttle_key, 0) < 5.0:
             return False
@@ -445,7 +522,6 @@ class VisionSession:
 
         if not self._event_frame_sequence:
             return False
-        detection = self._latest_detection
         event = VisionEvent(
             event_type=event_type,
             confidence=float(confidence),
@@ -460,12 +536,14 @@ class VisionSession:
                 "camera_id": self.config.camera_id,
                 "camera_location": self.config.camera_location,
                 "source_epoch": getattr(self, "_event_source_epoch", self.config.source_epoch),
+                "track_id": track_id,
             },
         )
         self._pending_generated_events.append(event)
         if self.callbacks.on_event:
             self.callbacks.on_event(event)
         return True
+
 
     def _record_fall_diagnostic(self, source_time_s, **values):
         source_epoch = getattr(self, "_event_source_epoch", getattr(self.config, "source_epoch", 0))
@@ -485,30 +563,53 @@ class VisionSession:
     ):
         overlay_frame = frame if overlay_frame is None else overlay_frame
         stage = self.identity_stage
+
+        action_text = self.current_action_by_track.get(track_id, "")
+        if action_text:
+            cv2.putText(
+                overlay_frame,
+                f"ID:{track_id} {action_text}",
+                (x1, y2 + 20),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                self.action_color_by_track.get(track_id, (0, 255, 0)),
+                2,
+            )
+
         if not self.identity_enabled or stage is None:
             cv2.rectangle(overlay_frame, (x1, y1), (x2, y2), (255, 255, 0), 2)
-            self._latest_detection = VisionDetection(
+            det = VisionDetection(
                 "person",
                 bbox=self._frame_transform.bbox_to_source((x1, y1, x2, y2)),
                 identity_state="DISABLED",
                 identity_status="DISABLED",
+                association_id=track_id,
             )
-            return
+            det = self._inject_slm_data(det, (x1, y1, x2, y2))
+            self._latest_detection = det
+            return det
+
         crop_frame = frame[y1:y2, x1:x2]
         with self._control_lock:
             stage = self.identity_stage
             if not self.identity_enabled or stage is None:
-                return
+                return None
             processed_before = stage.frames_processed
             previous_state = stage.result.state
             stage.submit(
-                crop_frame.copy(), (x1, y1, x2, y2), source_time_s=source_time_s, frame_sequence=frame_sequence
+                crop_frame.copy(),
+                (x1, y1, x2, y2),
+                source_time_s=source_time_s,
+                frame_sequence=frame_sequence,
             )
             result = stage.poll()
+
         if result.state != previous_state and self.log_level in {"debug", "info"}:
             detail = f" | {result.name} | similarity={result.confidence:.2f}" if result.name else ""
             print(f"[Identity] {previous_state.value} -> {result.state.value}{detail}")
-        if stage.frames_processed != processed_before:
+
+        processed_now = stage.frames_processed != processed_before
+        if processed_now:
             self.current_identity_ms = result.inference_ms
             self._profile_identity.append(
                 (
@@ -519,10 +620,7 @@ class VisionSession:
                     result.inference_finished_wall_time_s,
                 )
             )
-            if result.timestamp != self._last_identity_event_timestamp:
-                if result.state == IdentityState.LOCKED_KNOWN:
-                    self.emit_event("PERSON_RECOGNIZED", result.confidence, "KNOWN", result.name, result.person_id)
-                self._last_identity_event_timestamp = result.timestamp
+
         name_display = result.state.value
         face_color = (0, 165, 255)
         if result.state == IdentityState.LOCKED_KNOWN:
@@ -533,11 +631,13 @@ class VisionSession:
             face_color = (0, 0, 255)
         cv2.rectangle(overlay_frame, (x1, y1), (x2, y2), face_color, 2)
         cv2.putText(overlay_frame, name_display, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, face_color, 2)
+
         exact_face_bbox = None
         if result.face_bbox is not None and result.face_bbox_frame_sequence == frame_sequence:
             fx1, fy1, fx2, fy2 = result.face_bbox
             exact_face_bbox = self._frame_transform.bbox_to_source((x1 + fx1, y1 + fy1, x1 + fx2, y1 + fy2))
-        self._latest_detection = VisionDetection(
+
+        det = VisionDetection(
             "person",
             bbox=self._frame_transform.bbox_to_source((x1, y1, x2, y2)),
             identity_state=result.state.value,
@@ -547,8 +647,302 @@ class VisionSession:
             identity_confidence=result.confidence,
             identity_face_verified=result.face_found,
             face_bbox=exact_face_bbox,
-            association_id=result.association_id,
+            association_id=track_id,
         )
+        det = self._inject_slm_data(det, (x1, y1, x2, y2))
+        self._latest_detection = det
+
+        if processed_now and result.timestamp != self._last_identity_event_timestamp:
+            if result.state == IdentityState.LOCKED_KNOWN:
+                self.emit_event(
+                    "PERSON_RECOGNIZED",
+                    result.confidence,
+                    "KNOWN",
+                    result.name,
+                    result.person_id,
+                    detection=det,
+                )
+            self._last_identity_event_timestamp = result.timestamp
+
+        return det
+
+    def _inject_slm_data(self, det: VisionDetection, person_box: tuple) -> VisionDetection:
+        yolo_interaction = "Không có"
+        max_iou = 0.0
+        for yolo_obj in self.yolo_cached_boxes:
+            iou = compute_overlap_ratio(person_box, yolo_obj["bbox"])
+            if iou > max_iou:
+                max_iou = iou
+                yolo_interaction = yolo_obj["name"]
+
+        x_center = (person_box[0] + person_box[2]) / 2
+        y_center = (person_box[1] + person_box[3]) / 2
+        x_ratio = x_center / self.orig_w
+        y_ratio = y_center / self.orig_h
+
+        if x_ratio < 0.1:
+            last_pos = "Sát mép trái"
+        elif x_ratio > 0.9:
+            last_pos = "Sát mép phải"
+        elif y_ratio < 0.1:
+            last_pos = "Sát mép trên (Trần/Cầu thang lên)"
+        elif y_ratio > 0.9:
+            last_pos = "Sát mép dưới (Sàn/Cầu thang xuống)"
+        else:
+            last_pos = "Giữa khung hình"
+
+        object.__setattr__(det, "yolo_interaction", yolo_interaction)
+        object.__setattr__(det, "iou_score", max_iou)
+        object.__setattr__(det, "last_position", last_pos)
+        object.__setattr__(det, "tracking_status", "Đang trong khung hình")
+        return det
+
+
+    def detect_fall_for_track(self, current_source_time_s, track_id):
+        if self.config.raw_classifier:
+            return self._detect_fall_raw_for_track(current_source_time_s, track_id)
+
+        pose_samples = self.pose_samples_by_track.get(track_id, deque())
+        pending_event = self.pending_events_by_track.get(track_id)
+        current_action = self.current_action_by_track.get(track_id, "Binh thuong")
+
+        if pending_event is not None and pose_samples:
+            event = pending_event
+            elapsed = current_source_time_s - event["started_source_time_s"]
+            current_kpts = pose_samples[-1].keypoints.copy()
+            torso_len = np.linalg.norm(current_kpts[2] - current_kpts[0])
+            if torso_len < 1e-5:
+                torso_len = 1e-5
+
+            def movement_check(current, anchor, torso_length):
+                diff = np.linalg.norm(current - anchor, axis=1)
+                moved_joints = diff[diff > 0.15 * torso_length]
+                avg_movement = float(np.mean(moved_joints)) if len(moved_joints) else 0.0
+                moved = bool(len(moved_joints) >= 1 and avg_movement > 0.40 * torso_length)
+                return moved, avg_movement, len(moved_joints)
+
+            if elapsed >= 2.0 and event["state"] == "FALL_DETECTED":
+                previous_state = event["state"]
+                event["anchor_kpts"] = current_kpts
+                event["state"] = "WARNING_PENDING"
+                event["next_check_source_time_s"] = event["started_source_time_s"] + 3.0
+                self._record_fall_diagnostic(
+                    current_source_time_s,
+                    track_id=track_id,
+                    current_action=current_action,
+                    top_predicted_class=event.get("top_predicted_class", "Fall"),
+                    fall_class_probability=event.get("fall_class_probability", event["conf"]),
+                    pending_state=event["state"],
+                    state_transition=f"{previous_state}->WARNING_PENDING",
+                    elapsed=elapsed,
+                    movement_gate_result=None,
+                    movement_amount=None,
+                    torso_reference=float(torso_len),
+                    cancellation_reason=None,
+                    fall_confirmed_emitted=False,
+                    emitted_confidence=None,
+                )
+
+            elif event["state"] == "WARNING_PENDING" and current_source_time_s >= event["next_check_source_time_s"]:
+                moved, movement_amount, moved_joints = movement_check(current_kpts, event["anchor_kpts"], torso_len)
+                if moved:
+                    self.pending_events_by_track[track_id] = None
+                    transition = "WARNING_PENDING->CLEAR"
+                    cancellation_reason = "movement_gate"
+                else:
+                    event["state"] = "WARNING"
+                    transition = "WARNING_PENDING->WARNING"
+                    cancellation_reason = None
+                    self.current_action_by_track[track_id] = "Co the nga (Cho...)"
+                    self.action_color_by_track[track_id] = (0, 165, 255)
+                    event["anchor_kpts"] = current_kpts
+                    event["next_check_source_time_s"] = event["started_source_time_s"] + 5.0
+                self._record_fall_diagnostic(
+                    current_source_time_s,
+                    track_id=track_id,
+                    current_action=self.current_action_by_track.get(track_id),
+                    top_predicted_class=event.get("top_predicted_class", "Fall"),
+                    fall_class_probability=event.get("fall_class_probability", event["conf"]),
+                    pending_state=(event["state"] if self.pending_events_by_track.get(track_id) else "CLEAR"),
+                    state_transition=transition,
+                    elapsed=elapsed,
+                    movement_gate_result=moved,
+                    movement_amount=movement_amount,
+                    moved_joints=moved_joints,
+                    torso_reference=float(torso_len),
+                    cancellation_reason=cancellation_reason,
+                    fall_confirmed_emitted=False,
+                    emitted_confidence=None,
+                )
+
+            elif event["state"] == "WARNING" and current_source_time_s >= event["next_check_source_time_s"]:
+                moved, movement_amount, moved_joints = movement_check(current_kpts, event["anchor_kpts"], torso_len)
+                if moved:
+                    self.pending_events_by_track[track_id] = None
+                    transition = "WARNING->CLEAR"
+                    cancellation_reason = "movement_gate"
+                    emitted = False
+                else:
+                    event["state"] = "ALERT"
+                    transition = "WARNING->ALERT"
+                    cancellation_reason = None
+                    self.current_action_by_track[track_id] = f"Nga! ({event['conf']:.2f})"
+                    self.action_color_by_track[track_id] = (0, 0, 255)
+                    det = next(
+                        (d for d in self._latest_detections if getattr(d, "association_id", None) == track_id),
+                        None,
+                    )
+                    emitted = self.emit_event("FALL_CONFIRMED", event["conf"], detection=det) is not False
+                    event["anchor_kpts"] = current_kpts
+                    event["next_check_source_time_s"] = current_source_time_s + 2.0
+                self._record_fall_diagnostic(
+                    current_source_time_s,
+                    track_id=track_id,
+                    current_action=self.current_action_by_track.get(track_id),
+                    top_predicted_class=event.get("top_predicted_class", "Fall"),
+                    fall_class_probability=event.get("fall_class_probability", event["conf"]),
+                    pending_state=(event["state"] if self.pending_events_by_track.get(track_id) else "CLEAR"),
+                    state_transition=transition,
+                    elapsed=elapsed,
+                    movement_gate_result=moved,
+                    movement_amount=movement_amount,
+                    moved_joints=moved_joints,
+                    torso_reference=float(torso_len),
+                    cancellation_reason=cancellation_reason,
+                    fall_confirmed_emitted=emitted,
+                    emitted_confidence=(event["conf"] if emitted else None),
+                )
+
+            elif event["state"] == "ALERT" and current_source_time_s >= event["next_check_source_time_s"]:
+                moved, movement_amount, moved_joints = movement_check(current_kpts, event["anchor_kpts"], torso_len)
+                if moved:
+                    self.pending_events_by_track[track_id] = None
+                    transition = "ALERT->CLEAR"
+                    cancellation_reason = "movement_gate"
+                else:
+                    event["anchor_kpts"] = current_kpts
+                    event["next_check_source_time_s"] = current_source_time_s + 2.0
+                    transition = "ALERT->ALERT"
+                    cancellation_reason = None
+                self._record_fall_diagnostic(
+                    current_source_time_s,
+                    track_id=track_id,
+                    current_action=self.current_action_by_track.get(track_id),
+                    top_predicted_class=event.get("top_predicted_class", "Fall"),
+                    fall_class_probability=event.get("fall_class_probability", event["conf"]),
+                    pending_state=(event["state"] if self.pending_events_by_track.get(track_id) else "CLEAR"),
+                    state_transition=transition,
+                    elapsed=elapsed,
+                    movement_gate_result=moved,
+                    movement_amount=movement_amount,
+                    moved_joints=moved_joints,
+                    torso_reference=float(torso_len),
+                    cancellation_reason=cancellation_reason,
+                    fall_confirmed_emitted=False,
+                    emitted_confidence=None,
+                )
+
+            if self.pending_events_by_track.get(track_id) is None:
+                self.current_action_by_track[track_id] = "Binh thuong"
+                self.action_color_by_track[track_id] = (0, 255, 0)
+
+        else:
+            if source_span_s(pose_samples, current_source_time_s) >= 2.0:
+                raw_array = np.array([sample.keypoints for sample in pose_samples])
+                kpt = clean_out_of_bounds_data(raw_array)
+                kpt = interpolate_missing(kpt)
+                kpt = kpt - kpt[:, 0:1, :]
+                kpt = normalize_pose(kpt)
+                kpt = apply_kalman_filter(kpt)
+                kpt = resample_frames(kpt, target_frames=self.window_size)
+
+                data_numpy = kpt.transpose(2, 0, 1)
+                data_numpy = data_numpy[:, :, :, np.newaxis]
+                data_tensor = torch.from_numpy(data_numpy).unsqueeze(0).float()
+
+                with torch.inference_mode():
+                    output = self.action_model(data_tensor)
+                    self.current_sda_gcn_ms = self.action_model.last_inference_ms
+                    self._record_sda_inference()
+                    prob = functional.softmax(output, dim=1).squeeze()
+                    pred_idx = torch.argmax(prob).item()
+                    conf = float(prob[pred_idx])
+                    fall_probability = float(prob[0])
+                    action_names = {0: "Fall", 1: "Dung", 2: "Cui", 3: "Ngoi", 4: "Nam"}
+                    top_predicted_class = action_names.get(pred_idx, f"class_{pred_idx}")
+                    self._record_fall_diagnostic(
+                        current_source_time_s,
+                        track_id=track_id,
+                        current_action=self.current_action_by_track.get(track_id, "Binh thuong"),
+                        top_predicted_class=top_predicted_class,
+                        fall_class_probability=fall_probability,
+                        pending_state="FALL_DETECTED" if pred_idx == 0 else "CLEAR",
+                        state_transition="CLEAR->FALL_DETECTED" if pred_idx == 0 else None,
+                        elapsed=0.0,
+                        movement_gate_result=None,
+                        movement_amount=None,
+                        torso_reference=None,
+                        cancellation_reason=None,
+                        fall_confirmed_emitted=False,
+                        emitted_confidence=None,
+                    )
+
+                    if pred_idx == 0:
+                        self.pending_events_by_track[track_id] = {
+                            "started_source_time_s": current_source_time_s,
+                            "state": "FALL_DETECTED",
+                            "anchor_kpts": None,
+                            "next_check_source_time_s": 0,
+                            "conf": conf,
+                            "top_predicted_class": top_predicted_class,
+                            "fall_class_probability": fall_probability,
+                        }
+                        self.current_action_by_track[track_id] = f"Phat hien nga ({conf:.2f}) - Kiem tra..."
+                        self.action_color_by_track[track_id] = (0, 255, 255)
+                    else:
+                        action_name = action_names.get(pred_idx, "Binh thuong")
+                        self.current_action_by_track[track_id] = f"{action_name} ({conf:.2f})"
+                        self.action_color_by_track[track_id] = (0, 255, 0)
+
+                while pose_samples and current_source_time_s - pose_samples[0].source_time_s > 1.0:
+                    pose_samples.popleft()
+
+        while pose_samples and current_source_time_s - pose_samples[0].source_time_s > 2.5:
+            pose_samples.popleft()
+
+    def _detect_fall_raw_for_track(self, current_source_time_s, track_id):
+        pose_samples = self.pose_samples_by_track.get(track_id, deque())
+        if source_span_s(pose_samples, current_source_time_s) < 2.0:
+            return
+        raw_array = np.array([sample.keypoints for sample in pose_samples])
+        kpt = clean_out_of_bounds_data(raw_array)
+        kpt = interpolate_missing(kpt)
+        kpt = kpt - kpt[:, 0:1, :]
+        kpt = normalize_pose(kpt)
+        kpt = apply_kalman_filter(kpt)
+        kpt = resample_frames(kpt, target_frames=self.window_size)
+        data_tensor = torch.from_numpy(kpt.transpose(2, 0, 1)[:, :, :, np.newaxis]).unsqueeze(0).float()
+        with torch.inference_mode():
+            output = self.action_model(data_tensor)
+            self.current_sda_gcn_ms = self.action_model.last_inference_ms
+            self._record_sda_inference()
+            prob = functional.softmax(output, dim=1).squeeze()
+            pred_idx = torch.argmax(prob).item()
+            conf = float(prob[pred_idx])
+            # Preserve the existing raw-classifier class semantics.
+            if pred_idx == 1:
+                self.current_action_by_track[track_id] = f"Nga! ({conf:.2f})"
+                self.action_color_by_track[track_id] = (0, 0, 255)
+                det = next(
+                    (d for d in self._latest_detections if getattr(d, "association_id", None) == track_id),
+                    None,
+                )
+                self.emit_event("FALL_CONFIRMED", conf, detection=det)
+            else:
+                self.current_action_by_track[track_id] = f"Khong nga ({conf:.2f})"
+                self.action_color_by_track[track_id] = (0, 255, 0)
+        while pose_samples and current_source_time_s - pose_samples[0].source_time_s > 1.0:
+            pose_samples.popleft()
 
     def detect_fall(self, current_source_time_s):
         if self.config.raw_classifier:
@@ -865,7 +1259,10 @@ class VisionSession:
         print("\n[Source]")
         print(f"Type          : {'Camera' if metadata.kind == SourceKind.CAMERA else 'Video'}")
         if metadata.kind == SourceKind.CAMERA:
-            print(f"Index         : {self.source_spec.value}")
+            if self.source_spec is not None:
+                print(f"Index         : {self.source_spec.value}")
+            else:
+                print(f"Source        : {metadata.name}")
         else:
             print(f"File          : {metadata.name}")
         print(f"Resolution    : {metadata.width}x{metadata.height}")
@@ -939,6 +1336,32 @@ class VisionSession:
                 value=(0, 0, 0),
             )
 
+            # Static background-object scan. This is enrichment only; Vision remains usable if YOLO is unavailable.
+            if self.yolo_model is not None and time.time() - self.last_yolo_time > 600:
+                try:
+                    print(f"[*] Running YOLO static background scan (Frame: {self.frame_count})...")
+                    results = self.yolo_model(
+                        frame,
+                        classes=[56, 57, 59, 60, 61, 62, 68, 69, 71, 72],
+                        conf=0.5,
+                        verbose=False,
+                    )
+                    self.yolo_cached_boxes = []
+                    for box in results[0].boxes:
+                        cls_id = int(box.cls[0])
+                        cls_name = self.yolo_model.names[cls_id]
+                        x1_y, y1_y, x2_y, y2_y = box.xyxy[0].cpu().numpy()
+                        self.yolo_cached_boxes.append(
+                            {
+                                "name": cls_name,
+                                "bbox": (int(x1_y), int(y1_y), int(x2_y), int(y2_y)),
+                            }
+                        )
+                except Exception as exc:
+                    warnings.warn(f"YOLO static scan failed: {exc}", RuntimeWarning, stacklevel=2)
+                finally:
+                    self.last_yolo_time = time.time()
+
             self.frame_count += 1
             self.current_identity_ms = None
             if self.identity_stage and not self._gallery_status_logged:
@@ -996,73 +1419,139 @@ class VisionSession:
                 self._event_source_time_s = pose_packet.source_time_s
                 self._event_source_epoch = pose_packet.source_epoch
                 self._latest_detection = None
+                self._latest_detections = []
+
             if new_pose_packet and pose_packet.result.pose_landmarks:
-                landmarks = pose_packet.result.pose_landmarks[0]
+                rects = []
+                landmark_list = []
+                for landmarks in pose_packet.result.pose_landmarks:
+                    xs = [lm.x for lm in landmarks]
+                    ys = [lm.y for lm in landmarks]
+                    x_min, x_max = min(xs), max(xs)
+                    y_min, y_max = min(ys), max(ys)
+                    pad = 30
+                    x1 = max(0, int(x_min * self.orig_w) - pad)
+                    y1 = max(0, int(y_min * self.orig_h) - pad)
+                    x2 = min(self.orig_w, int(x_max * self.orig_w) + pad)
+                    y2 = min(self.orig_h, int(y_max * self.orig_h) + pad)
+                    if (x2 - x1) >= 20 and (y2 - y1) >= 20:
+                        rects.append((x1, y1, x2, y2))
+                        landmark_list.append(landmarks)
 
-                kpts = extract_from_landmarks(landmarks)
+                tracked_objects = self.tracker.update(rects)
+                for obj_id, rect_idx in tracked_objects.items():
+                    x1, y1, x2, y2 = rects[rect_idx]
+                    landmarks = landmark_list[rect_idx]
+                    kpts = extract_from_landmarks(landmarks)
 
-                xs = [lm.x for lm in landmarks]
-                ys = [lm.y for lm in landmarks]
-                x_min, x_max = min(xs), max(xs)
-                y_min, y_max = min(ys), max(ys)
-
-                pad = 30
-                x1 = max(0, int(x_min * self.orig_w) - pad)
-                y1 = max(0, int(y_min * self.orig_h) - pad)
-                x2 = min(self.orig_w, int(x_max * self.orig_w) + pad)
-                y2 = min(self.orig_h, int(y_max * self.orig_h) + pad)
-
-                if (x2 - x1) >= 20 and (y2 - y1) >= 20:
-                    self.process_person(
+                    det = self.process_person(
                         pose_packet.frame,
                         x1,
                         y1,
                         x2,
                         y2,
-                        track_id=None,
+                        track_id=obj_id,
                         frame_sequence=pose_packet.frame_sequence,
                         source_time_s=pose_packet.source_time_s,
                         overlay_frame=frame,
                     )
+                    if det is not None:
+                        self._latest_detections.append(det)
 
-                self.pose_samples.append(PoseSample(pose_packet.source_time_s, kpts))
+                    samples = self.pose_samples_by_track.setdefault(obj_id, deque())
+                    samples.append(PoseSample(pose_packet.source_time_s, kpts))
 
             elif new_pose_packet:
                 if self.identity_stage:
                     identity_before = self.identity_stage.result
                     self.identity_stage.update_presence(None, pose_packet.source_time_s)
-                    if identity_before.state != self.identity_stage.result.state and self.log_level in {
-                        "debug",
-                        "info",
-                    }:
+                    if identity_before.state != self.identity_stage.result.state and self.log_level in {"debug", "info"}:
                         label = identity_before.name or identity_before.state.value
                         print(f"[Identity] {label} left scene -> reset")
-                if self.pose_samples:
-                    last_kpts = self.pose_samples[-1].keypoints.copy()
-                else:
-                    last_kpts = np.zeros((25, 3), dtype=np.float32)
+                self.tracker.update([])
 
-                self.pose_samples.append(PoseSample(pose_packet.source_time_s, last_kpts))
+            # Clean up tracks only after the tracker actually deregisters them.
+            active_ids = set(self.tracker.objects.keys())
+            for track_id in list(self.pose_samples_by_track.keys()):
+                if track_id in active_ids:
+                    continue
 
-                if self.pending_event is None:
-                    self.current_action = "Khong nga (Lost)"
-                    self.action_color = (0, 255, 0)
+                last_samples = self.pose_samples_by_track[track_id]
+                if last_samples and self._frame_transform is not None:
+                    kpts = last_samples[-1].keypoints
+                    xs = kpts[:, 0]
+                    ys = kpts[:, 1]
+                    x_min, x_max = np.min(xs), np.max(xs)
+                    y_min, y_max = np.min(ys), np.max(ys)
+                    pad = 30
+                    x1 = max(0, int(x_min * self.orig_w) - pad)
+                    y1 = max(0, int(y_min * self.orig_h) - pad)
+                    x2 = min(self.orig_w, int(x_max * self.orig_w) + pad)
+                    y2 = min(self.orig_h, int(y_max * self.orig_h) + pad)
+                    det = VisionDetection(
+                        "person",
+                        bbox=self._frame_transform.bbox_to_source((x1, y1, x2, y2)),
+                        association_id=track_id,
+                    )
+                    det = self._inject_slm_data(det, (x1, y1, x2, y2))
+                    object.__setattr__(det, "tracking_status", "Đã biến mất")
+                    self._latest_detections.append(det)
+
+                self.pose_samples_by_track.pop(track_id, None)
+                self.pending_events_by_track.pop(track_id, None)
+                self.current_action_by_track.pop(track_id, None)
+                self.action_color_by_track.pop(track_id, None)
 
             self.current_sda_gcn_ms = None
             self._pending_fall_diagnostics = []
-            if self.pose_samples:
-                self.detect_fall(self.pose_samples[-1].source_time_s)
+            for track_id, samples in list(self.pose_samples_by_track.items()):
+                if samples:
+                    current_track_time = (
+                        pose_packet.source_time_s if new_pose_packet else samples[-1].source_time_s
+                    )
+                    self.detect_fall_for_track(current_track_time, track_id)
+
             if self.current_sda_gcn_ms is not None:
                 sda_window_samples.append(self.current_sda_gcn_ms)
             if self.current_identity_ms is not None:
                 identity_window_samples.append(self.current_identity_ms)
 
+            # Aggregate per-track state into the existing frame-level contract.
+            global_action = "Binh thuong"
+            global_fall_state = "CLEAR"
+            global_conf = None
+            for tid, action in self.current_action_by_track.items():
+                if "Nga" in action:
+                    global_action = action
+                    pending = self.pending_events_by_track.get(tid)
+                    if pending:
+                        global_fall_state = pending["state"]
+                        global_conf = pending["conf"]
+                    break
+
+            self.current_action = global_action
+            self.action_color = (0, 0, 255) if "Nga" in global_action else (0, 255, 0)
+            self.pending_event = next(
+                (event for event in self.pending_events_by_track.values() if event is not None),
+                None,
+            )
+            self.pose_samples.clear()
+            if self.pose_samples_by_track:
+                first_samples = next(iter(self.pose_samples_by_track.values()))
+                self.pose_samples.extend(first_samples)
+
             cv2.putText(
-                frame, f"Action: {self.current_action}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, self.action_color, 2
+                frame,
+                f"Global State: {global_action}",
+                (20, 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,
+                self.action_color,
+                2,
             )
             cv2.putText(
                 frame,
-                f"Buffer: {len(self.pose_samples)} frames / 2.0s",
+                f"Tracking {len(self.pose_samples_by_track)} people",
                 (20, 80),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.7,
@@ -1073,8 +1562,6 @@ class VisionSession:
             self.total_vision_ms = (time.perf_counter() - vision_started) * 1000.0
             self._profile_cycle.append((time.monotonic(), self.total_vision_ms))
             if new_pose_packet:
-                fall_state = self.pending_event["state"] if self.pending_event else "CLEAR"
-                fall_confidence = self.pending_event["conf"] if self.pending_event else None
                 self.latest_result = VisionFrameResult(
                     camera_id=self.config.camera_id,
                     frame_sequence=pose_packet.frame_sequence,
@@ -1082,10 +1569,10 @@ class VisionSession:
                     source_epoch=pose_packet.source_epoch,
                     source_time_s=pose_packet.source_time_s,
                     captured_wall_time=pose_packet.wall_time_utc,
-                    current_action=self.current_action,
-                    fall_state=fall_state,
-                    fall_confidence=fall_confidence,
-                    detections=((self._latest_detection,) if self._latest_detection else ()),
+                    current_action=global_action,
+                    fall_state=global_fall_state,
+                    fall_confidence=global_conf,
+                    detections=tuple(self._latest_detections),
                     generated_events=tuple(self._pending_generated_events),
                     fall_diagnostics=tuple(self._pending_fall_diagnostics),
                     stage_metrics={
@@ -1264,3 +1751,4 @@ class VisionSession:
             "hardware_vendor": self.backend.vendor,
             "hardware_device_name": self.backend.device_name,
         }
+

@@ -61,6 +61,12 @@ class VisionDetection:
     identity_face_verified: bool | None = None
     face_bbox: tuple[int, int, int, int] | None = None
     association_id: str | int | None = None
+    
+    # --- Data for SLM ---
+    yolo_interaction: str | None = None
+    iou_score: float | None = None
+    last_position: str | None = None
+    tracking_status: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
