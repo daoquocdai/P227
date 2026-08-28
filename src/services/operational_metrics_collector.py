@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 def _utc_text(value: datetime) -> str:
-    return value.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return value.astimezone(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 class OperationalMetricsCollector:

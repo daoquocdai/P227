@@ -449,49 +449,221 @@ async def test_registry_locked_unknown_without_sda_event_persists_event_and_aler
             await consumer
 
 
-def test_registry_separates_source_rate_from_result_rate_and_restart_epoch(monkeypatch):
-    observed_epochs = []
+def _registry_settings():
+    return SimpleNamespace(vision_identity_enabled=False, vision_device="cpu", vision_fps=15.0, log_level="ERROR")
 
-    class FakeSession:
-        def __init__(self, config, callbacks):
-            self.config, self.callbacks = config, callbacks
-            self.identity_enabled = config.identity_enabled
-            self._stop_requested = False
 
-        def run(self):
-            observed_epochs.append(self.config.source_epoch)
-            for index in range(30):
-                frame = np.full((2, 2, 3), index, np.uint8)
+class _LifecycleFakeSession:
+    instances = []
+    vision_delay = 0.04
+    vision_failure = False
+
+    def __init__(self, config, callbacks):
+        self.config, self.callbacks = config, callbacks
+        self.identity_enabled = config.identity_enabled
+        self.inference_enabled = config.inference_enabled
+        self.running = False
+        self.ended = False
+        self.error = None
+        self.epoch = config.source_epoch
+        self.sequence = 0
+        self.latest_frame = None
+        self.source_stop = threading.Event()
+        self.vision_stop = threading.Event()
+        self.source_thread = None
+        self.source_starts = 0
+        self.vision_shutdowns = 0
+        self.dropped = 0
+        self.external = False
+        self.__class__.instances.append(self)
+
+    def start_source(self):
+        self.source_starts += 1
+        self.running = True
+
+        def publish():
+            while not self.source_stop.wait(0.01):
+                self.sequence += 1
+                frame = np.full((2, 2, 3), self.sequence % 255, np.uint8)
+                self.latest_frame = frame
                 self.callbacks.on_source_frame(
-                    VisionSourceFrame("cam", index + 1, index, self.config.source_epoch, index / 30, None, frame)
-                )
-                if index % 2:
-                    self.callbacks.on_result_frame(
-                        frame, sda_result(sequence=index + 1, epoch=self.config.source_epoch)
+                    VisionSourceFrame(
+                        "cam", self.sequence, self.sequence - 1, self.epoch, self.sequence / 100, None, frame
                     )
+                )
+            self.running = False
+            self.ended = True
 
-        def request_stop(self):
-            self._stop_requested = True
+        self.source_thread = threading.Thread(target=publish, daemon=True)
+        self.source_thread.start()
 
-        def shutdown(self):
-            self._stop_requested = True
+    def run_vision(self):
+        self.vision_stop.clear()
+        last_sequence = 0
+        while not self.vision_stop.wait(self.vision_delay):
+            if self.vision_failure:
+                raise RuntimeError("vision failure")
+            if not self.running or not self.inference_enabled or self.sequence == last_sequence:
+                continue
+            self.dropped += max(0, self.sequence - last_sequence - 1) if last_sequence else 0
+            last_sequence = self.sequence
+            result = sda_result(sequence=last_sequence, epoch=self.epoch)
+            result.stage_metrics["capture_frames_dropped"] = self.dropped
+            self.callbacks.on_result_frame(self.latest_frame, result)
 
-        def set_inference_enabled(self, enabled):
-            pass
+    def start_external_source(self, epoch):
+        self.external = True
+        self.epoch = epoch
+        self.sequence = 0
+        self.running = True
+        self.ended = False
+        self.source_stop.clear()
 
-        def set_identity_enabled(self, enabled):
-            self.identity_enabled = enabled
+    def submit_external_frame(self, frame):
+        assert self.running
+        self.sequence += 1
+        self.latest_frame = frame
+        self.callbacks.on_source_frame(
+            VisionSourceFrame("cam", self.sequence, self.sequence - 1, self.epoch, self.sequence / 100, None, frame)
+        )
 
-    monkeypatch.setattr("src.integrations.sda_vision.VisionSession", FakeSession)
-    settings = SimpleNamespace(vision_identity_enabled=False, vision_device="cpu", vision_fps=15.0, log_level="ERROR")
-    registry = SdaSessionRegistry(FrameHub(), settings=settings)
+    def source_status(self):
+        return {
+            "running": self.running,
+            "ended": self.ended,
+            "error": self.error,
+            "capture_fps": 100.0 if self.running else 0.0,
+            "source_epoch": self.epoch,
+        }
+
+    def request_vision_stop(self):
+        self.vision_stop.set()
+
+    def stop_source(self):
+        self.source_stop.set()
+        if self.source_thread and self.source_thread.ident is not None:
+            self.source_thread.join(1)
+        if self.external:
+            self.running = False
+            self.ended = True
+
+    def shutdown_vision(self):
+        self.vision_shutdowns += 1
+
+    def set_inference_enabled(self, enabled):
+        self.inference_enabled = bool(enabled)
+
+    def set_identity_enabled(self, enabled):
+        self.identity_enabled = bool(enabled)
+
+    def hardware_diagnostics(self):
+        return {}
+
+
+def _fake_registry(monkeypatch, *, failure=False, delay=0.04):
+    _LifecycleFakeSession.instances = []
+    _LifecycleFakeSession.vision_failure = failure
+    _LifecycleFakeSession.vision_delay = delay
+    monkeypatch.setattr("src.integrations.sda_vision.VisionSession", _LifecycleFakeSession)
+    registry = SdaSessionRegistry(FrameHub(), settings=_registry_settings())
     registry.start_session("cam", "0", location="Kitchen")
-    registry._records["cam"].thread.join(1)
-    assert registry.camera_status("cam")["frames_published"] == 30
-    assert registry.vision_status("cam")["processed_frames"] == 15
-    assert registry.latest_result("cam").frame_id == 30
+    _wait_for(lambda: registry.camera_status("cam")["status"] == "online")
+    return registry, _LifecycleFakeSession.instances[-1]
+
+
+def test_slow_vision_does_not_block_source_and_reports_overwrites(monkeypatch):
+    registry, _session = _fake_registry(monkeypatch, delay=0.08)
+    _wait_for(lambda: registry.vision_status("cam")["processed_frames"] >= 3)
+    camera = registry.camera_status("cam")
+    vision = registry.vision_status("cam")
+    assert camera["frames_published"] > vision["processed_frames"] * 3
+    raw_before = registry.frame_hub.get_latest("cam").frame_id
+    processed_before = vision["processed_frames"]
+    _wait_for(lambda: registry.frame_hub.get_latest("cam").frame_id > raw_before)
+    assert registry.vision_status("cam")["processed_frames"] <= processed_before + 1
+    assert vision["realtime"]["vision_frames_overwritten"] > 0
+    assert vision["realtime"]["vision_drop_ratio"] > 0
+    registry.stop_all()
+
+
+def test_vision_exception_keeps_camera_and_raw_frames_alive(monkeypatch):
+    registry, _session = _fake_registry(monkeypatch, failure=True)
+    _wait_for(lambda: registry.vision_status("cam")["status"] == "error")
+    before = registry.frame_hub.get_latest("cam").frame_id
+    _wait_for(lambda: registry.frame_hub.get_latest("cam").frame_id > before)
+    assert registry.camera_status("cam")["status"] == "online"
+    assert registry.camera_is_running("cam") is True
+    assert registry.vision_status("cam")["current_error"] == "vision failure"
+    registry.stop_all()
+
+
+def test_vision_toggle_keeps_source_and_epoch(monkeypatch):
+    registry, session = _fake_registry(monkeypatch)
+    _wait_for(lambda: registry.vision_status("cam")["processed_frames"] > 0)
+    epoch = session.epoch
+    starts = session.source_starts
+    registry.set_vision_enabled("cam", False)
+    before = registry.frame_hub.get_latest("cam").frame_id
+    _wait_for(lambda: registry.frame_hub.get_latest("cam").frame_id > before)
+    assert registry.camera_status("cam")["status"] == "online"
+    assert registry.vision_status("cam")["status"] == "disabled"
+    assert registry.latest_result("cam") is None
+    registry.set_vision_enabled("cam", True)
+    _wait_for(lambda: registry.vision_status("cam")["processed_frames"] > 0)
+    assert (session.source_starts, session.epoch) == (starts, epoch)
+    registry.stop_all()
+
+
+def test_camera_stop_clears_frame_and_stops_both_lifecycles(monkeypatch):
+    registry, session = _fake_registry(monkeypatch)
+    registry.stop_session("cam")
+    assert not session.running
+    assert not (registry._records["cam"].vision_thread or SimpleNamespace(is_alive=lambda: False)).is_alive()
+    assert not registry.frame_hub.has_camera("cam")
+    assert registry.camera_status("cam")["status"] == "offline"
+
+
+def test_restart_epoch_uses_actual_source_epoch(monkeypatch):
+    registry, first = _fake_registry(monkeypatch)
+    first.epoch = 3
     registry.stop_session("cam")
     registry.start_session("cam", "0", location="Kitchen")
-    registry._records["cam"].thread.join(1)
-    assert observed_epochs == [0, 1]
+    _wait_for(lambda: len(_LifecycleFakeSession.instances) == 2)
+    assert _LifecycleFakeSession.instances[-1].config.source_epoch >= 4
+    registry.stop_all()
+
+
+def test_browser_source_waits_then_first_frame_goes_online_and_reaches_vision(monkeypatch):
+    _LifecycleFakeSession.instances = []
+    _LifecycleFakeSession.vision_failure = False
+    _LifecycleFakeSession.vision_delay = 0.01
+    monkeypatch.setattr("src.integrations.sda_vision.VisionSession", _LifecycleFakeSession)
+    registry = SdaSessionRegistry(FrameHub(), settings=_registry_settings())
+    status = registry.start_browser_session("cam", location="Browser")
+    assert status["status"] == "connecting"
+    assert registry.vision_status("cam")["status"] == "waiting_for_source"
+    publisher = registry.browser_connect("cam")
+    assert registry.submit_browser_frame("cam", publisher, np.zeros((4, 6, 3), np.uint8))
+    _wait_for(lambda: registry.camera_status("cam")["status"] == "online")
+    _wait_for(lambda: registry.vision_status("cam")["processed_frames"] > 0)
+    assert registry.frame_hub.get_latest("cam").source_epoch == 0
+    registry.stop_all()
+
+
+def test_browser_reconnect_advances_epoch_and_stale_disconnect_is_ignored(monkeypatch):
+    _LifecycleFakeSession.instances = []
+    monkeypatch.setattr("src.integrations.sda_vision.VisionSession", _LifecycleFakeSession)
+    registry = SdaSessionRegistry(FrameHub(), settings=_registry_settings())
+    registry.start_browser_session("cam", location="Browser")
+    old_publisher = registry.browser_connect("cam")
+    registry.submit_browser_frame("cam", old_publisher, np.zeros((2, 2, 3), np.uint8))
+    old_epoch = registry.frame_hub.get_latest("cam").source_epoch
+    assert registry.browser_disconnect("cam", old_publisher)
+    assert registry.camera_status("cam")["status"] == "connecting"
+    assert registry.vision_status("cam")["status"] == "waiting_for_source"
+    new_publisher = registry.browser_connect("cam")
+    assert registry.browser_disconnect("cam", old_publisher) is False
+    assert registry.submit_browser_frame("cam", new_publisher, np.ones((2, 2, 3), np.uint8))
+    assert registry.frame_hub.get_latest("cam").source_epoch > old_epoch
+    assert registry.camera_is_running("cam")
     registry.stop_all()

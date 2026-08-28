@@ -122,6 +122,10 @@ class ShutdownTests(unittest.TestCase):
     class Resource:
         def __init__(self):
             self.calls = 0
+            self.ended = False
+            self.error = None
+            self.capture_fps = 0.0
+            self.source_epoch = 0
         def stop(self):
             self.calls += 1
 
@@ -129,18 +133,30 @@ class ShutdownTests(unittest.TestCase):
         def close(self):
             self.calls += 1
 
-    def test_shutdown_is_idempotent(self):
+    def test_split_cleanup_keeps_source_alive_until_source_shutdown(self):
         source = self.Resource()
         identity = self.Resource()
         pose = self.PoseResource()
+        action = self.PoseResource()
         session = VisionSession.__new__(VisionSession)
-        session._stop_requested = False
+        session._vision_stop_requested = False
         session.frame_source = source
         session.identity_stage = identity
         session.pose_model = pose
+        session.action_model = action
+        session._last_identity_queue = {}
+
+        session.shutdown_vision()
+        session.shutdown_vision()
+        self.assertEqual((source.calls, identity.calls, pose.calls, action.calls), (0, 1, 1, 1))
+
+        session.stop_source()
+        session.stop_source()
+        self.assertEqual(source.calls, 1)
+
         session.shutdown()
         session.shutdown()
-        self.assertEqual((source.calls, identity.calls, pose.calls), (1, 1, 1))
+        self.assertEqual((source.calls, identity.calls, pose.calls, action.calls), (1, 1, 1, 1))
 
 
 class SessionControlTests(unittest.TestCase):

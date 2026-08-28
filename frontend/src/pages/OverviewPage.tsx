@@ -16,6 +16,16 @@ export default function OverviewPage() {
     getOverview().then(setData).catch(() => setError(true)).finally(() => setLoading(false));
   };
   useEffect(load, []);
+  useEffect(() => {
+    let cancelled=false;
+    const refresh=()=>{
+      if(document.visibilityState!=="visible")return;
+      void getOverview().then((next)=>{if(!cancelled)setData(next)}).catch(()=>undefined);
+    };
+    const timer=window.setInterval(refresh,5000);
+    window.addEventListener("antam:cameras-changed",refresh);
+    return()=>{cancelled=true;window.clearInterval(timer);window.removeEventListener("antam:cameras-changed",refresh)};
+  },[]);
 
   const navigate = (path: string) => {
     window.history.pushState({}, "", path);
@@ -58,6 +68,7 @@ export default function OverviewPage() {
 
 function CameraPreview({ camera }: { camera: OverviewData["cameras"][number] }) {
   const [failed, setFailed] = useState(false);
+  useEffect(()=>{setFailed(false)},[camera.id,camera.previewUrl,camera.previewVersion]);
   if (!camera.previewUrl || failed) return <span className="overview-camera-placeholder"><Camera /></span>;
   const separator = camera.previewUrl.includes("?") ? "&" : "?";
   return <img src={`${camera.previewUrl}${separator}v=${camera.previewVersion ?? 0}`} alt={`Ảnh gần nhất ${camera.name}`} onError={() => setFailed(true)} />;
