@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import type { CameraVisionResult } from "../api/cameras";
+import { VisionOverlayCanvas } from "../features/vision/VisionOverlayCanvas";
 
 interface CameraStreamProps {
   cameraId: string;
@@ -8,13 +10,14 @@ interface CameraStreamProps {
   className?: string;
   onError?: () => void;
   showBoxes?: boolean;
-  showIdentity?: boolean;
+  result?: CameraVisionResult | null;
 }
 
-export function CameraStream({ cameraId, streamReady, streamUrl, className, onError, showBoxes=true, showIdentity=true }: CameraStreamProps) {
+export function CameraStream({ cameraId, streamReady, streamUrl, className, onError, showBoxes=false, result=null }: CameraStreamProps) {
   const [generation,setGeneration]=useState(0);
   const retryAttempt=useRef(0);
   const retryTimer=useRef<number|null>(null);
+  const imageRef=useRef<HTMLImageElement>(null);
 
   useEffect(()=>{
     retryAttempt.current=0;
@@ -22,7 +25,7 @@ export function CameraStream({ cameraId, streamReady, streamUrl, className, onEr
     if(retryTimer.current!==null)window.clearTimeout(retryTimer.current);
     retryTimer.current=null;
     return()=>{if(retryTimer.current!==null)window.clearTimeout(retryTimer.current)};
-  },[cameraId,streamUrl,streamReady,showBoxes,showIdentity]);
+  },[cameraId,streamUrl,streamReady]);
 
   const handleError=()=>{
     onError?.();
@@ -36,9 +39,12 @@ export function CameraStream({ cameraId, streamReady, streamUrl, className, onEr
 
   if (streamReady && streamUrl) {
     const separator=streamUrl.includes("?")?"&":"?";
-    const configured=`${streamUrl}${separator}boxes=${showBoxes}&identity=${showIdentity}&generation=${generation}`;
+    const configured=`${streamUrl}${separator}generation=${generation}`;
     const streamClassName=["camera-stream-image",className].filter(Boolean).join(" ");
-    return <img className={streamClassName} src={configured} alt={`Luồng trực tiếp ${cameraId}`} onError={handleError} onLoad={handleLoad} />;
+    return <span className="camera-media-layer">
+      <img ref={imageRef} className={streamClassName} src={configured} alt={`Luồng trực tiếp ${cameraId}`} onError={handleError} onLoad={handleLoad} />
+      <VisionOverlayCanvas mediaRef={imageRef} result={result} visible={showBoxes} />
+    </span>;
   }
   return null;
 }

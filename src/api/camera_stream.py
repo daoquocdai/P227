@@ -32,6 +32,9 @@ def stream_camera(
     boxes: bool = True,
     identity: bool = True,
 ):
+    # Presentation is frontend-only. Legacy query parameters remain accepted
+    # but intentionally do not affect or reconnect the raw media stream.
+    _ = boxes, identity
 
     runtime = get_runtime(request)
 
@@ -48,9 +51,6 @@ def stream_camera(
         runtime.stream.mjpeg_async(
             public_id,
             request.is_disconnected,
-            show_boxes=boxes,
-            show_identity=identity,
-            show_fall=True,
         ),
         media_type=("multipart/x-mixed-replace; boundary=frame"),
         headers={

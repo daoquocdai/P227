@@ -2,8 +2,10 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import { getCameras } from "../../api/cameras";
 import { API_BASE_URL, getAuthToken } from "../../api/client";
 
-const WEBCAM_VISION_UPLOAD_FPS = 12;
-const MAX_UPLOAD_WIDTH = 960;
+const WEBCAM_VISION_UPLOAD_FPS = 15;
+// Compatibility only for older servers whose ready payload has no target size.
+const LEGACY_UPLOAD_WIDTH = 960;
+const LEGACY_UPLOAD_HEIGHT = 540;
 const JPEG_QUALITY = 0.72;
 const MAX_BUFFERED_BYTES = 512 * 1024;
 
@@ -47,6 +49,8 @@ export function WebcamProvider({ children }: { children: ReactNode }) {
     let encodeInFlight = false;
     let refreshInFlight = false;
     let permissionBlockedCameraId: string | null = null;
+    let uploadTargetWidth = LEGACY_UPLOAD_WIDTH;
+    let uploadTargetHeight = LEGACY_UPLOAD_HEIGHT;
     const canvas = document.createElement("canvas");
 
     const stopPublisher = () => {
@@ -79,7 +83,11 @@ export function WebcamProvider({ children }: { children: ReactNode }) {
           publisherSocket.bufferedAmount > MAX_BUFFERED_BYTES || !video || video.readyState < 2 ||
           video.videoWidth <= 0 || video.videoHeight <= 0
         ) return;
-        const scale = Math.min(1, MAX_UPLOAD_WIDTH / video.videoWidth);
+        const scale = Math.min(
+          1,
+          uploadTargetWidth / video.videoWidth,
+          uploadTargetHeight / video.videoHeight,
+        );
         canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
         canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
         canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height);
@@ -112,8 +120,16 @@ export function WebcamProvider({ children }: { children: ReactNode }) {
       publisherSocket.onmessage = (event) => {
         if (typeof event.data !== "string") return;
         try {
-          const message = JSON.parse(event.data) as { type?: string };
+          const message = JSON.parse(event.data) as {
+            type?: string;
+            vision_input_width?: number;
+            vision_input_height?: number;
+          };
           if (message.type !== "ready") return;
+          uploadTargetWidth = Number.isFinite(message.vision_input_width) && Number(message.vision_input_width) > 0
+            ? Number(message.vision_input_width) : LEGACY_UPLOAD_WIDTH;
+          uploadTargetHeight = Number.isFinite(message.vision_input_height) && Number(message.vision_input_height) > 0
+            ? Number(message.vision_input_height) : LEGACY_UPLOAD_HEIGHT;
           reconnectAttempt = 0;
           setValue({ cameraId, stream, status: "publishing", error: null });
           startUploader(publisherSocket, stream, expectedGeneration);

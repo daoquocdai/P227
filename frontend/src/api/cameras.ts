@@ -40,12 +40,21 @@ export interface CameraVisionDetection {
   metadata: Record<string, unknown>;
 }
 
+export interface CameraVisionMetadata extends Record<string, unknown> {
+  bbox_coordinate_space?: string;
+  bbox_source_width?: number;
+  bbox_source_height?: number;
+  current_action?: string;
+  fall_state?: string;
+  fall_confidence?: number | null;
+}
+
 export interface CameraVisionResult {
   camera_id: string;
   frame_id: number;
   processed_at: number;
   detections: CameraVisionDetection[];
-  metadata: Record<string, unknown>;
+  metadata: CameraVisionMetadata;
 }
 
 export async function getCameras(): Promise<CameraDto[]> {

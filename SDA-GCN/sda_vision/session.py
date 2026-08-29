@@ -209,8 +209,8 @@ class VisionSession:
         self.yolo_cached_boxes = []
 
         # Constants
-        self.orig_w = 1280
-        self.orig_h = 720
+        self.orig_w = config.input_width
+        self.orig_h = config.input_height
         self.window_size = 64
 
         self.frame_count = 0
@@ -221,6 +221,7 @@ class VisionSession:
         self.current_sda_gcn_ms = None
         self.current_identity_ms = None
         self._last_identity_event_timestamp = 0.0
+        self._identity_track_id = None
         self._gallery_status_logged = False
         self._current_packet = None
         self._latest_detection = None
@@ -314,7 +315,7 @@ class VisionSession:
             base_options=base_options,
             running_mode=vision.RunningMode.LIVE_STREAM,
             result_callback=self._pose_callback,
-            num_poses=5,
+            num_poses=self.config.num_poses,
             min_pose_detection_confidence=0.5,
             min_tracking_confidence=0.5,
         )
@@ -431,6 +432,7 @@ class VisionSession:
         self._event_source_time_s = 0.0
         self._event_source_epoch = 0
         self._last_identity_event_timestamp = 0.0
+        self._identity_track_id = None
         if self.identity_stage is not None:
             self.identity_stage.reset()
 
@@ -464,6 +466,7 @@ class VisionSession:
                 self.identity_enabled = enabled
                 self.config.identity_enabled = enabled
                 self._last_identity_event_timestamp = 0.0
+                self._identity_track_id = None
                 self._latest_detection = None
                 self._latest_detections = []
                 if not enabled:
@@ -564,7 +567,7 @@ class VisionSession:
         overlay_frame = frame if overlay_frame is None else overlay_frame
         stage = self.identity_stage
 
-        action_text = self.current_action_by_track.get(track_id, "")
+        action_text = getattr(self, "current_action_by_track", {}).get(track_id, "")
         if action_text:
             cv2.putText(
                 overlay_frame,
@@ -572,7 +575,7 @@ class VisionSession:
                 (x1, y2 + 20),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
-                self.action_color_by_track.get(track_id, (0, 255, 0)),
+                getattr(self, "action_color_by_track", {}).get(track_id, (0, 255, 0)),
                 2,
             )
 
@@ -594,15 +597,32 @@ class VisionSession:
             stage = self.identity_stage
             if not self.identity_enabled or stage is None:
                 return None
+            identity_track_id = getattr(self, "_identity_track_id", None)
+            if identity_track_id is None:
+                self._identity_track_id = track_id
+            elif identity_track_id != track_id:
+                stage.reset()
+                self._identity_track_id = track_id
+                self._last_identity_event_timestamp = 0.0
             processed_before = stage.frames_processed
             previous_state = stage.result.state
-            stage.submit(
+            submitted = stage.submit(
                 crop_frame.copy(),
                 (x1, y1, x2, y2),
                 source_time_s=source_time_s,
                 frame_sequence=frame_sequence,
             )
             result = stage.poll()
+
+        if self.log_level == "debug":
+            print(
+                "[Identity Trace] "
+                f"source_seq={getattr(self._current_packet, 'sequence', None)} "
+                f"pose_seq={frame_sequence} poses=1 rects=1 tracks=[{track_id}] "
+                f"identity_track={self._identity_track_id} "
+                f"identity_assoc={getattr(stage, 'association_id', None)} "
+                f"identity_state={result.state.value} submitted={submitted}"
+            )
 
         if result.state != previous_state and self.log_level in {"debug", "info"}:
             detail = f" | {result.name} | similarity={result.confidence:.2f}" if result.name else ""
@@ -666,10 +686,24 @@ class VisionSession:
 
         return det
 
+    def _mark_identity_absent(self, source_time_s):
+        stage = self.identity_stage
+        if stage is None:
+            return
+        identity_before = stage.result
+        stage.update_presence(None, source_time_s)
+        association_cleared = getattr(stage, "association_id", None) is None
+        if association_cleared:
+            self._identity_track_id = None
+            self._last_identity_event_timestamp = 0.0
+        if identity_before.state != stage.result.state and self.log_level in {"debug", "info"}:
+            label = identity_before.name or identity_before.state.value
+            print(f"[Identity] {label} left scene -> reset")
+
     def _inject_slm_data(self, det: VisionDetection, person_box: tuple) -> VisionDetection:
         yolo_interaction = "Không có"
         max_iou = 0.0
-        for yolo_obj in self.yolo_cached_boxes:
+        for yolo_obj in getattr(self, "yolo_cached_boxes", ()):
             iou = compute_overlap_ratio(person_box, yolo_obj["bbox"])
             if iou > max_iou:
                 max_iou = iou
@@ -1271,6 +1305,7 @@ class VisionSession:
             print(f"Frames        : {metadata.frame_count}")
             print(f"Duration      : {metadata.duration_s:.3f} s")
         print(f"Vision FPS    : {self.target_vision_fps}")
+        print(f"Vision input  : {self.orig_w}x{self.orig_h}")
         print(f"Clock         : {metadata.timestamp_strategy}")
         if metadata.kind == SourceKind.VIDEO_FILE:
             print("Playback      : realtime")
@@ -1461,41 +1496,37 @@ class VisionSession:
                     samples = self.pose_samples_by_track.setdefault(obj_id, deque())
                     samples.append(PoseSample(pose_packet.source_time_s, kpts))
 
+                if not rects:
+                    self._mark_identity_absent(pose_packet.source_time_s)
+                if self.log_level == "debug" and not rects:
+                    print(
+                        "[Identity Trace] "
+                        f"source_seq={snapshot.sequence} pose_seq={pose_packet.frame_sequence} "
+                        f"poses={len(pose_packet.result.pose_landmarks)} rects=0 tracks=[] "
+                        f"identity_track={self._identity_track_id} "
+                        f"identity_assoc={getattr(self.identity_stage, 'association_id', None)} "
+                        f"identity_state={getattr(getattr(self.identity_stage, 'result', None), 'state', None)} "
+                        "submitted=False"
+                    )
+
             elif new_pose_packet:
-                if self.identity_stage:
-                    identity_before = self.identity_stage.result
-                    self.identity_stage.update_presence(None, pose_packet.source_time_s)
-                    if identity_before.state != self.identity_stage.result.state and self.log_level in {"debug", "info"}:
-                        label = identity_before.name or identity_before.state.value
-                        print(f"[Identity] {label} left scene -> reset")
                 self.tracker.update([])
+                self._mark_identity_absent(pose_packet.source_time_s)
+                if self.log_level == "debug":
+                    print(
+                        "[Identity Trace] "
+                        f"source_seq={snapshot.sequence} pose_seq={pose_packet.frame_sequence} "
+                        f"poses=0 rects=0 tracks=[] identity_track={self._identity_track_id} "
+                        f"identity_assoc={getattr(self.identity_stage, 'association_id', None)} "
+                        f"identity_state={getattr(getattr(self.identity_stage, 'result', None), 'state', None)} "
+                        "submitted=False"
+                    )
 
             # Clean up tracks only after the tracker actually deregisters them.
             active_ids = set(self.tracker.objects.keys())
             for track_id in list(self.pose_samples_by_track.keys()):
                 if track_id in active_ids:
                     continue
-
-                last_samples = self.pose_samples_by_track[track_id]
-                if last_samples and self._frame_transform is not None:
-                    kpts = last_samples[-1].keypoints
-                    xs = kpts[:, 0]
-                    ys = kpts[:, 1]
-                    x_min, x_max = np.min(xs), np.max(xs)
-                    y_min, y_max = np.min(ys), np.max(ys)
-                    pad = 30
-                    x1 = max(0, int(x_min * self.orig_w) - pad)
-                    y1 = max(0, int(y_min * self.orig_h) - pad)
-                    x2 = min(self.orig_w, int(x_max * self.orig_w) + pad)
-                    y2 = min(self.orig_h, int(y_max * self.orig_h) + pad)
-                    det = VisionDetection(
-                        "person",
-                        bbox=self._frame_transform.bbox_to_source((x1, y1, x2, y2)),
-                        association_id=track_id,
-                    )
-                    det = self._inject_slm_data(det, (x1, y1, x2, y2))
-                    object.__setattr__(det, "tracking_status", "Đã biến mất")
-                    self._latest_detections.append(det)
 
                 self.pose_samples_by_track.pop(track_id, None)
                 self.pending_events_by_track.pop(track_id, None)
@@ -1673,6 +1704,7 @@ class VisionSession:
 
     def shutdown_vision(self):
         self._vision_stop_requested = True
+        self._identity_track_id = None
         if self.identity_stage:
             self._last_identity_queue = {
                 "submitted": getattr(self.identity_stage, "frames_submitted", 0),

@@ -28,6 +28,16 @@ class IdentityUpdate(BaseModel):
     enabled: bool
 
 
+def webcam_ready_payload(runtime, publisher_id: str) -> dict:
+    settings = runtime.settings
+    return {
+        "type": "ready",
+        "publisher_id": publisher_id,
+        "vision_input_width": settings.vision_input_width,
+        "vision_input_height": settings.vision_input_height,
+    }
+
+
 @router.get("")
 async def list_cameras(request: Request):
     runtime = request.app.state.local_runtime
@@ -193,7 +203,7 @@ async def publish_browser_webcam(camera_id: str, websocket: WebSocket):
         except RuntimeError:
             await websocket.close(code=4409, reason="Webcam publisher unavailable")
             return
-        await websocket.send_json({"type": "ready", "publisher_id": publisher_id})
+        await websocket.send_json(webcam_ready_payload(runtime, publisher_id))
 
         while True:
             message = await websocket.receive()

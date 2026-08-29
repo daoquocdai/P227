@@ -23,6 +23,9 @@ class VisionSessionConfig:
     device: str = "auto"
     identity_enabled: bool = True
     vision_fps: float = 15.0
+    num_poses: int = 1
+    input_width: int = 1280
+    input_height: int = 720
     identity_interval: float = 0.5
     face_det_size: int = 416
     rebuild_face_cache: bool = False
@@ -35,3 +38,7 @@ class VisionSessionConfig:
     preview: str = "none"
     raw_classifier: bool = False
     package_root: Path | None = None
+
+    def __post_init__(self):
+        if self.input_width <= 0 or self.input_height <= 0:
+            raise ValueError("Vision input dimensions must be positive")

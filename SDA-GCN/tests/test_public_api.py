@@ -75,6 +75,8 @@ class PublicImportTests(unittest.TestCase):
         restored = pickle.loads(pickle.dumps(config))
         self.assertEqual(restored.identity_process_priority, "normal")
         self.assertIsNone(restored.identity_cpu_affinity)
+        self.assertEqual(restored.num_poses, 1)
+        self.assertEqual((restored.input_width, restored.input_height), (1280, 720))
 
     def test_core_has_no_backend_dependency(self):
         package = ROOT / "sda_vision"
@@ -92,6 +94,14 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(transform.bbox_to_source((0, 0, 1280, 720)), (0, 0, 1920, 1080))
         portrait = FrameTransform(480, 640)
         self.assertEqual(portrait.bbox_to_source((370, 0, 910, 720)), (0, 0, 480, 640))
+
+    def test_configurable_frame_transform_preserves_aspect_ratio(self):
+        full_hd = FrameTransform(1920, 1080, 1280, 720)
+        self.assertEqual((full_hd.scale, full_hd.padding), (2 / 3, (0, 0)))
+        four_three = FrameTransform(640, 480, 1280, 720)
+        self.assertEqual((four_three.scale, four_three.padding), (1.5, (160, 0)))
+        reduced = FrameTransform(1280, 960, 960, 540)
+        self.assertEqual((reduced.scale, reduced.padding), (0.5625, (120, 0)))
 
     def test_core_emits_structured_event(self):
         emitted = []
@@ -227,10 +237,19 @@ class SessionControlTests(unittest.TestCase):
         def __init__(self, result):
             self.result = result
             self.stopped = False
+            self.reset_calls = 0
+            self.association_id = 1
         def submit(self, *_args, **_kwargs):
             return True
         def poll(self):
             return self.result
+        def reset(self):
+            self.reset_calls += 1
+            self.result = IdentityResult()
+            self.association_id = None
+        def update_presence(self, bbox, now=None):
+            if bbox is None and now >= 2.0:
+                self.reset()
         def stop(self):
             self.stopped = True
 
@@ -244,7 +263,41 @@ class SessionControlTests(unittest.TestCase):
         session.current_identity_ms = None
         session._last_identity_event_timestamp = result.timestamp
         session._latest_detection = None
+        session._current_packet = None
+        session._identity_track_id = None
+        session.yolo_cached_boxes = []
+        session.orig_w = 1280
+        session.orig_h = 720
         return session
+
+    def test_identity_state_follows_tracker_id(self):
+        result = IdentityResult(IdentityState.LOCKED_KNOWN, "Dai", 0.9)
+        session = self._face_session(result)
+        frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+
+        first = session.process_person(frame, 100, 100, 500, 600, 7)
+        session.process_person(frame, 102, 102, 502, 602, 7)
+        self.assertEqual(session.identity_stage.reset_calls, 0)
+        self.assertEqual(first.association_id, 7)
+
+        replacement = session.process_person(frame, 100, 100, 500, 600, 8)
+        self.assertEqual(session.identity_stage.reset_calls, 1)
+        self.assertEqual(session._identity_track_id, 8)
+        self.assertEqual(replacement.association_id, 8)
+
+    def test_long_absence_clears_identity_track(self):
+        session = self._face_session(IdentityResult(IdentityState.LOCKED_UNKNOWN))
+        session._identity_track_id = 4
+        session._mark_identity_absent(2.0)
+        self.assertEqual(session.identity_stage.reset_calls, 1)
+        self.assertIsNone(session._identity_track_id)
+        self.assertEqual(session._last_identity_event_timestamp, 0.0)
+
+        detection = session.process_person(
+            np.zeros((720, 1280, 3), dtype=np.uint8), 100, 100, 500, 600, 5
+        )
+        self.assertIsNotNone(detection)
+        self.assertEqual(detection.association_id, 5)
 
     def test_exact_face_bbox_is_mapped_only_for_matching_frame(self):
         result = IdentityResult(

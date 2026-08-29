@@ -94,6 +94,29 @@ def test_result_adapter_keeps_source_space_bbox_and_exact_face_correlation():
     assert detection.metadata["identity_person_id"] == "person-1"
 
 
+def test_result_adapter_exposes_exact_bbox_source_dimensions():
+    mapped = map_vision_result(
+        sda_result(),
+        camera_location="Kitchen",
+        identity_enabled=True,
+        source_width=960,
+        source_height=540,
+    )
+    assert mapped.metadata["bbox_source_width"] == 960
+    assert mapped.metadata["bbox_source_height"] == 540
+    assert mapped.metadata["bbox_coordinate_space"] == "source_pixels"
+    assert mapped.metadata["source_epoch"] == 2
+    assert mapped.metadata["observation_time"] == 0.2
+    assert mapped.metadata["current_action"] == "Khong nga"
+    assert mapped.metadata["fall_state"] == "CLEAR"
+
+
+def test_result_adapter_dimensions_remain_optional_for_legacy_callers():
+    mapped = map_vision_result(sda_result(), camera_location="Kitchen", identity_enabled=True)
+    assert mapped.metadata["bbox_source_width"] is None
+    assert mapped.metadata["bbox_source_height"] is None
+
+
 def test_registry_broadcasts_latest_gallery_to_active_sessions():
     class Session:
         def __init__(self):
@@ -451,6 +474,36 @@ async def test_registry_locked_unknown_without_sda_event_persists_event_and_aler
 
 def _registry_settings():
     return SimpleNamespace(vision_identity_enabled=False, vision_device="cpu", vision_fps=15.0, log_level="ERROR")
+
+
+def test_managed_and_browser_sessions_receive_configured_input_size(monkeypatch):
+    _LifecycleFakeSession.instances = []
+    monkeypatch.setattr("src.integrations.sda_vision.VisionSession", _LifecycleFakeSession)
+    settings = _registry_settings()
+    settings.vision_input_width = 960
+    settings.vision_input_height = 540
+    registry = SdaSessionRegistry(FrameHub(), settings=settings)
+    managed = registry.start_session("managed", "0", location="Kitchen")
+    browser = registry.start_browser_session("browser", location="Desk")
+    try:
+        configs = [instance.config for instance in _LifecycleFakeSession.instances]
+        assert [(config.input_width, config.input_height) for config in configs] == [(960, 540), (960, 540)]
+        assert managed["camera_id"] == "managed"
+        assert browser["camera_id"] == "browser"
+    finally:
+        registry.stop_all()
+
+
+def test_legacy_settings_fall_back_to_default_input_size(monkeypatch):
+    _LifecycleFakeSession.instances = []
+    monkeypatch.setattr("src.integrations.sda_vision.VisionSession", _LifecycleFakeSession)
+    registry = SdaSessionRegistry(FrameHub(), settings=_registry_settings())
+    registry.start_browser_session("browser", location="Desk")
+    try:
+        config = _LifecycleFakeSession.instances[-1].config
+        assert (config.input_width, config.input_height) == (1280, 720)
+    finally:
+        registry.stop_all()
 
 
 class _LifecycleFakeSession:

@@ -12,6 +12,7 @@ class LocalRuntime:
     ):
 
         settings = get_settings()
+        self.settings = settings
         self.frame_hub = FrameHub()
         self.processed_frame_hub = FrameHub()
         if vision_engine is None:

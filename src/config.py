@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     vision_engine: Literal["sda"] = "sda"
     vision_device: str = "auto"
     vision_fps: float = Field(default=15.0, gt=0)
+    vision_num_poses: int = Field(default=1, ge=1, le=5)
+    vision_input_width: int = Field(default=1280, ge=320, le=3840)
+    vision_input_height: int = Field(default=720, ge=240, le=2160)
     vision_identity_enabled: bool = False
     vision_identity_process_priority: Literal["normal", "below_normal"] = "normal"
     vision_identity_cpu_affinity: tuple[int, ...] | None = None

@@ -40,7 +40,14 @@ def map_source_frame(source_frame) -> FramePacket:
     )
 
 
-def map_vision_result(result, *, camera_location: str, identity_enabled: bool) -> VisionResult:
+def map_vision_result(
+    result,
+    *,
+    camera_location: str,
+    identity_enabled: bool,
+    source_width: int | None = None,
+    source_height: int | None = None,
+) -> VisionResult:
     detections = []
     if identity_enabled:
         for item in result.detections:
@@ -128,6 +135,8 @@ def map_vision_result(result, *, camera_location: str, identity_enabled: bool) -
             "source_frame_index": result.source_frame_index,
             "observation_time": result.source_time_s,
             "bbox_coordinate_space": "source_pixels",
+            "bbox_source_width": source_width,
+            "bbox_source_height": source_height,
             "geometry": {"scale": 1.0, "pad_x": 0.0, "pad_y": 0.0},
             "current_action": result.current_action,
             "fall_state": result.fall_state,
@@ -416,6 +425,9 @@ class SdaSessionRegistry:
             identity_enabled=identity,
             device=self.settings.vision_device,
             vision_fps=self.settings.vision_fps,
+            num_poses=getattr(self.settings, "vision_num_poses", 1),
+            input_width=getattr(self.settings, "vision_input_width", 1280),
+            input_height=getattr(self.settings, "vision_input_height", 720),
             identity_process_priority=getattr(self.settings, "vision_identity_process_priority", "normal"),
             identity_cpu_affinity=getattr(self.settings, "vision_identity_cpu_affinity", None),
             preview="none",
@@ -457,6 +469,9 @@ class SdaSessionRegistry:
             identity_enabled=identity,
             device=self.settings.vision_device,
             vision_fps=self.settings.vision_fps,
+            num_poses=getattr(self.settings, "vision_num_poses", 1),
+            input_width=getattr(self.settings, "vision_input_width", 1280),
+            input_height=getattr(self.settings, "vision_input_height", 720),
             identity_process_priority=getattr(self.settings, "vision_identity_process_priority", "normal"),
             identity_cpu_affinity=getattr(self.settings, "vision_identity_cpu_affinity", None),
             preview="none",
@@ -621,7 +636,14 @@ class SdaSessionRegistry:
             if record is None:
                 return
             identity_enabled = self._identity_desired.get(camera_id, record.session.identity_enabled)
-            mapped = map_vision_result(sda_result, camera_location=record.location, identity_enabled=identity_enabled)
+            height, width = exact_frame.shape[:2]
+            mapped = map_vision_result(
+                sda_result,
+                camera_location=record.location,
+                identity_enabled=identity_enabled,
+                source_width=width,
+                source_height=height,
+            )
             if record.latest_result is None or (mapped.metadata["source_epoch"], mapped.frame_id) >= (
                 record.latest_result.metadata.get("source_epoch", 0),
                 record.latest_result.frame_id,
