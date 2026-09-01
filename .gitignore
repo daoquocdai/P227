@@ -77,6 +77,7 @@ frontend/public/videos/
 .tmp_*
 tmp/
 temp/
+kernel.errors.txt
 
 # -----------------------------------------------------------------------------
 # Frontend / Node
@@ -153,3 +154,9 @@ SDA-GCN/work_dir/runtime_cache/
 
 # Local model/cache artifacts
 SDA-GCN/**/*.bin
+models/
+*.gguf
+*.bin
+*.pt
+*.safetensors
+
