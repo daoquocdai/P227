@@ -12,6 +12,7 @@ class LocalRuntime:
     ):
 
         settings = get_settings()
+        self.settings = settings
         self.frame_hub = FrameHub()
         self.processed_frame_hub = FrameHub()
         if vision_engine is None:
@@ -69,13 +70,16 @@ class LocalRuntime:
         if self.camera.is_running(public_id):
             return self.camera.get_status(public_id) or {"camera_id": public_id, "status": "connecting"}
         try:
+            camera = camera_service.get_camera(camera_id)
+            if camera["source_kind"] == "webcam" and hasattr(self, "sda"):
+                return self.camera.start_browser(public_id, location=camera["location"])
             public_id, source = camera_service.resolve_source(camera_id)
             if loop_video is None:
                 desired = next(item for item in camera_service.desired_states() if item["id"] == public_id)
                 loop_video = desired["loop_video"]
             options = {}
             if hasattr(self, "sda"):
-                options["location"] = camera_service.get_camera(camera_id)["location"]
+                options["location"] = camera["location"]
             return self.camera.start(public_id, source, loop_video=loop_video, **options)
         except (CameraNotFoundError, ValueError, OSError) as exc:
             return self.camera.set_unavailable(public_id, str(exc))

@@ -76,7 +76,11 @@ class FrameSource:
         self._on_frame = on_frame
         self.source_epoch = int(initial_epoch)
 
-    def start(self, timeout=5.0):
+    @property
+    def is_running(self) -> bool:
+        return bool(self._thread and self._thread.is_alive() and not self._stop.is_set() and not self.ended)
+
+    def start(self, timeout=15.0):
         self._thread = threading.Thread(target=self._run, name="vision-source", daemon=True)
         self._thread.start()
         self._ready.wait(timeout)
@@ -106,13 +110,82 @@ class FrameSource:
         self.store.publish(packet)
 
 
+class ExternalFrameSource(FrameSource):
+    """Latest-only source fed by an authenticated application publisher."""
+
+    def __init__(self, on_frame=None, initial_epoch=0):
+        super().__init__(on_frame, initial_epoch)
+        self.metadata = SourceMetadata(
+            SourceKind.CAMERA,
+            "Browser webcam",
+            timestamp_strategy="monotonic arrival",
+        )
+        self._running = False
+        self._sequence = 0
+        self._started_monotonic = 0.0
+        self._measured_at = 0.0
+        self._measured_frames = 0
+
+    @property
+    def is_running(self) -> bool:
+        return self._running and not self._stop.is_set() and not self.ended
+
+    def start(self, timeout=5.0):
+        del timeout
+        self._stop.clear()
+        self.error = None
+        self.ended = False
+        self._running = True
+        self._sequence = 0
+        self._started_monotonic = time.monotonic()
+        self._measured_at = time.perf_counter()
+        self._measured_frames = 0
+
+    def publish_frame(self, frame):
+        if not self.is_running:
+            raise RuntimeError("External frame source is not running.")
+        now = time.monotonic()
+        self._sequence += 1
+        height, width = frame.shape[:2]
+        self.metadata.width = width
+        self.metadata.height = height
+        packet = FramePacket(
+            self._sequence,
+            frame,
+            now - self._started_monotonic,
+            now,
+            source_frame_index=self._sequence - 1,
+            wall_time_utc=datetime.now(UTC),
+            source_epoch=self.source_epoch,
+        )
+        self._publish(packet)
+        self._measured_frames += 1
+        elapsed = time.perf_counter() - self._measured_at
+        if elapsed >= 1.0:
+            self.capture_fps = self._measured_frames / elapsed
+            self._measured_at = time.perf_counter()
+            self._measured_frames = 0
+
+    def stop(self, timeout=2.0):
+        del timeout
+        self._stop.set()
+        self._running = False
+        self.ended = True
+
+    def request_stop(self):
+        self._stop.set()
+        self._running = False
+
+
 class CameraSource(FrameSource):
     def __init__(self, index: int, on_frame=None, initial_epoch=0):
         super().__init__(on_frame, initial_epoch)
         self.index = index
 
     def _run(self):
-        capture = cv2.VideoCapture(self.index, cv2.CAP_DSHOW)
+        capture = cv2.VideoCapture(self.index)
+        # capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        # capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         if not capture.isOpened():
             self.error = f"Camera {self.index} cannot open."
             self._ready.set()

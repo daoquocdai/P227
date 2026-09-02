@@ -68,7 +68,11 @@ class StreamService:
         show_identity: bool = True,
         show_fall: bool = True,
     ):
-        """Stream MJPEG without keeping shutdown alive after client disconnect."""
+        """Stream raw MJPEG without coupling media delivery to Vision presentation.
+
+        The presentation flags remain accepted for backward compatibility but
+        are intentionally ignored; overlays are rendered by the frontend.
+        """
         last_frame_id = -1
         while not await is_disconnected():
             packet = await asyncio.to_thread(
@@ -81,23 +85,7 @@ class StreamService:
                 continue
 
             last_frame_id = packet.frame_id
-            frame = packet.frame
-            if self.vision is not None:
-                from src.presentation.vision_overlay import render_vision
-
-                result = self._fresh_vision_result(packet)
-                identity_enabled = getattr(self.vision, "is_identity_enabled", None)
-                show_current_identity = show_identity and (
-                    identity_enabled(packet.camera_id) if identity_enabled is not None else True
-                )
-                frame = render_vision(
-                    frame,
-                    result,
-                    show_boxes=show_boxes,
-                    show_identity=show_current_identity,
-                    show_fall=show_fall,
-                )
-            encoded = await asyncio.to_thread(self._encode_jpeg, frame)
+            encoded = await asyncio.to_thread(self._encode_jpeg, packet.frame)
             if encoded is None:
                 continue
 

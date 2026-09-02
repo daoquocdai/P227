@@ -1,0 +1,170 @@
+<mxfile host="app.diagrams.net" modified="2026-08-26T16:00:00.000Z" agent="Antigravity AI" version="21.0.0" type="device">
+  <diagram id="guardian_cam_flow" name="GuardianCam System Workflow">
+    <mxGraphModel dx="1600" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1800" pageHeight="1400" background="#F8FAFC">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- TITLE CONTAINER -->
+        <mxCell id="title" value="&lt;b&gt;GUARDIANCAM LOCAL HUB (P-227) - END-TO-END SYSTEM WORKFLOW&lt;/b&gt;&lt;br&gt;Architecture &amp; Data Flow Diagram" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=18;fontColor=#1E293B;" vertex="1" parent="1">
+          <mxGeometry x="450" y="20" width="900" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- CONTAINER 1: INPUT SOURCES -->
+        <mxCell id="box_input" value="1. VIDEO INPUT SOURCES" style="swimlane;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#3B82F6;fontColor=#1E3A8A;fontStyle=1;fontSize=13;rounded=1;arcSize=10;" vertex="1" parent="1">
+          <mxGeometry x="40" y="100" width="300" height="280" as="geometry" />
+        </mxCell>
+        <mxCell id="node_webcam" value="&lt;b&gt;USB Webcam Feed&lt;/b&gt;&lt;br&gt;&lt;font size=&quot;1&quot; color=&quot;#64748B&quot;&gt;Monotonic Timestamp&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#93C5FD;fontSize=12;" vertex="1" parent="box_input">
+          <mxGeometry x="30" y="50" width="240" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="node_rtsp" value="&lt;b&gt;RTSP IP Camera Stream&lt;/b&gt;&lt;br&gt;&lt;font size=&quot;1&quot; color=&quot;#64748B&quot;&gt;Monotonic Capture Timestamp&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#93C5FD;fontSize=12;" vertex="1" parent="box_input">
+          <mxGeometry x="30" y="120" width="240" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="node_videofile" value="&lt;b&gt;Local Video File&lt;/b&gt;&lt;br&gt;&lt;font size=&quot;1&quot; color=&quot;#64748B&quot;&gt;Media Source Timestamp&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#93C5FD;fontSize=12;" vertex="1" parent="box_input">
+          <mxGeometry x="30" y="190" width="240" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- CONTAINER 2: VIDEO PIPELINE & FRAME HUB -->
+        <mxCell id="box_pipeline" value="2. FRAME HUB &amp; LATENCY BOUNDING" style="swimlane;whiteSpace=wrap;html=1;fillColor=#ECFEFF;strokeColor=#06B6D4;fontColor=#164E63;fontStyle=1;fontSize=13;rounded=1;arcSize=10;" vertex="1" parent="1">
+          <mxGeometry x="400" y="100" width="340" height="280" as="geometry" />
+        </mxCell>
+        <mxCell id="node_framehub" value="&lt;b&gt;Capacity-One Latest-Frame Slot&lt;/b&gt;&lt;br&gt;&lt;font size=&quot;1&quot; color=&quot;#0891B2&quot;&gt;Bounded Latency Slot (No Queue Backlog)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#67E8F9;fontSize=12;" vertex="1" parent="box_pipeline">
+          <mxGeometry x="30" y="50" width="280" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="node_raw_preview" value="&lt;b&gt;Raw MJPEG Preview Stream&lt;/b&gt;&lt;br&gt;&lt;font size=&quot;1&quot; color=&quot;#64748B&quot;&gt;Source Cadence (Smooth Video)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#A5F3FC;fontSize=12;" vertex="1" parent="box_pipeline">
+          <mxGeometry x="30" y="130" width="280" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="node_async_worker" value="&lt;b&gt;Async Vision Worker&lt;/b&gt;&lt;br&gt;&lt;font size=&quot;1&quot; color=&quot;#64748B&quot;&gt;Target Cadence ~15Hz&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#A5F3FC;fontSize=12;" vertex="1" parent="box_pipeline">
+          <mxGeometry x="30" y="200" width="280" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- CONTAINER 3: PRODUCTION VISION ENGINE -->
+        <mxCell id="box_vision" value="3. PRODUCTION VISION ENGINE (sda_vision / SDA-GCN)" style="swimlane;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#A855F7;fontColor=#581C87;fontStyle=1;fontSize=13;rounded=1;arcSize=10;" vertex="1" parent="1">
+          <mxGeometry x="800" y="100" width="480" height="280" as="geometry" />
+        </mxCell>
+        <mxCell id="node_hw_acc" value="&lt;b&gt;Hardware Accelerator Auto-Fallback Selector&lt;/b&gt;&lt;br&gt;&lt;font size=&quot;1&quot; color=&quot;#7E22CE&quot;&gt;CUDA (NVIDIA) ➔ OpenVINO (Intel iGPU) ➔ DirectML (AMD) ➔ CPU Fallback&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D8B4FE;fontSize=11;" vertex="1" parent="box_vision">
+          <mxGeometry x="30" y="45" width="420" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="node_mediapipe" value="&lt;b&gt;MediaPipe Pose&lt;/b&gt;&lt;br&gt;&lt;font size=&quot;1&quot; color=&quot;#64748B&quot;&gt;33 Keypoints Extraction&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#E9D5FF;fontSize=11;" vertex="1" parent="box_vision">
+          <mxGeometry x="30" y="105" width="200" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="node_sdagcn" value="&lt;b&gt;SDA-GCN Action Classifier&lt;/b&gt;&lt;br&gt;&lt;font size=&quot;1&quot; color=&quot;#64748B&quot;&gt;Graph Convolutional Net&lt;br&gt;2s Window / 64 Frames&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#E9D5FF;fontSize=11;" vertex="1" parent="box_vision">
+          <mxGeometry x="250" y="105" width="200" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="node_insightface" value="&lt;b&gt;InsightFace Stage (buffalo_l)&lt;/b&gt;&lt;br&gt;&lt;font size=&quot;1&quot; color=&quot;#64748B&quot;&gt;512-dim Face Embedding ➔ Cosine Similarity Matching&lt;br&gt;(Known Family vs. Stranger Recognition)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#E9D5FF;fontSize=11;" vertex="1" parent="box_vision">
+          <mxGeometry x="30" y="190" width="420" height="65" as="geometry" />
+        </mxCell>
+
+        <!-- CONTAINER 4: POLICY & LOCAL PERSISTENCE -->
+        <mxCell id="box_persistence" value="4. POLICY DISPATCH &amp; LOCAL PERSISTENCE" style="swimlane;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#F59E0B;fontColor=#78350F;fontStyle=1;fontSize=13;rounded=1;arcSize=10;" vertex="1" parent="1">
+          <mxGeometry x="400" y="440" width="440" height="300" as="geometry" />
+        </mxCell>
+        <mxCell id="node_privacy_blur" value="&lt;b&gt;VisionProductPolicy &amp; Privacy Blur&lt;/b&gt;&lt;br&gt;&lt;font size=&quot;1&quot; color=&quot;#B45309&quot;&gt;Exact-frame Privacy Face Blur before Snapshot Saving&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#FCD34D;fontSize=11;" vertex="1" parent="box_persistence">
+          <mxGeometry x="30" y="45" width="380" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="node_sqlite" value="&lt;b&gt;SQLite Local Database (app.db)&lt;/b&gt;&lt;br&gt;&lt;font size=&quot;1&quot; color=&quot;#64748B&quot;&gt;tables: events, incidents, fall_details,&lt;br&gt;persons, face_profiles, incident_events&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#FFFFFF;strokeColor=#FBBF24;fontSize=11;" vertex="1" parent="box_persistence">
+          <mxGeometry x="30" y="115" width="180" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="node_json_logs" value="&lt;b&gt;JSON Human Tracing Logs&lt;/b&gt;&lt;br&gt;&lt;font size=&quot;1&quot; color=&quot;#64748B&quot;&gt;data/tracinghuman/*.json&lt;br&gt;Behavioral Local Files&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#FDE68A;fontSize=11;" vertex="1" parent="box_persistence">
+          <mxGeometry x="230" y="115" width="180" height="65" as="geometry" />
+        </mxCell>
+        <mxCell id="node_sse_broadcast" value="&lt;b&gt;Realtime SSE Broadcaster&lt;/b&gt;&lt;br&gt;&lt;font size=&quot;1&quot; color=&quot;#64748B&quot;&gt;Server-Sent Events to Frontend&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#FDE68A;fontSize=11;" vertex="1" parent="box_persistence">
+          <mxGeometry x="230" y="200" width="180" height="65" as="geometry" />
+        </mxCell>
+
+        <!-- CONTAINER 5: MULTI-AGENT AI SYSTEM -->
+        <mxCell id="box_agents" value="5. MULTI-AGENT AI SYSTEM (Hybrid Dual-Engine)" style="swimlane;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#22C55E;fontColor=#14532D;fontStyle=1;fontSize=13;rounded=1;arcSize=10;" vertex="1" parent="1">
+          <mxGeometry x="880" y="440" width="580" height="300" as="geometry" />
+        </mxCell>
+        <mxCell id="node_triage_agent" value="&lt;b&gt;1. Reasoning / Triage Agent&lt;/b&gt;&lt;br&gt;&lt;font size=&quot;1&quot; color=&quot;#15803D&quot;&gt;Evaluates Posture, Immobility &amp; Confidence&lt;br&gt;Assigns Threat Level: CRITICAL / HIGH / MEDIUM / LOW&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#86EFAC;fontSize=11;" vertex="1" parent="box_agents">
+          <mxGeometry x="30" y="45" width="520" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="node_qa_agent" value="&lt;b&gt;2. Security Log Q&amp;A Assistant Agent&lt;/b&gt;&lt;br&gt;&lt;font size=&quot;1&quot; color=&quot;#64748B&quot;&gt;• Anti-Jailbreak &amp; Domain Scope Safety Guards&lt;br&gt;• QATools Read-Only Parameterized SQL Queries&lt;br&gt;• UTC ➔ Vietnam Local Time (UTC+7) Formatting&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#86EFAC;fontSize=11;" vertex="1" parent="box_agents">
+          <mxGeometry x="30" y="120" width="250" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="node_summary_agent" value="&lt;b&gt;3. Incident Summary &amp; Timeline Agent&lt;/b&gt;&lt;br&gt;&lt;font size=&quot;1&quot; color=&quot;#64748B&quot;&gt;• Correlates events via incident_events&lt;br&gt;• Generates detailed Timeline milestones&lt;br&gt;• Writes Executive Summary to SQLite DB&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#86EFAC;fontSize=11;" vertex="1" parent="box_agents">
+          <mxGeometry x="300" y="120" width="250" height="150" as="geometry" />
+        </mxCell>
+
+        <!-- CONTAINER 6: REACT FRONTEND WEB UI -->
+        <mxCell id="box_frontend" value="6. USER INTERFACE (React + Vite + TypeScript Web UI)" style="swimlane;whiteSpace=wrap;html=1;fillColor=#EEF2FF;strokeColor=#6366F1;fontColor=#1E1B4B;fontStyle=1;fontSize=13;rounded=1;arcSize=10;" vertex="1" parent="1">
+          <mxGeometry x="400" y="800" width="1060" height="200" as="geometry" />
+        </mxCell>
+        <mxCell id="node_ui_video" value="&lt;b&gt;Realtime Video Player&lt;/b&gt;&lt;br&gt;&lt;font size=&quot;1&quot; color=&quot;#4338CA&quot;&gt;MJPEG Stream + BBox Overlay&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#C7D2FE;fontSize=11;" vertex="1" parent="box_frontend">
+          <mxGeometry x="40" y="55" width="280" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="node_ui_alert" value="&lt;b&gt;Alert &amp; Incident Feed&lt;/b&gt;&lt;br&gt;&lt;font size=&quot;1&quot; color=&quot;#4338CA&quot;&gt;SSE Realtime Push Notifications&lt;br&gt;Audio Siren &amp; Confirmation Dialog&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#C7D2FE;fontSize=11;" vertex="1" parent="box_frontend">
+          <mxGeometry x="370" y="55" width="310" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="node_ui_chat" value="&lt;b&gt;AI Security Chat Widget&lt;/b&gt;&lt;br&gt;&lt;font size=&quot;1&quot; color=&quot;#4338CA&quot;&gt;AgentChatWidget.tsx&lt;br&gt;Natural Vietnamese Q&amp;A UI&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#C7D2FE;fontSize=11;" vertex="1" parent="box_frontend">
+          <mxGeometry x="730" y="55" width="290" height="110" as="geometry" />
+        </mxCell>
+
+        <!-- EDGES / CONNECTORS -->
+
+        <!-- Input -> FrameHub -->
+        <mxCell id="edge1" value="Raw Video Stream" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#2563EB;strokeWidth=2;fontSize=10;" edge="1" parent="1" source="box_input" target="box_pipeline">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- FrameHub -> Vision -->
+        <mxCell id="edge2" value="Async Latest Frame (~15Hz)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#0891B2;strokeWidth=2;fontSize=10;" edge="1" parent="1" source="node_async_worker" target="box_vision">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Vision internal steps -->
+        <mxCell id="edge3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#A855F7;strokeWidth=1.5;" edge="1" parent="1" source="node_mediapipe" target="node_sdagcn">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#A855F7;strokeWidth=1.5;" edge="1" parent="1" source="node_sdagcn" target="node_insightface">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Vision -> Policy -->
+        <mxCell id="edge5" value="Vision Results &amp; Detections" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#7E22CE;strokeWidth=2;fontSize=10;" edge="1" parent="1" source="box_vision" target="node_privacy_blur">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Policy -> Persistence -->
+        <mxCell id="edge6" value="Privacy Blurred Snapshot" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#D97706;strokeWidth=2;fontSize=10;" edge="1" parent="1" source="node_privacy_blur" target="node_sqlite">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="edge7" value="Behavioral Trace" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#D97706;strokeWidth=1.5;fontSize=10;" edge="1" parent="1" source="node_privacy_blur" target="node_json_logs">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="edge8" value="Event Payload" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#D97706;strokeWidth=1.5;fontSize=10;" edge="1" parent="1" source="node_privacy_blur" target="node_sse_broadcast">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- DB -> Agents -->
+        <mxCell id="edge9" value="New Incident Event" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#16A34A;strokeWidth=2;fontSize=10;" edge="1" parent="1" source="node_sqlite" target="node_triage_agent">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="edge10" value="Read-Only SQL Queries" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#16A34A;strokeWidth=1.5;fontSize=10;" edge="1" parent="1" source="node_sqlite" target="node_qa_agent">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="edge11" value="Fetch Events &amp; Save Summary" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#16A34A;strokeWidth=1.5;fontSize=10;" edge="1" parent="1" source="node_summary_agent" target="node_sqlite">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Pipeline/SSE -> Frontend -->
+        <mxCell id="edge12" value="MJPEG Stream" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#4F46E5;strokeWidth=2;fontSize=10;" edge="1" parent="1" source="node_raw_preview" target="node_ui_video">
+          <mxGeometry relative="1" as="geometry" opacity="0.8" />
+        </mxCell>
+
+        <mxCell id="edge13" value="SSE Realtime Push" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#4F46E5;strokeWidth=2;fontSize=10;" edge="1" parent="1" source="node_sse_broadcast" target="node_ui_alert">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="edge14" value="User Chat Query &amp; UTC+7 Answer" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#4F46E5;strokeWidth=2;fontSize=10;" edge="1" parent="1" source="node_ui_chat" target="node_qa_agent">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

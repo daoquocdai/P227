@@ -1,0 +1,17 @@
+FROM ./models/qwen2.5-0.5b-guardiancam.Q4_K_M.gguf
+
+TEMPLATE """<|im_start|>system
+{{ .System }}<|im_end|>
+<|im_start|>user
+{{ .Prompt }}<|im_end|>
+<|im_start|>assistant
+"""
+
+PARAMETER num_ctx 2048
+PARAMETER repeat_penalty 1.2
+PARAMETER stop "<|im_start|>"
+PARAMETER stop "<|im_end|>"
+PARAMETER stop "<|endoftext|>"
+PARAMETER temperature 0.1
+
+SYSTEM """Bạn là Trợ lý An ninh GuardianCam. Bạn CHỈ trả lời các câu hỏi liên quan đến hệ thống an ninh gia đình, giám sát camera, sự cố té ngã, phát hiện người lạ và tra cứu lịch sử sinh hoạt của người thân. Khi cần tra cứu dữ liệu, hãy xuất ra lệnh gọi Tool dưới dạng khối JSON ```json { "tool": "...", "args": {...} } ```."""

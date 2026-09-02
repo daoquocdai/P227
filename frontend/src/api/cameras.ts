@@ -33,6 +33,30 @@ export interface CameraDto {
   events?: CameraEventDto[];
 }
 
+export interface CameraVisionDetection {
+  label: string;
+  confidence: number;
+  bbox_xyxy?: [number, number, number, number] | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface CameraVisionMetadata extends Record<string, unknown> {
+  bbox_coordinate_space?: string;
+  bbox_source_width?: number;
+  bbox_source_height?: number;
+  current_action?: string;
+  fall_state?: string;
+  fall_confidence?: number | null;
+}
+
+export interface CameraVisionResult {
+  camera_id: string;
+  frame_id: number;
+  processed_at: number;
+  detections: CameraVisionDetection[];
+  metadata: CameraVisionMetadata;
+}
+
 export async function getCameras(): Promise<CameraDto[]> {
   const response = await apiClient<{ items: CameraDto[]; total: number }>("/cameras");
   return response.items;
@@ -40,6 +64,10 @@ export async function getCameras(): Promise<CameraDto[]> {
 
 export function getCamera(id: string): Promise<CameraDto> {
   return apiClient(`/cameras/${encodeURIComponent(id)}`);
+}
+
+export function getLatestCameraVision(id: string): Promise<{ result: CameraVisionResult | null }> {
+  return apiClient(`/cameras/${encodeURIComponent(id)}/vision/latest`);
 }
 
 export function updateCameraSource(

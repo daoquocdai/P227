@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from .contracts import IdentityGallerySnapshot
 
@@ -11,6 +12,7 @@ from .contracts import IdentityGallerySnapshot
 @dataclass(slots=True)
 class VisionSessionConfig:
     source: str = "0"
+    source_mode: Literal["managed", "external"] = "managed"
     source_fps: float | None = None
     camera_id: str = "standalone-camera"
     camera_location: str = "SDA-GCN Standalone"
@@ -21,6 +23,9 @@ class VisionSessionConfig:
     device: str = "auto"
     identity_enabled: bool = True
     vision_fps: float = 15.0
+    num_poses: int = 1
+    input_width: int = 1280
+    input_height: int = 720
     identity_interval: float = 0.5
     face_det_size: int = 416
     rebuild_face_cache: bool = False
@@ -33,3 +38,7 @@ class VisionSessionConfig:
     preview: str = "none"
     raw_classifier: bool = False
     package_root: Path | None = None
+
+    def __post_init__(self):
+        if self.input_width <= 0 or self.input_height <= 0:
+            raise ValueError("Vision input dimensions must be positive")

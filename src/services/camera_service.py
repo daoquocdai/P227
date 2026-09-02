@@ -67,6 +67,18 @@ class CameraService:
                 return public_id, str(candidate.resolve())
         raise ValueError(f"Video source does not exist: {source_uri}")
 
+    def source_kind(self, camera_id: str) -> str:
+        with database_connection() as connection:
+            row = connection.execute(
+                """SELECT cs.source_kind FROM cameras c
+                   LEFT JOIN camera_sources cs ON cs.camera_id = c.id
+                   WHERE c.id = ? OR c.name = ?""",
+                (camera_id, camera_id),
+            ).fetchone()
+        if not row:
+            raise CameraNotFoundError(camera_id)
+        return row["source_kind"] or "webcam"
+
     def public_id(self, camera_id: str) -> str:
         with database_connection() as connection:
             row = connection.execute(

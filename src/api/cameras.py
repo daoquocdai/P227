@@ -1,9 +1,13 @@
 import asyncio
+import json
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Request, Response
+import cv2
+import numpy as np
+from fastapi import APIRouter, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
+from src.services.auth_service import AuthenticationError, InactiveAccountError, auth_service
 from src.services.camera_service import CameraConflictError, CameraNotFoundError, camera_service
 
 router = APIRouter(prefix="/cameras", tags=["Cameras"])
@@ -22,6 +26,16 @@ class CameraUpdate(CameraSourceUpdate):
 
 class IdentityUpdate(BaseModel):
     enabled: bool
+
+
+def webcam_ready_payload(runtime, publisher_id: str) -> dict:
+    settings = runtime.settings
+    return {
+        "type": "ready",
+        "publisher_id": publisher_id,
+        "vision_input_width": settings.vision_input_width,
+        "vision_input_height": settings.vision_input_height,
+    }
 
 
 @router.get("")
@@ -148,6 +162,65 @@ async def get_camera_vision_status(camera_id: str, request: Request):
     except CameraNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Không tìm thấy camera") from exc
     return request.app.state.local_runtime.vision.get_status(public_id)
+
+
+@router.get("/{camera_id}/vision/latest")
+async def get_latest_camera_vision(camera_id: str, request: Request):
+    try:
+        public_id = camera_service.public_id(camera_id)
+    except CameraNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Không tìm thấy camera") from exc
+    return {"result": request.app.state.local_runtime.vision.latest_result(public_id)}
+
+
+@router.websocket("/{camera_id}/webcam")
+async def publish_browser_webcam(camera_id: str, websocket: WebSocket):
+    await websocket.accept()
+    publisher_id = None
+    public_id = None
+    try:
+        try:
+            auth_text = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
+            auth_message = json.loads(auth_text)
+            if (
+                not isinstance(auth_message, dict)
+                or auth_message.get("type") != "auth"
+                or not isinstance(auth_message.get("token"), str)
+            ):
+                raise AuthenticationError
+            auth_service.authenticate(auth_message.get("token"))
+        except (TimeoutError, ValueError, AuthenticationError, InactiveAccountError):
+            await websocket.close(code=4401, reason="Authentication required")
+            return
+
+        public_id = camera_service.public_id(camera_id)
+        if camera_service.source_kind(public_id) != "webcam":
+            await websocket.close(code=4403, reason="Camera is not browser-owned")
+            return
+        runtime = websocket.app.state.local_runtime
+        try:
+            publisher_id = runtime.camera.connect_browser_publisher(public_id)
+        except RuntimeError:
+            await websocket.close(code=4409, reason="Webcam publisher unavailable")
+            return
+        await websocket.send_json(webcam_ready_payload(runtime, publisher_id))
+
+        while True:
+            message = await websocket.receive()
+            if message["type"] == "websocket.disconnect":
+                break
+            payload = message.get("bytes")
+            if payload is None or len(payload) > 5 * 1024 * 1024:
+                continue
+            encoded = np.frombuffer(payload, dtype=np.uint8)
+            frame = await asyncio.to_thread(cv2.imdecode, encoded, cv2.IMREAD_COLOR)
+            if frame is not None:
+                runtime.camera.submit_browser_frame(public_id, publisher_id, frame)
+    except (CameraNotFoundError, WebSocketDisconnect):
+        pass
+    finally:
+        if publisher_id is not None and public_id is not None:
+            websocket.app.state.local_runtime.camera.disconnect_browser_publisher(public_id, publisher_id)
 
 
 @router.patch("/{camera_id}/vision/identity")

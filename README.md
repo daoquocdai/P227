@@ -363,6 +363,27 @@ và public package `SDA-GCN/sda_vision`.
 - Thông tin thành viên/Student ID không có nguồn đáng tin trong repository nên
   không được suy đoán trong mục Team.
 
+## SLM Chatbot & Model Weights
+
+Dự án tích hợp **Trợ lý AI An ninh GuardianCam** (dựa trên Qwen2.5-0.5B đã fine-tune dữ liệu an ninh & té ngã).
+
+### Tải Model từ Hugging Face Hub:
+File Model Weights được lưu trữ tại HuggingFace Hub: [manhnd1904/qwen2.5-0.5b-guardiancam](https://huggingface.co/manhnd1904/qwen2.5-0.5b-guardiancam)
+
+Bạn có thể dễ dàng tải model về thư mục `models/` local bằng lệnh CLI:
+```bash
+hf download manhnd1904/qwen2.5-0.5b-guardiancam models/qwen2.5-0.5b-guardiancam.Q4_K_M.gguf --local-dir .
+```
+*Hoặc tải trực tiếp qua trình duyệt từ:* [HuggingFace File Download](https://huggingface.co/manhnd1904/qwen2.5-0.5b-guardiancam/resolve/main/models/qwen2.5-0.5b-guardiancam.Q4_K_M.gguf)
+
+### Khởi chạy với Ollama:
+```bash
+ollama create guardiancam -f Modelfile
+ollama run guardiancam
+```
+
+---
+
 ## Tài liệu
 
 - [Quickstart](QUICKSTART.md)
@@ -372,3 +393,4 @@ và public package `SDA-GCN/sda_vision`.
 - [API](docs/api.md)
 - [Testing](docs/testing.md)
 - [Gate 1 report](docs/Gate1.md)
+

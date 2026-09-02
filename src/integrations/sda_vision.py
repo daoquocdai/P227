@@ -40,7 +40,14 @@ def map_source_frame(source_frame) -> FramePacket:
     )
 
 
-def map_vision_result(result, *, camera_location: str, identity_enabled: bool) -> VisionResult:
+def map_vision_result(
+    result,
+    *,
+    camera_location: str,
+    identity_enabled: bool,
+    source_width: int | None = None,
+    source_height: int | None = None,
+) -> VisionResult:
     detections = []
     if identity_enabled:
         for item in result.detections:
@@ -128,6 +135,8 @@ def map_vision_result(result, *, camera_location: str, identity_enabled: bool) -
             "source_frame_index": result.source_frame_index,
             "observation_time": result.source_time_s,
             "bbox_coordinate_space": "source_pixels",
+            "bbox_source_width": source_width,
+            "bbox_source_height": source_height,
             "geometry": {"scale": 1.0, "pad_x": 0.0, "pad_y": 0.0},
             "current_action": result.current_action,
             "fall_state": result.fall_state,
@@ -359,17 +368,22 @@ class _SessionRecord:
     source: str
     location: str
     session: VisionSession
-    thread: threading.Thread
-    status: str = "connecting"
-    error: str | None = None
+    source_bootstrap_thread: threading.Thread | None = None
+    vision_thread: threading.Thread | None = None
+    camera_status: str = "connecting"
+    camera_error: str | None = None
+    vision_error: str | None = None
     frame_id: int = -1
     last_frame_at: float | None = None
     source_frames_read: int = 0
     frames_published: int = 0
     processed_frames: int = 0
+    vision_frames_dropped: int = 0
     latest_result: VisionResult | None = None
     capture_times: deque = field(default_factory=lambda: deque(maxlen=60))
     stop_requested: bool = False
+    browser_owned: bool = False
+    browser_publisher_id: str | None = None
 
 
 class SdaSessionRegistry:
@@ -394,7 +408,7 @@ class SdaSessionRegistry:
     def start_session(self, camera_id: str, source, *, loop_video=False, location=None):
         with self._lock:
             existing = self._records.get(camera_id)
-            if existing and existing.thread.is_alive():
+            if existing and self._camera_record_is_running(existing):
                 raise RuntimeError(f"Camera {camera_id} already running")
             inference = self._vision_desired.get(camera_id, True)
             identity = self._identity_desired.get(camera_id, self.settings.vision_identity_enabled)
@@ -411,6 +425,9 @@ class SdaSessionRegistry:
             identity_enabled=identity,
             device=self.settings.vision_device,
             vision_fps=self.settings.vision_fps,
+            num_poses=getattr(self.settings, "vision_num_poses", 1),
+            input_width=getattr(self.settings, "vision_input_width", 1280),
+            input_height=getattr(self.settings, "vision_input_height", 720),
             identity_process_priority=getattr(self.settings, "vision_identity_process_priority", "normal"),
             identity_cpu_affinity=getattr(self.settings, "vision_identity_cpu_affinity", None),
             preview="none",
@@ -423,31 +440,179 @@ class SdaSessionRegistry:
             on_result_frame=lambda frame, result: self._on_result(camera_id, frame, result),
         )
         session = VisionSession(config, callbacks)
+        record = _SessionRecord(camera_id, str(source), location or camera_id, session)
         thread = threading.Thread(
-            target=self._run_session, args=(camera_id,), name=f"sda-session-{camera_id}", daemon=True
+            target=self._bootstrap_source, args=(camera_id, record), name=f"sda-source-start-{camera_id}", daemon=True
         )
-        record = _SessionRecord(camera_id, str(source), location or camera_id, session, thread)
+        record.source_bootstrap_thread = thread
         with self._lock:
             self._records[camera_id] = record
         thread.start()
         return self.camera_status(camera_id)
 
-    def _run_session(self, camera_id):
+    def start_browser_session(self, camera_id: str, *, location=None):
+        with self._lock:
+            existing = self._records.get(camera_id)
+            if existing and self._camera_record_is_running(existing):
+                raise RuntimeError(f"Camera {camera_id} already running")
+            inference = self._vision_desired.get(camera_id, True)
+            identity = self._identity_desired.get(camera_id, self.settings.vision_identity_enabled)
+            initial_epoch = self._next_epoch.get(camera_id, 0)
+            identity_gallery = self._identity_gallery
+        config = VisionSessionConfig(
+            source="browser-webcam",
+            source_mode="external",
+            camera_id=camera_id,
+            camera_location=location or camera_id,
+            source_epoch=initial_epoch,
+            inference_enabled=inference,
+            identity_enabled=identity,
+            device=self.settings.vision_device,
+            vision_fps=self.settings.vision_fps,
+            num_poses=getattr(self.settings, "vision_num_poses", 1),
+            input_width=getattr(self.settings, "vision_input_width", 1280),
+            input_height=getattr(self.settings, "vision_input_height", 720),
+            identity_process_priority=getattr(self.settings, "vision_identity_process_priority", "normal"),
+            identity_cpu_affinity=getattr(self.settings, "vision_identity_cpu_affinity", None),
+            preview="none",
+            log_level=self.settings.log_level.lower(),
+            identity_gallery_mode="supplied",
+            identity_gallery_snapshot=identity_gallery,
+        )
+        callbacks = VisionCallbacks(
+            on_source_frame=lambda frame: self._on_source(camera_id, frame),
+            on_result_frame=lambda frame, result: self._on_result(camera_id, frame, result),
+        )
+        record = _SessionRecord(
+            camera_id,
+            "browser-webcam",
+            location or camera_id,
+            VisionSession(config, callbacks),
+            browser_owned=True,
+        )
+        with self._lock:
+            self._records[camera_id] = record
+        return self.camera_status(camera_id)
+
+    def browser_connect(self, camera_id: str) -> str:
         with self._lock:
             record = self._records.get(camera_id)
-        if record is None:
-            return
+            if record is None or not record.browser_owned or record.stop_requested:
+                raise RuntimeError("Browser webcam camera is not waiting for a publisher")
+            if record.browser_publisher_id is not None:
+                raise RuntimeError("Browser webcam already has an active publisher")
+            epoch = self._next_epoch.get(camera_id, 0)
+            self._next_epoch[camera_id] = epoch + 1
+            publisher_id = str(uuid4())
+            record.browser_publisher_id = publisher_id
+            record.camera_status = "connecting"
+            record.camera_error = None
+            record.vision_error = None
+            record.latest_result = None
+        record.session.start_external_source(epoch)
+        return publisher_id
+
+    def submit_browser_frame(self, camera_id: str, publisher_id: str, frame) -> bool:
+        with self._lock:
+            record = self._records.get(camera_id)
+            if record is None or record.browser_publisher_id != publisher_id or record.stop_requested:
+                return False
+            first_frame = record.source_frames_read == 0 or record.camera_status != "online"
+        record.session.submit_external_frame(frame)
+        if first_frame and self._vision_desired.get(camera_id, True):
+            self._start_vision_thread(camera_id, record)
+        return True
+
+    def browser_disconnect(self, camera_id: str, publisher_id: str) -> bool:
+        with self._lock:
+            record = self._records.get(camera_id)
+            if record is None or record.browser_publisher_id != publisher_id:
+                return False
+            record.browser_publisher_id = None
+        record.session.request_vision_stop()
+        record.session.stop_source()
+        vision_thread = record.vision_thread
+        if vision_thread and vision_thread.is_alive():
+            vision_thread.join(timeout=2.0)
+        if not (vision_thread and vision_thread.is_alive()):
+            record.session.shutdown_vision()
+        source_state = record.session.source_status()
+        with self._lock:
+            if self._records.get(camera_id) is not record or record.stop_requested:
+                return True
+            self._next_epoch[camera_id] = max(
+                self._next_epoch.get(camera_id, 0), int(source_state.get("source_epoch", 0)) + 1
+            )
+            record.camera_status = "connecting"
+            record.camera_error = None
+            record.latest_result = None
+            record.capture_times.clear()
+        self._events.clear_camera(camera_id)
+        self.frame_hub.remove(camera_id)
+        return True
+
+    def _bootstrap_source(self, camera_id, record):
         try:
-            record.session.run()
-            with self._lock:
-                if self._records.get(camera_id) is record:
-                    record.status = "offline" if record.stop_requested else "ended"
+            record.session.start_source()
         except Exception as exc:
-            logger.exception("SDA session failed camera=%s", camera_id)
+            logger.exception("SDA source failed camera=%s", camera_id)
+            with self._lock:
+                if self._records.get(camera_id) is record and not record.stop_requested:
+                    record.camera_status = "error"
+                    record.camera_error = str(exc)
+            return
+        with self._lock:
+            if self._records.get(camera_id) is not record:
+                return
+            should_stop = record.stop_requested
+            should_start_vision = self._vision_desired.get(camera_id, True)
+        if should_stop:
+            record.session.stop_source()
+        elif should_start_vision:
+            self._start_vision_thread(camera_id, record)
+
+    def _start_vision_thread(self, camera_id, record=None):
+        with self._lock:
+            record = record or self._records.get(camera_id)
+            if record is None or record.stop_requested:
+                return False
+            if record.vision_thread and record.vision_thread.is_alive():
+                return True
+            if not record.session.source_status()["running"]:
+                return False
+            record.vision_error = None
+            record.processed_frames = 0
+            record.vision_frames_dropped = 0
+            thread = threading.Thread(
+                target=self._run_vision, args=(camera_id, record), name=f"sda-vision-{camera_id}", daemon=True
+            )
+            record.vision_thread = thread
+        thread.start()
+        return True
+
+    def _run_vision(self, camera_id, record):
+        try:
+            record.session.run_vision()
+        except Exception as exc:
+            logger.exception("SDA Vision failed camera=%s", camera_id)
             with self._lock:
                 if self._records.get(camera_id) is record:
-                    record.status = "error"
-                    record.error = str(exc)
+                    record.vision_error = str(exc)
+        finally:
+            record.session.shutdown_vision()
+            with self._lock:
+                if self._records.get(camera_id) is not record:
+                    return
+                if record.vision_thread is threading.current_thread():
+                    record.vision_thread = None
+                restart = (
+                    not record.stop_requested
+                    and self._vision_desired.get(camera_id, True)
+                    and record.vision_error is None
+                    and record.session.source_status()["running"]
+                )
+            if restart:
+                self._start_vision_thread(camera_id, record)
 
     def _on_source(self, camera_id, source_frame):
         packet = map_source_frame(source_frame)
@@ -457,8 +622,8 @@ class SdaSessionRegistry:
             record = self._records.get(camera_id)
             if record is None:
                 return
-            record.status = "online"
-            record.error = None
+            record.camera_status = "online"
+            record.camera_error = None
             record.frame_id = packet.frame_id
             record.last_frame_at = now
             record.source_frames_read += 1
@@ -471,13 +636,23 @@ class SdaSessionRegistry:
             if record is None:
                 return
             identity_enabled = self._identity_desired.get(camera_id, record.session.identity_enabled)
-            mapped = map_vision_result(sda_result, camera_location=record.location, identity_enabled=identity_enabled)
+            height, width = exact_frame.shape[:2]
+            mapped = map_vision_result(
+                sda_result,
+                camera_location=record.location,
+                identity_enabled=identity_enabled,
+                source_width=width,
+                source_height=height,
+            )
             if record.latest_result is None or (mapped.metadata["source_epoch"], mapped.frame_id) >= (
                 record.latest_result.metadata.get("source_epoch", 0),
                 record.latest_result.frame_id,
             ):
                 record.latest_result = mapped
             record.processed_frames += 1
+            record.vision_frames_dropped = int(
+                mapped.metadata.get("stage_metrics", {}).get("capture_frames_dropped", 0)
+            )
         if needs_product_policy(mapped):
             packet = FramePacket(
                 camera_id,
@@ -496,18 +671,31 @@ class SdaSessionRegistry:
             record = self._records.get(camera_id)
         if record is None:
             return self.camera_status(camera_id)
-        record.stop_requested = True
-        record.session.request_stop()
-        if record.thread.is_alive():
-            record.thread.join(timeout=7.0)
         with self._lock:
-            if record.thread.is_alive():
-                record.status = "error"
-                record.error = "SDA session did not stop within 7 seconds"
-                logger.error("SDA session did not stop cleanly camera=%s", camera_id)
-            else:
-                record.status = "offline"
+            record.stop_requested = True
+            record.browser_publisher_id = None
+        record.session.request_vision_stop()
+        record.session.stop_source()
+        vision_thread = record.vision_thread
+        bootstrap_thread = record.source_bootstrap_thread
+        if vision_thread and vision_thread.is_alive():
+            vision_thread.join(timeout=7.0)
+        if bootstrap_thread and bootstrap_thread.is_alive():
+            bootstrap_thread.join(timeout=7.0)
+        record.session.stop_source()
+        if not (vision_thread and vision_thread.is_alive()):
+            record.session.shutdown_vision()
+        source_state = record.session.source_status()
+        with self._lock:
+            if vision_thread and vision_thread.is_alive():
+                record.vision_error = "SDA Vision did not stop within 7 seconds"
+                logger.error("SDA Vision did not stop cleanly camera=%s", camera_id)
+            record.camera_status = "offline"
+            record.camera_error = None
             record.latest_result = None
+            self._next_epoch[camera_id] = max(
+                self._next_epoch.get(camera_id, 0), int(source_state.get("source_epoch", 0)) + 1
+            )
         self._events.clear_camera(camera_id)
         if remove_frame:
             self.frame_hub.remove(camera_id)
@@ -524,7 +712,7 @@ class SdaSessionRegistry:
         with self._lock:
             record = self._records.get(camera_id)
             if record is not None:
-                record.status, record.error = "error", error
+                record.camera_status, record.camera_error = "error", error
         return {
             "camera_id": camera_id,
             "status": "error",
@@ -541,14 +729,12 @@ class SdaSessionRegistry:
             record = self._records.get(camera_id)
             if record is None:
                 return None
-            source = getattr(record.session, "frame_source", None)
-            source_error = getattr(source, "error", None)
-            source_ended = bool(getattr(source, "ended", False))
-            status = record.status
-            error = record.error
-            if source_error:
-                status, error = "error", source_error
-            elif source_ended and not record.stop_requested and not record.thread.is_alive():
+            source = record.session.source_status()
+            status = record.camera_status
+            error = record.camera_error
+            if source["error"]:
+                status, error = "error", source["error"]
+            elif source["ended"] and not record.stop_requested and not record.browser_owned:
                 status = "ended"
             times = list(record.capture_times)
             span = times[-1] - times[0] if len(times) > 1 else 0.0
@@ -572,15 +758,18 @@ class SdaSessionRegistry:
             latest = None if record is None else record.latest_result
             metrics = {} if latest is None else latest.metadata.get("stage_metrics", {})
             processed = 0 if record is None else record.processed_frames
-            source = None if record is None else getattr(record.session, "frame_source", None)
-            error = None if record is None else (record.error or getattr(source, "error", None))
+            source = None if record is None else record.session.source_status()
+            error = None if record is None else record.vision_error
+            vision_running = bool(record and record.vision_thread and record.vision_thread.is_alive())
+            dropped = 0 if record is None else record.vision_frames_dropped
+            offered = processed + dropped
             status = (
                 "disabled"
                 if not enabled
                 else (
                     "waiting_for_source"
-                    if record is None or record.status in {"offline", "ended"}
-                    else ("error" if error else "running")
+                    if record is None or not source["running"]
+                    else ("error" if error else ("running" if vision_running else "waiting_for_source"))
                 )
             )
             return {
@@ -593,11 +782,11 @@ class SdaSessionRegistry:
                 "identity_enabled": identity,
                 "realtime": {
                     "vision_frames_processed": processed,
-                    "vision_frames_offered": 0 if record is None else record.source_frames_read,
-                    "vision_frames_overwritten": 0,
+                    "vision_frames_offered": offered,
+                    "vision_frames_overwritten": dropped,
                     "vision_fps": metrics.get("effective_fps"),
                     "vision_processing_latency_ms": metrics.get("total_vision_ms"),
-                    "vision_drop_ratio": None,
+                    "vision_drop_ratio": dropped / offered if offered else None,
                     "pending": 0,
                     "max_pending": 1,
                     **metrics,
@@ -609,10 +798,20 @@ class SdaSessionRegistry:
                 ),
             }
 
-    def is_running(self, camera_id):
+    @staticmethod
+    def _camera_record_is_running(record):
+        source = record.session.source_status()
+        bootstrap = record.source_bootstrap_thread
+        return bool(
+            (record.browser_owned and not record.stop_requested)
+            or source["running"]
+            or (bootstrap and bootstrap.is_alive() and not record.stop_requested)
+        )
+
+    def camera_is_running(self, camera_id):
         with self._lock:
             record = self._records.get(camera_id)
-            return bool(record and record.thread.is_alive() and record.status not in {"ended", "error", "offline"})
+            return bool(record and self._camera_record_is_running(record))
 
     def set_vision_enabled(self, camera_id, enabled):
         with self._lock:
@@ -620,8 +819,15 @@ class SdaSessionRegistry:
             record = self._records.get(camera_id)
             if not enabled and record:
                 record.latest_result = None
+            elif enabled and record:
+                record.vision_error = None
         if record:
-            record.session.set_inference_enabled(bool(enabled))
+            if enabled:
+                record.session.set_inference_enabled(True)
+                self._start_vision_thread(camera_id, record)
+            else:
+                record.session.set_inference_enabled(False)
+                record.session.request_vision_stop()
         self._events.clear_camera(camera_id)
         return self.vision_status(camera_id)
 
@@ -668,6 +874,18 @@ class SdaCameraFacade:
     def start(self, camera_id, source, loop_video=True, location=None):
         return self.registry.start_session(camera_id, source, loop_video=loop_video, location=location)
 
+    def start_browser(self, camera_id, location=None):
+        return self.registry.start_browser_session(camera_id, location=location)
+
+    def connect_browser_publisher(self, camera_id):
+        return self.registry.browser_connect(camera_id)
+
+    def submit_browser_frame(self, camera_id, publisher_id, frame):
+        return self.registry.submit_browser_frame(camera_id, publisher_id, frame)
+
+    def disconnect_browser_publisher(self, camera_id, publisher_id):
+        return self.registry.browser_disconnect(camera_id, publisher_id)
+
     def stop(self, camera_id, remove_frame=True):
         return self.registry.stop_session(camera_id, remove_frame)
 
@@ -678,7 +896,7 @@ class SdaCameraFacade:
         return self.registry.camera_status(camera_id)
 
     def is_running(self, camera_id):
-        return self.registry.is_running(camera_id)
+        return self.registry.camera_is_running(camera_id)
 
     def set_unavailable(self, camera_id, error):
         return self.registry.set_unavailable(camera_id, error)
