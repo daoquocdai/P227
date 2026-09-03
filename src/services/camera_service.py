@@ -3,7 +3,6 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from src.config import DEFAULT_VISION_IDENTITY_ENABLED
 from src.database import database_connection
 
 
@@ -16,15 +15,6 @@ class CameraConflictError(Exception):
 
 
 class CameraService:
-    def identity_enabled_state(self, camera_id: str) -> bool | None:
-        """Return the persisted unknown-detection gate, or None for external cameras."""
-        with database_connection() as connection:
-            row = connection.execute(
-                "SELECT config_json FROM camera_sources WHERE camera_id = ?",
-                (camera_id,),
-            ).fetchone()
-        return None if row is None else self._identity_enabled(row["config_json"])
-
     def list_cameras(self, runtime=None, vision=None, frame_hub=None) -> list[dict[str, Any]]:
         with database_connection() as connection:
             rows = connection.execute(self._camera_query() + " ORDER BY c.name").fetchall()
@@ -98,7 +88,6 @@ class CameraService:
                     "camera_enabled": bool(row["is_active"]),
                     "vision_enabled": bool(row["vision_enabled"]),
                     "loop_video": self._loop_video(row["config_json"]),
-                    "identity_enabled": self._identity_enabled(row["config_json"]),
                 }
                 for row in rows
             ]
@@ -108,24 +97,6 @@ class CameraService:
 
     def set_vision_enabled(self, camera_id: str, enabled: bool) -> None:
         self._set_desired(camera_id, "vision_enabled", enabled)
-
-    def set_identity_enabled(self, camera_id: str, enabled: bool) -> None:
-        with database_connection() as connection:
-            row = connection.execute(
-                """SELECT c.id, cs.config_json FROM cameras c
-                   LEFT JOIN camera_sources cs ON cs.camera_id = c.id
-                   WHERE c.id = ? OR c.name = ?""",
-                (camera_id, camera_id),
-            ).fetchone()
-            if not row:
-                raise CameraNotFoundError(camera_id)
-            config = self._config(row["config_json"])
-            config["identity_enabled"] = bool(enabled)
-            connection.execute(
-                """UPDATE camera_sources SET config_json = ?,
-                   updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE camera_id = ?""",
-                (json.dumps(config), row["id"]),
-            )
 
     @staticmethod
     def _set_desired(camera_id: str, column: str, enabled: bool) -> None:
@@ -254,7 +225,6 @@ class CameraService:
             "active": bool(row["is_active"]),
             "vision_enabled": bool(row["vision_enabled"]),
             "vision_status": None if vision_state is None else vision_state["status"],
-            "identity_enabled": cls._identity_enabled(row["config_json"]),
             "source_kind": row["source_kind"] or "webcam",
             "source": cls._source_label(row["source_kind"], row["source_uri"]),
             "playback_url": cls._playback_url(row["source_kind"], row["playback_path"]),
@@ -275,14 +245,6 @@ class CameraService:
     @staticmethod
     def _loop_video(config_json: str | None) -> bool:
         return bool(CameraService._config(config_json).get("loop_video", True))
-
-    @staticmethod
-    def _identity_enabled(config_json: str | None) -> bool:
-        return bool(
-            CameraService._config(config_json).get(
-                "identity_enabled", DEFAULT_VISION_IDENTITY_ENABLED
-            )
-        )
 
     @staticmethod
     def _config(config_json: str | None) -> dict:

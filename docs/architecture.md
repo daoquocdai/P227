@@ -95,13 +95,13 @@ Mutation người thân/khuôn mặt refresh gallery sau commit. Integrated sess
 luôn dùng `identity_gallery_mode="supplied"`; không fallback filesystem/NPZ khi
 SQLite rỗng. Filesystem/NPZ chỉ thuộc SDA CLI standalone.
 
-Identity OFF được persist trước, dừng/reset Identity stage và chặn Unknown
-event/metadata trước persistence. Fall Detection không phụ thuộc Identity.
+Identity được start/stop cùng Vision và không có desired state riêng. Startup
+Identity lỗi được báo qua diagnostics nhưng không làm dừng Fall Detection.
 
 Identity state là `UNVERIFIED`, `KNOWN`, `UNKNOWN`, `LOCKED_KNOWN`,
 `LOCKED_UNKNOWN`. Mặc định recognition threshold là cosine 0.45; Known lock
 ngay, Unknown lock sau 3 usable-face mismatches với retry 1 giây, revalidate
-locked Unknown sau 15 giây và reset presence sau 1,5 giây vắng. Không tìm thấy
+locked Unknown sau 3 giây và reset presence sau 1,5 giây vắng. Không tìm thấy
 khuôn mặt dùng được là inconclusive, không phải mismatch.
 
 ## 7. Event, policy và snapshot
@@ -132,7 +132,7 @@ rollback event/alert và không chặn SSE. `EventService` persist trước broa
 
 ## 8. Desired và observed state
 
-SQLite lưu desired Camera/Vision/Identity state; registry giữ observed source
+SQLite lưu desired Camera/Vision state; registry giữ observed source
 và session state. Desired ON vẫn được giữ nếu source tạm lỗi. Startup theo thứ
 tự: database -> event pipeline -> `LocalRuntime`/gallery -> registry -> restore
 persisted state. Một camera lỗi không làm startup toàn ứng dụng fail.
@@ -144,7 +144,7 @@ Vision/event worker và event transport được dừng có kiểm soát.
 
 | State/domain | Owner |
 |---|---|
-| Camera/Vision/Identity desired state | SQLite + application services |
+| Camera/Vision desired state | SQLite + application services |
 | Running sessions/observed status | `SdaSessionRegistry` |
 | Source capture/temporal Vision state | `sda_vision.VisionSession` |
 | Supplied Identity gallery | `FaceGalleryCoordinator` + SDA sessions |

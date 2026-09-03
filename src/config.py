@@ -5,8 +5,6 @@ from typing import Any, Literal
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-DEFAULT_VISION_IDENTITY_ENABLED = True
-
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -37,7 +35,6 @@ class Settings(BaseSettings):
     vision_num_poses: int = Field(default=1, ge=1, le=5)
     vision_input_width: int = Field(default=1280, ge=320, le=3840)
     vision_input_height: int = Field(default=720, ge=240, le=2160)
-    vision_identity_enabled: bool = DEFAULT_VISION_IDENTITY_ENABLED
     vision_identity_process_priority: Literal["normal", "below_normal"] = "normal"
     vision_identity_cpu_affinity: tuple[int, ...] | None = None
     vision_allow_unblurred_event_snapshot: bool = False

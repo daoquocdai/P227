@@ -8,9 +8,11 @@ interface WebcamViewProps {
   className?: string;
   result?: CameraVisionResult | null;
   showBoxes?: boolean;
+  visionActive?: boolean;
+  overlayResetKey?: string;
 }
 
-export function WebcamView({ cameraId, className, result=null, showBoxes = false }: WebcamViewProps) {
+export function WebcamView({ cameraId, className, result=null, showBoxes = false, visionActive=false, overlayResetKey=cameraId }: WebcamViewProps) {
   const { cameraId: activeCameraId, stream, error } = useWebcam();
   const videoRef = useRef<HTMLVideoElement>(null);
   const availableStream = activeCameraId === cameraId ? stream : null;
@@ -28,6 +30,6 @@ export function WebcamView({ cameraId, className, result=null, showBoxes = false
   }
   return <span className={["webcam-view", className].filter(Boolean).join(" ")}>
     <video ref={videoRef} autoPlay muted playsInline />
-    <VisionOverlayCanvas mediaRef={videoRef} result={result} visible={showBoxes} />
+    <VisionOverlayCanvas mediaRef={videoRef} result={result} visible={showBoxes} active={visionActive} resetKey={overlayResetKey} />
   </span>;
 }

@@ -7,7 +7,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
-
+from runtime.pipeline import FixedRateScheduler, LatestFrameStore
+from runtime.source import FramePacket
+from sda_vision import IdentityGalleryEntry, IdentityGallerySnapshot, VisionEvent, VisionSession
 from sda_vision.runtime import identity as identity_runtime
 from sda_vision.runtime.identity import (
     IdentityResult,
@@ -17,9 +19,6 @@ from sda_vision.runtime.identity import (
     validate_cpu_affinity,
     validate_process_priority,
 )
-from sda_vision import IdentityGalleryEntry, IdentityGallerySnapshot, VisionEvent, VisionSession
-from runtime.pipeline import FixedRateScheduler, LatestFrameStore
-from runtime.source import FramePacket
 
 
 class LatestFrameTests(unittest.TestCase):
@@ -39,9 +38,9 @@ class IdentityStateTests(unittest.TestCase):
         stage._results = queue.Queue(maxsize=1)
         stage._status = queue.Queue(maxsize=1)
         stage._ready = threading.Event()
-        stage.interval = 0.5
+        stage.interval = 0.3
         stage.unknown_retry = 1.0
-        stage.locked_unknown_retry = 15.0
+        stage.locked_unknown_retry = 3.0
         stage.max_unknown_attempts = 3
         stage.absent_timeout = 1.5
         stage.result = IdentityResult()
@@ -79,8 +78,9 @@ class IdentityStateTests(unittest.TestCase):
                                 "face_found": True})
             stage.poll()
         self.assertEqual(stage.result.state, IdentityState.LOCKED_UNKNOWN)
-        self.assertFalse(stage._due(10.0))
-        self.assertTrue(stage._due(20.0))
+        stage.last_attempt_at = 10.0
+        self.assertFalse(stage._due(12.9))
+        self.assertTrue(stage._due(13.0))
 
     def test_no_face_is_inconclusive_and_never_locks_unknown(self):
         stage = self.make_stage()
@@ -103,6 +103,13 @@ class IdentityStateTests(unittest.TestCase):
         stage.poll()
         self.assertEqual(stage.result.state, IdentityState.UNKNOWN)
         self.assertEqual(stage.failed_attempts, 1)
+
+    def test_no_face_uses_fast_retry_even_after_unknown_lock(self):
+        stage = self.make_stage()
+        stage.result = IdentityResult(IdentityState.LOCKED_UNKNOWN, face_found=False)
+        stage.last_attempt_at = 10.0
+        self.assertFalse(stage._due(10.29))
+        self.assertTrue(stage._due(10.3))
 
     def test_bbox_association_change_invalidates_lock(self):
         stage = self.make_stage()
@@ -208,6 +215,18 @@ class IdentityStateTests(unittest.TestCase):
 
 
 class IdentityIsolationTests(unittest.TestCase):
+    def test_identity_responsiveness_defaults_keep_recognition_threshold(self):
+        stage = IdentityStage(["CPUExecutionProvider"], ".", "identity-test-cache.npz")
+        try:
+            self.assertEqual(stage.interval, 0.3)
+            self.assertEqual(stage.locked_unknown_retry, 3.0)
+            self.assertEqual(stage.detection_threshold, 0.4)
+            self.assertEqual(stage.recognition_threshold, 0.45)
+        finally:
+            stage._inputs.close()
+            stage._results.close()
+            stage._status.close()
+
     def test_identity_ipc_queues_remain_latest_only(self):
         stage = IdentityStage(
             ["CPUExecutionProvider"], ".", "identity-test-cache.npz")

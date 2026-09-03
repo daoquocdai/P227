@@ -24,6 +24,7 @@ from mediapipe.tasks.python import vision
 from scipy.interpolate import interp1d
 from ultralytics import YOLO
 
+from .action_labels import action_class
 from .callbacks import VisionCallbacks
 from .config import VisionSessionConfig
 from .contracts import FrameTransform, VisionDetection, VisionEvent, VisionFrameResult, VisionSourceFrame
@@ -157,6 +158,7 @@ class VisionSession:
         self.target_vision_fps = config.vision_fps
         self.identity_interval = config.identity_interval
         self.face_det_size = config.face_det_size
+        self.face_detection_threshold = config.face_detection_threshold
         self.rebuild_face_cache = config.rebuild_face_cache
         self.log_level = config.log_level
         self.identity_debug = config.identity_debug
@@ -201,6 +203,7 @@ class VisionSession:
         self.pose_samples_by_track = {}
         self.pending_events_by_track = {}
         self.current_action_by_track = {}
+        self.action_class_by_track = {}
         self.action_color_by_track = {}
 
         # Static-object / SLM enrichment state.
@@ -389,21 +392,28 @@ class VisionSession:
             self.face_startup_error = None
             effective_det_size = 640 if face_spec.device == "DirectML" else self.face_det_size
             self.face_effective_det_size = effective_det_size
-            stage = IdentityStage(
-                providers,
-                os.path.join(self.base_dir, "register face"),
-                os.path.join(self.base_dir, "work_dir/identity_cache/identity_gallery.npz"),
-                det_size=effective_det_size,
-                interval=self.identity_interval,
-                rebuild_cache=self.rebuild_face_cache,
-                debug=self.log_level == "debug",
-                identity_debug=self.identity_debug,
-                process_priority=self.identity_process_priority,
-                cpu_affinity=self.identity_cpu_affinity,
-                gallery_mode=self.identity_gallery_mode,
-                gallery_snapshot=self.identity_gallery_snapshot,
-            )
-            stage.start()
+            try:
+                stage = IdentityStage(
+                    providers,
+                    os.path.join(self.base_dir, "register face"),
+                    os.path.join(self.base_dir, "work_dir/identity_cache/identity_gallery.npz"),
+                    det_size=effective_det_size,
+                    detection_threshold=self.face_detection_threshold,
+                    interval=self.identity_interval,
+                    rebuild_cache=self.rebuild_face_cache,
+                    debug=self.log_level == "debug",
+                    identity_debug=self.identity_debug,
+                    process_priority=self.identity_process_priority,
+                    cpu_affinity=self.identity_cpu_affinity,
+                    gallery_mode=self.identity_gallery_mode,
+                    gallery_snapshot=self.identity_gallery_snapshot,
+                )
+                stage.start()
+            except Exception as exc:
+                self.face_stage = StageSpec("Face", "UNAVAILABLE", "", "n/a", str(exc))
+                self.face_startup_error = str(exc)
+                print(f"[Identity Startup Error] {exc}")
+                return
             self.identity_stage = stage
 
     def _reset_temporal_state(self):
@@ -417,6 +427,7 @@ class VisionSession:
         self.pose_samples_by_track.clear()
         self.pending_events_by_track.clear()
         self.current_action_by_track.clear()
+        self.action_class_by_track.clear()
         self.action_color_by_track.clear()
         self.tracker = SimpleTracker(max_disappeared=5, max_distance=300)
 
@@ -581,11 +592,16 @@ class VisionSession:
 
         if not self.identity_enabled or stage is None:
             cv2.rectangle(overlay_frame, (x1, y1), (x2, y2), (255, 255, 0), 2)
+            identity_state = (
+                "UNAVAILABLE"
+                if self.identity_enabled and getattr(self, "face_startup_error", None)
+                else "DISABLED"
+            )
             det = VisionDetection(
                 "person",
                 bbox=self._frame_transform.bbox_to_source((x1, y1, x2, y2)),
-                identity_state="DISABLED",
-                identity_status="DISABLED",
+                identity_state=identity_state,
+                identity_status=identity_state,
                 association_id=track_id,
             )
             det = self._inject_slm_data(det, (x1, y1, x2, y2))
@@ -902,8 +918,10 @@ class VisionSession:
                     pred_idx = torch.argmax(prob).item()
                     conf = float(prob[pred_idx])
                     fall_probability = float(prob[0])
-                    action_names = {0: "Fall", 1: "Dung", 2: "Cui", 3: "Ngoi", 4: "Nam"}
-                    top_predicted_class = action_names.get(pred_idx, f"class_{pred_idx}")
+                    predicted_action = action_class(pred_idx)
+                    top_predicted_class = (
+                        predicted_action.name if predicted_action is not None else f"class_{pred_idx}"
+                    )
                     self._record_fall_diagnostic(
                         current_source_time_s,
                         track_id=track_id,
@@ -934,9 +952,11 @@ class VisionSession:
                         self.current_action_by_track[track_id] = f"Phat hien nga ({conf:.2f}) - Kiem tra..."
                         self.action_color_by_track[track_id] = (0, 255, 255)
                     else:
-                        action_name = action_names.get(pred_idx, "Binh thuong")
-                        self.current_action_by_track[track_id] = f"{action_name} ({conf:.2f})"
+                        action_label = predicted_action.label if predicted_action is not None else "Không xác định"
+                        self.current_action_by_track[track_id] = f"{action_label} ({conf:.2f})"
                         self.action_color_by_track[track_id] = (0, 255, 0)
+                    if predicted_action is not None:
+                        self.action_class_by_track[track_id] = (predicted_action, conf)
 
                 while pose_samples and current_source_time_s - pose_samples[0].source_time_s > 1.0:
                     pose_samples.popleft()
@@ -1531,6 +1551,7 @@ class VisionSession:
                 self.pose_samples_by_track.pop(track_id, None)
                 self.pending_events_by_track.pop(track_id, None)
                 self.current_action_by_track.pop(track_id, None)
+                self.action_class_by_track.pop(track_id, None)
                 self.action_color_by_track.pop(track_id, None)
 
             self.current_sda_gcn_ms = None
@@ -1551,17 +1572,26 @@ class VisionSession:
             global_action = "Binh thuong"
             global_fall_state = "CLEAR"
             global_conf = None
-            for tid, action in self.current_action_by_track.items():
-                if "Nga" in action:
-                    global_action = action
-                    pending = self.pending_events_by_track.get(tid)
-                    if pending:
-                        global_fall_state = pending["state"]
-                        global_conf = pending["conf"]
+            selected_action = None
+            for tid, value in self.action_class_by_track.items():
+                pending = self.pending_events_by_track.get(tid)
+                if pending:
+                    selected_action = value
+                    global_fall_state = pending["state"]
+                    global_conf = pending["conf"]
                     break
+            if selected_action is None and self.action_class_by_track:
+                selected_action = next(iter(self.action_class_by_track.values()))
+            if selected_action is not None:
+                selected_class, selected_confidence = selected_action
+                global_action = f"{selected_class.label} ({selected_confidence:.2f})"
 
             self.current_action = global_action
-            self.action_color = (0, 0, 255) if "Nga" in global_action else (0, 255, 0)
+            self.action_color = (
+                (0, 0, 255)
+                if selected_action is not None and selected_action[0].class_id == 0
+                else (0, 255, 0)
+            )
             self.pending_event = next(
                 (event for event in self.pending_events_by_track.values() if event is not None),
                 None,
@@ -1606,6 +1636,10 @@ class VisionSession:
                     detections=tuple(self._latest_detections),
                     generated_events=tuple(self._pending_generated_events),
                     fall_diagnostics=tuple(self._pending_fall_diagnostics),
+                    action_class_id=(None if selected_action is None else selected_action[0].class_id),
+                    action_class_name=(None if selected_action is None else selected_action[0].name),
+                    action_label=(None if selected_action is None else selected_action[0].label),
+                    action_confidence=(None if selected_action is None else selected_action[1]),
                     stage_metrics={
                         "pose_callback_latency_ms": self.pose_inference_ms,
                         "sda_gcn_inference_ms": self.current_sda_gcn_ms,

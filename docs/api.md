@@ -48,10 +48,9 @@ frame đầu tiên; stream trả `409` nếu camera chưa online.
 | `POST` | `/api/v1/cameras/{camera_id}/vision/enable` | Persist và bật inference |
 | `POST` | `/api/v1/cameras/{camera_id}/vision/disable` | Persist, tắt và reset inference state |
 | `GET` | `/api/v1/cameras/{camera_id}/vision/status` | Device, result và metrics |
-| `PATCH` | `/api/v1/cameras/{camera_id}/vision/identity` | Bật/tắt Unknown workflow |
 
-Identity payload là `{ "enabled": false }`. Khi tắt, state được persist trước
-khi runtime workflow bị hủy. Fall Detection không phụ thuộc Identity.
+Identity được start/stop cùng Vision. Nếu Identity unavailable, Vision và Fall
+Detection vẫn tiếp tục và lỗi được phản ánh trong Vision status diagnostics.
 
 ## Alerts
 
@@ -152,4 +151,4 @@ hoàn tất đổi mật khẩu bắt buộc.
 - Start/Stop/Enable/Disable thay đổi persisted desired state.
 - RTSP credentials không được phản chiếu trong public payload.
 - Viewer count không tạo thêm Vision session.
-- Identity OFF chặn Unknown trước persistence.
+- Identity chạy cùng Vision; Identity failure không chặn Vision/Fall.

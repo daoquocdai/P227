@@ -24,10 +24,6 @@ class CameraUpdate(CameraSourceUpdate):
     location: str = Field(min_length=1, max_length=255, pattern=r".*\S.*")
 
 
-class IdentityUpdate(BaseModel):
-    enabled: bool
-
-
 def webcam_ready_payload(runtime, publisher_id: str) -> dict:
     settings = runtime.settings
     return {
@@ -221,26 +217,6 @@ async def publish_browser_webcam(camera_id: str, websocket: WebSocket):
     finally:
         if publisher_id is not None and public_id is not None:
             websocket.app.state.local_runtime.camera.disconnect_browser_publisher(public_id, publisher_id)
-
-
-@router.patch("/{camera_id}/vision/identity")
-async def set_camera_identity(camera_id: str, data: IdentityUpdate, request: Request):
-    try:
-        public_id = camera_service.public_id(camera_id)
-    except CameraNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Không tìm thấy camera") from exc
-    runtime = request.app.state.local_runtime
-    if not data.enabled:
-        # Persist the hard event gate before cancelling the running workflow,
-        # so an already queued unknown event cannot commit during the handoff.
-        camera_service.set_identity_enabled(public_id, False)
-    if runtime.vision.get_status(public_id)["enabled"]:
-        await asyncio.to_thread(runtime.vision.set_identity_enabled, public_id, data.enabled)
-    if data.enabled:
-        # Cold model preparation and runtime activation must succeed before the
-        # persisted state advertises the feature as enabled.
-        camera_service.set_identity_enabled(public_id, True)
-    return {"camera_id": public_id, "identity_enabled": data.enabled}
 
 
 @router.get("/{camera_id}/preview")

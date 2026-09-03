@@ -39,9 +39,8 @@ def test_restore_persisted_state_isolates_invalid_camera(monkeypatch):
     assert runtime.vision.get_status("invalid")["enabled"] is False
 
 
-def test_restore_persisted_state_applies_identity_values(monkeypatch):
+def test_restore_persisted_state_ignores_legacy_identity_values(monkeypatch):
     runtime = LocalRuntime(vision_engine=MockVisionEngine())
-    runtime.settings.vision_identity_enabled = True
     desired = [
         {
             "id": "explicit-on",
@@ -68,6 +67,6 @@ def test_restore_persisted_state_applies_identity_values(monkeypatch):
 
     runtime.restore_persisted_state()
 
-    assert runtime.vision.get_status("explicit-on")["identity_enabled"] is True
-    assert runtime.vision.get_status("explicit-off")["identity_enabled"] is False
-    assert runtime.vision.get_status("missing-fallback")["identity_enabled"] is True
+    assert runtime.vision.get_status("explicit-on")["enabled"] is True
+    assert runtime.vision.get_status("explicit-off")["enabled"] is True
+    assert runtime.vision.get_status("missing-fallback")["enabled"] is True

@@ -9,7 +9,6 @@ from src.models.schemas import (
     VisionEventRequest,
 )
 from src.services.alert_broadcaster import alert_broadcaster
-from src.services.camera_service import camera_service
 from src.services.event_presentation import event_description
 from src.services.sqlite_event_repository import (
     EventNotFoundError,
@@ -36,13 +35,6 @@ class EventService:
 
     async def create(self, event: VisionEventRequest) -> VisionEventAccepted:
         async with self._lock:
-            if event.event_type == "UNKNOWN_PERSON" and camera_service.identity_enabled_state(event.camera_id) is False:
-                return VisionEventAccepted(
-                    id=event.event_id,
-                    event_id=event.event_id,
-                    accepted=False,
-                    status="resolved",
-                )
             result = self._repository.create(event, self._description(event))
             alert = self._repository.get_alert(result.id) if (result.alert_created or result.incident_updated) else None
         if alert:

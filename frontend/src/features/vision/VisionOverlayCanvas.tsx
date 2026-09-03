@@ -1,5 +1,6 @@
-import { useEffect, useRef, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 import type { CameraVisionDetection, CameraVisionResult } from "../../api/cameras";
+import { emptyVisionOverlayState, formatActionDisplay, updateVisionOverlayState, type VisionOverlayState } from "./visionOverlayState";
 
 type MediaElement = HTMLVideoElement | HTMLImageElement;
 const DISPLAY_BBOX_HORIZONTAL_INSET_RATIO = 0.025;
@@ -7,6 +8,8 @@ const DISPLAY_BBOX_HORIZONTAL_INSET_RATIO = 0.025;
 interface VisionOverlayCanvasProps {
   result: CameraVisionResult | null;
   visible: boolean;
+  active: boolean;
+  resetKey: string;
   mediaRef: RefObject<MediaElement | null>;
 }
 
@@ -31,13 +34,33 @@ function intrinsicSize(media: MediaElement): [number, number] {
     : [media.naturalWidth, media.naturalHeight];
 }
 
-export function VisionOverlayCanvas({ result, visible, mediaRef }: VisionOverlayCanvasProps) {
+export function VisionOverlayCanvas({ result, visible, active, resetKey, mediaRef }: VisionOverlayCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const visualStateRef = useRef<VisionOverlayState>(emptyVisionOverlayState(resetKey));
+  const ignoredResultRef = useRef<CameraVisionResult | null>(null);
+
+  useLayoutEffect(() => {
+    visualStateRef.current = emptyVisionOverlayState(resetKey);
+    ignoredResultRef.current = result;
+    const canvas = canvasRef.current;
+    canvas?.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+  }, [active, resetKey]);
+
+  useEffect(() => () => {
+    visualStateRef.current = emptyVisionOverlayState(resetKey);
+  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     const media = mediaRef.current;
     if (!canvas || !media) return;
+
+    let expiryTimer: number | undefined;
+    const usableResult = result !== ignoredResultRef.current ? result : null;
+    const selection = updateVisionOverlayState(
+      visualStateRef.current, usableResult, performance.now(), active, resetKey,
+    );
+    visualStateRef.current = selection.state;
 
     const draw = () => {
       const bounds = canvas.getBoundingClientRect();
@@ -48,14 +71,22 @@ export function VisionOverlayCanvas({ result, visible, mediaRef }: VisionOverlay
       if (!context) return;
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
       context.clearRect(0, 0, bounds.width, bounds.height);
-      if (!visible || !result || bounds.width <= 0 || bounds.height <= 0) return;
+      if (!visible || !active || bounds.width <= 0 || bounds.height <= 0) return;
+      const refreshed = updateVisionOverlayState(
+        visualStateRef.current, null, performance.now(), active, resetKey,
+      );
+      visualStateRef.current = refreshed.state;
+      const displayResult = refreshed.display;
+      if (!displayResult) {
+        return;
+      }
 
       const [mediaWidth, mediaHeight] = intrinsicSize(media);
       if (mediaWidth <= 0 || mediaHeight <= 0) return;
-      const sourceWidth = finiteNumber(result.metadata.bbox_source_width) && result.metadata.bbox_source_width > 0
-        ? result.metadata.bbox_source_width : mediaWidth;
-      const sourceHeight = finiteNumber(result.metadata.bbox_source_height) && result.metadata.bbox_source_height > 0
-        ? result.metadata.bbox_source_height : mediaHeight;
+      const sourceWidth = finiteNumber(displayResult.metadata.bbox_source_width) && displayResult.metadata.bbox_source_width > 0
+        ? displayResult.metadata.bbox_source_width : mediaWidth;
+      const sourceHeight = finiteNumber(displayResult.metadata.bbox_source_height) && displayResult.metadata.bbox_source_height > 0
+        ? displayResult.metadata.bbox_source_height : mediaHeight;
       const mediaScale = Math.min(bounds.width / mediaWidth, bounds.height / mediaHeight);
       const renderedWidth = mediaWidth * mediaScale;
       const renderedHeight = mediaHeight * mediaScale;
@@ -69,7 +100,7 @@ export function VisionOverlayCanvas({ result, visible, mediaRef }: VisionOverlay
       context.strokeStyle = "#00ff00";
 
       let actionDrawn = false;
-      for (const detection of result.detections) {
+      for (const detection of displayResult.detections) {
         const bbox = detection.bbox_xyxy;
         if (!bbox || bbox.length !== 4 || !bbox.every(finiteNumber)) continue;
         const x1 = Math.max(0, Math.min(sourceWidth, bbox[0]));
@@ -109,12 +140,11 @@ export function VisionOverlayCanvas({ result, visible, mediaRef }: VisionOverlay
 
         const labelHeight = fontSize + 9;
         drawLabel(identityLabel(detection), y, y);
-        const action = typeof result.metadata.current_action === "string" && result.metadata.current_action.trim()
-          ? result.metadata.current_action.trim() : null;
+        const action = formatActionDisplay(displayResult.metadata);
         if (!actionDrawn && action) {
-          const fallState = typeof result.metadata.fall_state === "string" ? result.metadata.fall_state : "CLEAR";
+          const fallState = typeof displayResult.metadata.fall_state === "string" ? displayResult.metadata.fall_state : "CLEAR";
           const actionY = Math.min(y + labelHeight, Math.max(y, y + height - labelHeight));
-          drawLabel(`Action: ${action}`, actionY, actionY,
+          drawLabel(action, actionY, actionY,
             fallState === "CLEAR" ? "#86efac" : "#f87171");
           actionDrawn = true;
         }
@@ -126,12 +156,16 @@ export function VisionOverlayCanvas({ result, visible, mediaRef }: VisionOverlay
     media.addEventListener("loadedmetadata", draw);
     media.addEventListener("load", draw);
     draw();
+    if (selection.state.retained && selection.display !== usableResult) {
+      expiryTimer = window.setTimeout(draw, Math.max(0, selection.state.expiresAt - performance.now()));
+    }
     return () => {
+      if (expiryTimer !== undefined) window.clearTimeout(expiryTimer);
       observer.disconnect();
       media.removeEventListener("loadedmetadata", draw);
       media.removeEventListener("load", draw);
     };
-  }, [mediaRef, result, visible]);
+  }, [active, mediaRef, resetKey, result, visible]);
 
   return <canvas ref={canvasRef} className="vision-overlay-canvas" aria-hidden="true" />;
 }

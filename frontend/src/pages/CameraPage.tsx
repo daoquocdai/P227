@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { deleteCamera, getCamera, getCameras, getLatestCameraVision, updateCamera, type CameraDto, type CameraEventDto, type CameraVisionResult } from "../api/cameras";
 import { CameraStream } from "../components";
 import { WebcamView } from "../features/webcam/WebcamView";
+import { VisionLatestPollGuard } from "../features/vision/visionPollingState";
 import "./cameraViewer.css";
 import "./cameraApi.css";
 
@@ -48,17 +49,48 @@ export default function CameraPage() {
   const selected = feeds.find((feed) => feed.id === selectedId);
   useEffect(() => {
     setVisionResult(null);
-    if (!selected || !selected.vision_enabled) return;
+    if (!selected || !selected.active || !selected.vision_enabled) return;
     let cancelled = false;
-    const poll = () => { void getLatestCameraVision(selected.id).then((response) => {
-      const result = response.result;
-      const fresh = result && Date.now() / 1000 - result.processed_at <= 0.75 ? result : null;
-      if (!cancelled) setVisionResult(fresh);
-    }).catch(() => { if (!cancelled) setVisionResult(null); }); };
-    poll();
-    const timer = window.setInterval(poll, 200);
-    return () => { cancelled = true; window.clearInterval(timer); };
-  }, [selected?.id, selected?.vision_enabled]);
+    let timer: number | undefined;
+    let controller: AbortController | null = null;
+    const guard = new VisionLatestPollGuard();
+    const schedule = () => {
+      if (!cancelled) timer = window.setTimeout(poll, 200);
+    };
+    const poll = async () => {
+      const token = guard.begin();
+      if (token === null) return;
+      controller = new AbortController();
+      try {
+        const response = await getLatestCameraVision(selected.id, controller.signal);
+        if (cancelled) return;
+        const result = response.result;
+        const fresh = result && Date.now() / 1000 - result.processed_at <= 0.75 ? result : null;
+        if (!fresh) {
+          setVisionResult(null);
+          return;
+        }
+        const epoch = typeof fresh.metadata.source_epoch === "number" ? fresh.metadata.source_epoch : 0;
+        if (!guard.accept(token, { epoch, frameId: fresh.frame_id })) return;
+        setVisionResult(fresh);
+      } catch (pollError) {
+        if (!cancelled && !(pollError instanceof DOMException && pollError.name === "AbortError")) {
+          setVisionResult(null);
+        }
+      } finally {
+        guard.finish(token);
+        controller = null;
+        schedule();
+      }
+    };
+    void poll();
+    return () => {
+      cancelled = true;
+      guard.reset();
+      controller?.abort();
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [selected?.id, selected?.active, selected?.vision_enabled, selected?.status, selected?.source]);
   const todayEvents = events.filter((event) => isToday(event.occurred_at));
   const offline = !selected || selected.status !== "online";
   const navigate = (path: string) => { window.history.pushState({}, "", path); window.dispatchEvent(new PopStateEvent("popstate")); };
@@ -120,10 +152,13 @@ function VideoThumbnail({ feed }: { feed: CameraDto }) {
 }
 
 function LiveCameraView({ camera, main = false, result = null, showBoxes = true }: { camera: CameraDto; main?: boolean; result?: CameraVisionResult | null; showBoxes?: boolean }) {
+  const activeResult = result?.camera_id === camera.id ? result : null;
+  const overlayActive = camera.active && camera.vision_enabled;
+  const overlayResetKey = `${camera.id}:${camera.status}:${camera.source_kind}:${camera.source}:${overlayActive}`;
   if (camera.source_kind === "webcam") {
-    return <WebcamView cameraId={camera.id} result={main ? result : null} showBoxes={main && showBoxes} />;
+    return <WebcamView cameraId={camera.id} result={main ? activeResult : null} showBoxes={main && showBoxes} visionActive={overlayActive} overlayResetKey={overlayResetKey} />;
   }
-  return <CameraStream cameraId={camera.id} streamReady={camera.stream_ready} streamUrl={camera.stream_url} result={main ? result : null} showBoxes={main && showBoxes} />;
+  return <CameraStream cameraId={camera.id} streamReady={camera.stream_ready} streamUrl={camera.stream_url} result={main ? activeResult : null} showBoxes={main && showBoxes} visionActive={overlayActive} overlayResetKey={overlayResetKey} />;
 }
 
 function editableSource(camera:CameraDto):string{if(camera.source_kind==="rtsp")return "";if(camera.source_kind==="webcam")return camera.source.replace(/^Webcam\s*/i,"");return camera.source}

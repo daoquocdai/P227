@@ -43,6 +43,10 @@ def sda_result(
     identity_confidence=0.91,
     identity_face_verified=True,
     association_id=3,
+    action_class_id=1,
+    action_class_name="standing",
+    action_label="Đứng",
+    action_confidence=0.88,
 ):
     return VisionFrameResult(
         camera_id="cam",
@@ -52,6 +56,10 @@ def sda_result(
         source_time_s=0.2,
         captured_wall_time=datetime.now(UTC),
         current_action="Khong nga",
+        action_class_id=action_class_id,
+        action_class_name=action_class_name,
+        action_label=action_label,
+        action_confidence=action_confidence,
         fall_state="CLEAR",
         fall_confidence=None,
         detections=(
@@ -83,7 +91,7 @@ def test_source_frame_maps_without_copy_or_credential_exposure():
 
 
 def test_result_adapter_keeps_source_space_bbox_and_exact_face_correlation():
-    mapped = map_vision_result(sda_result(), camera_location="Kitchen", identity_enabled=True)
+    mapped = map_vision_result(sda_result(), camera_location="Kitchen")
     detection = mapped.detections[0]
     assert detection.bbox_xyxy == (10, 20, 100, 200)
     assert detection.metadata["bbox_coordinate_space"] == "source_pixels"
@@ -98,7 +106,6 @@ def test_result_adapter_exposes_exact_bbox_source_dimensions():
     mapped = map_vision_result(
         sda_result(),
         camera_location="Kitchen",
-        identity_enabled=True,
         source_width=960,
         source_height=540,
     )
@@ -108,11 +115,56 @@ def test_result_adapter_exposes_exact_bbox_source_dimensions():
     assert mapped.metadata["source_epoch"] == 2
     assert mapped.metadata["observation_time"] == 0.2
     assert mapped.metadata["current_action"] == "Khong nga"
+    assert mapped.metadata["action_class_id"] == 1
+    assert mapped.metadata["action_class_name"] == "standing"
+    assert mapped.metadata["action_label"] == "Đứng"
+    assert mapped.metadata["action_confidence"] == 0.88
     assert mapped.metadata["fall_state"] == "CLEAR"
 
 
+@pytest.mark.parametrize(
+    ("class_id", "name", "label"),
+    [
+        (0, "fall", "Ngã"),
+        (1, "standing", "Đứng"),
+        (2, "bending", "Cúi"),
+        (3, "sitting", "Ngồi"),
+        (4, "lying", "Nằm"),
+    ],
+)
+def test_result_adapter_preserves_each_structured_action_class(class_id, name, label):
+    mapped = map_vision_result(
+        sda_result(
+            action_class_id=class_id,
+            action_class_name=name,
+            action_label=label,
+            action_confidence=0.73,
+        ),
+        camera_location="Kitchen",
+    )
+    assert (
+        mapped.metadata["action_class_id"],
+        mapped.metadata["action_class_name"],
+        mapped.metadata["action_label"],
+        mapped.metadata["action_confidence"],
+    ) == (class_id, name, label, 0.73)
+
+
+def test_raw_fall_action_metadata_does_not_synthesize_a_confirmed_fall_event():
+    mapped = map_vision_result(
+        sda_result(
+            action_class_id=0,
+            action_class_name="fall",
+            action_label="Ngã",
+            action_confidence=0.94,
+        ),
+        camera_location="Kitchen",
+    )
+    assert mapped.events == []
+
+
 def test_result_adapter_dimensions_remain_optional_for_legacy_callers():
-    mapped = map_vision_result(sda_result(), camera_location="Kitchen", identity_enabled=True)
+    mapped = map_vision_result(sda_result(), camera_location="Kitchen")
     assert mapped.metadata["bbox_source_width"] is None
     assert mapped.metadata["bbox_source_height"] is None
 
@@ -125,7 +177,7 @@ def test_registry_broadcasts_latest_gallery_to_active_sessions():
         def update_identity_gallery(self, snapshot):
             self.snapshots.append(snapshot)
 
-    settings = SimpleNamespace(vision_identity_enabled=False)
+    settings = SimpleNamespace()
     registry = SdaSessionRegistry(FrameHub(), settings=settings)
     session = Session()
     registry._records["cam"] = SimpleNamespace(session=session)
@@ -136,16 +188,26 @@ def test_registry_broadcasts_latest_gallery_to_active_sessions():
     assert result["sessions"] == 1
 
 
-def test_identity_off_strips_identity_facts_and_events():
+def test_identity_unavailable_status_is_explicit_without_disabling_vision():
+    session = SimpleNamespace(
+        source_status=lambda: {"running": True},
+        face_startup_error="buffalo_l missing",
+        identity_stage=None,
+    )
+    record = SimpleNamespace(stop_requested=False, session=session)
+    assert SdaSessionRegistry._identity_status(True, record) == "unavailable"
+
+
+def test_identity_facts_and_events_are_not_product_gated():
     event = SdaEvent("UNKNOWN_PERSON", 0.8, 7, 0.2, identity_state="LOCKED_UNKNOWN")
-    mapped = map_vision_result(sda_result(events=(event,)), camera_location="Kitchen", identity_enabled=False)
-    assert mapped.events == []
-    assert "identity_state" not in mapped.detections[0].metadata
+    mapped = map_vision_result(sda_result(events=(event,)), camera_location="Kitchen")
+    assert len(mapped.events) == 1
+    assert mapped.detections[0].metadata["identity_state"] == "LOCKED_KNOWN"
 
 
 def test_event_adapter_preserves_exact_source_correlation_once():
     event = SdaEvent("FALL_CONFIRMED", 0.9, 7, 0.2, person_bbox=(10, 20, 100, 200), metadata={"origin": "sda"})
-    mapped = map_vision_result(sda_result(events=(event,)), camera_location="Kitchen", identity_enabled=True)
+    mapped = map_vision_result(sda_result(events=(event,)), camera_location="Kitchen")
     assert len(mapped.events) == 1
     metadata = mapped.events[0].metadata
     assert metadata["frame_id"] == 7
@@ -169,7 +231,7 @@ def test_event_handoff_is_bounded_and_overflow_preserves_semantic_delivery():
     dispatcher = Dispatcher()
     worker = SdaEventMediaWorker(dispatcher, capacity=1)
     event = SdaEvent("FALL_CONFIRMED", 0.9, 7, 0.2)
-    result = map_vision_result(sda_result(events=(event,)), camera_location="Kitchen", identity_enabled=True)
+    result = map_vision_result(sda_result(events=(event,)), camera_location="Kitchen")
     packet = map_source_frame(VisionSourceFrame("cam", 7, 6, 2, 0.2, None, np.zeros((2, 2, 3), np.uint8)))
     assert worker.submit(packet, result) is True
     assert worker.submit(packet, result) is False
@@ -191,7 +253,6 @@ def test_repeated_unknown_presence_is_coalesced_and_keeps_latest_pending_frame()
                 identity_confidence=0.10,
             ),
             camera_location="Kitchen",
-            identity_enabled=True,
         )
         assert worker.submit(packet, mapped)
 
@@ -229,7 +290,6 @@ def test_unknown_coalesces_while_inflight(monkeypatch):
                 identity_confidence=0.10,
             ),
             camera_location="Kitchen",
-            identity_enabled=True,
         )
 
     worker.start()
@@ -257,7 +317,6 @@ def test_new_unknown_association_and_epoch_are_independent_candidates():
                 identity_confidence=0.10,
             ),
             camera_location="Kitchen",
-            identity_enabled=True,
         )
 
     assert worker.submit(packet, unknown(epoch=2, association_id=3))
@@ -278,12 +337,10 @@ def test_fall_is_accepted_while_unknown_candidate_is_pending():
             identity_confidence=0.10,
         ),
         camera_location="Kitchen",
-        identity_enabled=True,
     )
     fall = map_vision_result(
         sda_result(events=(SdaEvent("FALL_CONFIRMED", 0.9, 8, 0.3),)),
         camera_location="Kitchen",
-        identity_enabled=True,
     )
     assert worker.submit(packet, unknown)
     assert worker.submit(packet, fall)
@@ -309,7 +366,7 @@ def test_one_sda_event_is_dispatched_once_off_the_callback_thread(monkeypatch):
         "src.integrations.sda_vision.attach_event_snapshots", lambda packet, result, detector, **kwargs: None
     )
     event = SdaEvent("FALL_CONFIRMED", 0.9, 7, 0.2)
-    result = map_vision_result(sda_result(events=(event,)), camera_location="Kitchen", identity_enabled=True)
+    result = map_vision_result(sda_result(events=(event,)), camera_location="Kitchen")
     packet = map_source_frame(VisionSourceFrame("cam", 7, 6, 2, 0.2, None, np.zeros((2, 2, 3), np.uint8)))
     worker.start()
     assert worker.submit(packet, result)
@@ -330,7 +387,7 @@ def test_snapshot_failure_never_suppresses_semantic_event(monkeypatch):
 
     monkeypatch.setattr("src.integrations.sda_vision.attach_event_snapshots", fail_snapshot)
     event = SdaEvent("FALL_CONFIRMED", 0.9, 7, 0.2)
-    result = map_vision_result(sda_result(events=(event,)), camera_location="Kitchen", identity_enabled=True)
+    result = map_vision_result(sda_result(events=(event,)), camera_location="Kitchen")
     packet = map_source_frame(VisionSourceFrame("cam", 7, 6, 2, 0.2, None, np.zeros((2, 2, 3), np.uint8)))
     worker.start()
     assert worker.submit(packet, result)
@@ -353,7 +410,6 @@ def test_inconclusive_and_known_detections_do_not_enter_event_media_worker():
         mapped = map_vision_result(
             sda_result(identity_state=state, identity_face_verified=verified),
             camera_location="Kitchen",
-            identity_enabled=True,
         )
         assert worker.submit(packet, mapped) is True
     assert worker.profile()["event_media_submitted"] == 0
@@ -377,7 +433,6 @@ def test_threshold_rejected_unknown_runs_policy_without_snapshot_or_dispatch(mon
             identity_confidence=0.30,
         ),
         camera_location="Kitchen",
-        identity_enabled=True,
     )
     worker.start()
     assert worker.submit(packet, mapped)
@@ -408,7 +463,6 @@ def test_unknown_cooldown_suppresses_second_alert(monkeypatch):
                 identity_confidence=0.10,
             ),
             camera_location="Kitchen",
-            identity_enabled=True,
         )
 
     worker.start()
@@ -431,10 +485,10 @@ async def test_registry_locked_unknown_without_sda_event_persists_event_and_aler
     dispatcher.start(asyncio.get_running_loop())
     consumer = asyncio.create_task(sink.consume())
     registry = SdaSessionRegistry(
-        FrameHub(), settings=SimpleNamespace(vision_identity_enabled=True), event_dispatcher=dispatcher
+        FrameHub(), settings=SimpleNamespace(), event_dispatcher=dispatcher
     )
     registry._records["cam"] = SimpleNamespace(
-        session=SimpleNamespace(identity_enabled=True),
+        session=SimpleNamespace(),
         location="Kitchen",
         latest_result=None,
         processed_frames=0,
@@ -473,7 +527,7 @@ async def test_registry_locked_unknown_without_sda_event_persists_event_and_aler
 
 
 def _registry_settings():
-    return SimpleNamespace(vision_identity_enabled=False, vision_device="cpu", vision_fps=15.0, log_level="ERROR")
+    return SimpleNamespace(vision_device="cpu", vision_fps=15.0, log_level="ERROR")
 
 
 def test_managed_and_browser_sessions_receive_configured_input_size(monkeypatch):
@@ -488,6 +542,7 @@ def test_managed_and_browser_sessions_receive_configured_input_size(monkeypatch)
     try:
         configs = [instance.config for instance in _LifecycleFakeSession.instances]
         assert [(config.input_width, config.input_height) for config in configs] == [(960, 540), (960, 540)]
+        assert [config.identity_enabled for config in configs] == [True, True]
         assert managed["camera_id"] == "managed"
         assert browser["camera_id"] == "browser"
     finally:
@@ -606,9 +661,6 @@ class _LifecycleFakeSession:
     def set_inference_enabled(self, enabled):
         self.inference_enabled = bool(enabled)
 
-    def set_identity_enabled(self, enabled):
-        self.identity_enabled = bool(enabled)
-
     def hardware_diagnostics(self):
         return {}
 
@@ -674,6 +726,8 @@ def test_camera_stop_clears_frame_and_stops_both_lifecycles(monkeypatch):
     assert not (registry._records["cam"].vision_thread or SimpleNamespace(is_alive=lambda: False)).is_alive()
     assert not registry.frame_hub.has_camera("cam")
     assert registry.camera_status("cam")["status"] == "offline"
+    assert registry.vision_status("cam")["status"] == "disabled"
+    assert registry.vision_status("cam")["identity_status"] == "disabled"
 
 
 def test_restart_epoch_uses_actual_source_epoch(monkeypatch):

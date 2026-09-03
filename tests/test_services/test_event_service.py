@@ -71,15 +71,8 @@ async def test_recognized_person_is_persisted_without_creating_alert():
 
 
 @pytest.mark.asyncio
-async def test_fall_bypasses_identity_lookup_and_is_broadcast(monkeypatch):
-    def unexpected_lookup(_camera_id):
-        raise AssertionError("Fall must not read the identity gate")
-
+async def test_fall_is_broadcast_without_an_identity_gate(monkeypatch):
     publish = AsyncMock()
-    monkeypatch.setattr(
-        "src.services.event_service.camera_service.identity_enabled_state",
-        unexpected_lookup,
-    )
     monkeypatch.setattr("src.services.event_service.alert_broadcaster.publish", publish)
 
     accepted = await EventService().create(event())
@@ -89,21 +82,16 @@ async def test_fall_bypasses_identity_lookup_and_is_broadcast(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("enabled,accepted,broadcasts", [(True, True, 1), (False, False, 0)])
-async def test_unknown_uses_persisted_identity_gate(monkeypatch, enabled, accepted, broadcasts):
+async def test_unknown_is_persisted_without_a_separate_identity_gate(monkeypatch):
     unknown = event()
     unknown.event_type = "UNKNOWN_PERSON"
     publish = AsyncMock()
-    monkeypatch.setattr(
-        "src.services.event_service.camera_service.identity_enabled_state",
-        lambda _camera_id: enabled,
-    )
     monkeypatch.setattr("src.services.event_service.alert_broadcaster.publish", publish)
 
     result = await EventService().create(unknown)
 
-    assert result.accepted is accepted
-    assert publish.await_count == broadcasts
+    assert result.accepted is True
+    assert publish.await_count == 1
 
 
 @pytest.mark.asyncio

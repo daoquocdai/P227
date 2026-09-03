@@ -612,11 +612,10 @@ def test_pose_head_fallback_uses_exact_frame_geometry_for_horizontal_subject():
     assert x2 == 97
 
 
-def test_event_service_rechecks_persisted_identity_gate_before_db_and_notification():
+def test_event_service_accepts_policy_unknown_without_a_separate_identity_gate():
     import asyncio
 
     camera_id = camera_service.desired_states()[0]["id"]
-    camera_service.set_identity_enabled(camera_id, False)
     vision_result = result()
     vision_result.camera_id = camera_id
     vision_result.events.clear()
@@ -634,14 +633,14 @@ def test_event_service_rechecks_persisted_identity_gate_before_db_and_notificati
     )[0]
 
     accepted = asyncio.run(EventService().create(request))
-    assert accepted.accepted is False
+    assert accepted.accepted is True
     with database_connection() as connection:
         assert (
             connection.execute(
                 "SELECT 1 FROM events WHERE id = ?",
                 (stable_uuid(unknown.metadata["event_id"], "event"),),
             ).fetchone()
-            is None
+            is not None
         )
 
 

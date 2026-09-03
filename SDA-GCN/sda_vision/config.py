@@ -26,8 +26,9 @@ class VisionSessionConfig:
     num_poses: int = 1
     input_width: int = 1280
     input_height: int = 720
-    identity_interval: float = 0.5
+    identity_interval: float = 0.3
     face_det_size: int = 416
+    face_detection_threshold: float = 0.4
     rebuild_face_cache: bool = False
     log_level: str = "info"
     identity_debug: bool = False

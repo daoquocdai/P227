@@ -32,11 +32,6 @@ def fall(event_id: str, episode: str, *, seconds: int = 0):
     )
 
 
-@pytest.fixture(autouse=True)
-def identity_on(monkeypatch):
-    monkeypatch.setattr("src.services.event_service.camera_service.identity_enabled_state", lambda _camera_id: True)
-
-
 @pytest.mark.asyncio
 async def test_same_unknown_track_creates_two_events_one_incident_one_alert():
     service = EventService()

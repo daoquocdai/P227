@@ -61,19 +61,6 @@ class VisionManager:
             self._last_results.pop(camera_id, None)
         return self.get_status(camera_id)
 
-    def set_identity_enabled(self, camera_id: str, enabled: bool) -> dict:
-        session = self.worker.get_session(camera_id)
-        if session is not None:
-            session.state["vision_identity_enabled"] = enabled
-            session.state.pop("vision_face_cache", None)
-        if enabled and hasattr(self._engine, "set_identity_enabled"):
-            self._engine.set_identity_enabled(True)
-        return self.get_status(camera_id)
-
-    def is_identity_enabled(self, camera_id: str) -> bool:
-        session = self.worker.get_session(camera_id)
-        return bool(session and session.state.get("vision_identity_enabled", False))
-
     def get_status(self, camera_id: str) -> dict:
         enabled = self.worker.is_enabled(camera_id)
         session = self.worker.get_session(camera_id)
@@ -119,7 +106,6 @@ class VisionManager:
             "last_result": None if result is None else asdict(result),
             "current_error": current_error,
             "last_error": last_error,
-            "identity_enabled": bool(session and session.state.get("vision_identity_enabled", False)),
             "event_dispatch": dispatch_status,
             "temporal": self._temporal_status(camera_id),
         }

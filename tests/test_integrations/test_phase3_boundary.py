@@ -11,7 +11,6 @@ ROOT = Path(__file__).resolve().parents[2]
 def sda_settings():
     return SimpleNamespace(
         vision_engine="sda",
-        vision_identity_enabled=False,
         vision_device="cpu",
         vision_fps=15.0,
         log_level="ERROR",

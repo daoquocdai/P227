@@ -1,13 +1,13 @@
 import pytest
 from pydantic import ValidationError
 
-from src.config import DEFAULT_VISION_IDENTITY_ENABLED, Settings
+from src.config import Settings
 
 
-def test_identity_defaults_to_enabled(monkeypatch):
-    monkeypatch.delenv("VISION_IDENTITY_ENABLED", raising=False)
+def test_product_settings_have_no_identity_toggle(monkeypatch):
+    monkeypatch.setenv("VISION_IDENTITY_ENABLED", "false")
     settings = Settings(_env_file=None)
-    assert settings.vision_identity_enabled is DEFAULT_VISION_IDENTITY_ENABLED is True
+    assert not hasattr(settings, "vision_identity_enabled")
 
 
 def test_vision_num_poses_defaults_to_single_person():

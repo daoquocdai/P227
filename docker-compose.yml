@@ -16,7 +16,6 @@ services:
       CORS_ORIGINS: http://localhost:${FRONTEND_PORT:-5173}
       VISION_ENGINE: sda
       VISION_DEVICE: cpu
-      VISION_IDENTITY_ENABLED: ${VISION_IDENTITY_ENABLED:-false}
       VISION_IDENTITY_PROVIDER: cpu
       VISION_INSIGHTFACE_ROOT: /home/appuser/.insightface
     volumes:

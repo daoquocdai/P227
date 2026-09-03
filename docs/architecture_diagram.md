@@ -74,25 +74,22 @@ flowchart LR
 Integrated mode chỉ dùng supplied gallery từ SQLite. Filesystem/NPZ chỉ dành
 cho SDA CLI standalone.
 
-## 5. Identity OFF race protection
+## 5. Identity follows Vision lifecycle
 
 ```mermaid
 sequenceDiagram
     participant UI as Client
     participant API as Cameras API
-    participant DB as SQLite desired state
     participant R as SdaSessionRegistry
     participant S as VisionSession
-    participant E as Event boundary
 
-    UI->>API: Identity OFF
-    API->>DB: persist OFF first
-    API->>R: set_identity_enabled(false)
-    R->>S: stop/reset Identity stage
-    S-->>R: possible in-flight result
-    R->>R: omit identity event/metadata
-    E->>DB: reject invalid Unknown before persistence
-    Note over R,E: Fall event remains independent
+    UI->>API: Vision ON
+    API->>R: enable Vision
+    R->>S: start Vision + request Identity
+    Note over S: Identity failure is isolated from Pose/Fall
+    UI->>API: Vision OFF
+    API->>R: disable Vision
+    R->>S: stop/reset Vision + Identity stage
 ```
 
 ## 6. Snapshot privacy và optional media

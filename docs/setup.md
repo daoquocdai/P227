@@ -88,7 +88,6 @@ DATABASE_URL=sqlite:///./data/app.db
 
 VISION_ENGINE=sda
 VISION_DEVICE=auto
-VISION_IDENTITY_ENABLED=false
 VISION_IDENTITY_PROVIDER=auto
 VISION_INSIGHTFACE_ROOT=~/.insightface
 
@@ -200,7 +199,7 @@ curl http://127.0.0.1:8000/api/v1/cameras
 - Web: <http://localhost:5173>
 - Swagger: <http://127.0.0.1:8000/docs>
 
-Backend restore persisted Camera/Vision/Identity desired state. Một source lỗi
+Backend restore persisted Camera/Vision desired state; Identity đi cùng Vision. Một source lỗi
 không làm toàn bộ FastAPI startup fail.
 
 ## 8. Runtime status
@@ -215,17 +214,16 @@ Camera status có `status`, `error`, `capture_fps`, `source_frames_read` và
 `waiting_for_source`, `running`, `error`.
 
 Các trường chính gồm `processed_frames`, `last_processed_frame_id`,
-`current_error`, `identity_enabled`, `realtime` và `hardware`. `realtime` chứa
+`current_error`, `identity_status`, `identity_error`, `realtime` và `hardware`. `realtime` chứa
 `vision_fps`, `vision_processing_latency_ms`, `vision_frames_processed` cùng
 stage metrics từ SDA. `pending=0` và `max_pending=1` là compatibility metrics;
 production scheduling thực tế lấy latest snapshot theo fixed-rate scheduler.
 
 ## 9. Controls
 
-- Vision ON bật Fall Detection.
+- Vision ON bật pipeline Pose/Action/Fall và yêu cầu Identity.
 - `Hiện khung` chỉ ảnh hưởng presentation.
-- `Phát hiện người lạ` là camera-level Identity setting cho mọi viewer.
-- Identity OFF không ảnh hưởng Fall hoặc privacy detection cho Fall snapshot.
+- Identity unavailable không làm dừng Fall hoặc privacy detection cho Fall snapshot.
 
 ## 10. Kiểm thử
 
@@ -288,14 +286,13 @@ Truy cập:
 
 Compose mount `data/`, `snapshots/` và demo files dưới `frontend/public/`.
 Backend container ép `VISION_DEVICE=cpu` và
-`VISION_IDENTITY_PROVIDER=cpu`. Identity mặc định OFF.
+`VISION_IDENTITY_PROVIDER=cpu`. Identity được yêu cầu khi Vision chạy.
 
-Muốn bật Identity trong Docker:
+Để Identity khả dụng trong Docker:
 
-1. Đặt `VISION_IDENTITY_ENABLED=true` trong `.env`.
-2. Đảm bảo model `buffalo_l` tồn tại trong named volume
+1. Đảm bảo model `buffalo_l` tồn tại trong named volume
    `insightface_models` tại `/home/appuser/.insightface/models/buffalo_l/`.
-3. Recreate backend container và kiểm tra startup log.
+2. Recreate backend container và kiểm tra startup log.
 
 Dừng dịch vụ:
 
@@ -365,5 +362,5 @@ docker compose config
 ```
 
 Kiểm tra port trùng, quyền ghi `data/`/`snapshots/`, model assets trong image và
-giá trị `.env`. Nếu chỉ Identity lỗi, giữ Identity OFF để xác nhận Fall/runtime
-cốt lõi trước.
+giá trị `.env`. Nếu chỉ Identity lỗi, kiểm tra `identity_status`/`identity_error`;
+Fall/runtime cốt lõi vẫn phải tiếp tục chạy.

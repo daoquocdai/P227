@@ -146,6 +146,7 @@ def _identity_process(
     data_dir,
     cache_path,
     det_size,
+    detection_threshold,
     threshold,
     rebuild_cache,
     debug,
@@ -170,7 +171,11 @@ def _identity_process(
             warnings.filterwarnings("ignore", message=r"SymbolDatabase.GetPrototype\(\) is deprecated")
             model_started = time.perf_counter()
             app = FaceAnalysis(name="buffalo_l", allowed_modules=["detection", "recognition"], providers=providers)
-            app.prepare(ctx_id=0 if providers[0] != "CPUExecutionProvider" else -1, det_size=(det_size, det_size))
+            app.prepare(
+                ctx_id=0 if providers[0] != "CPUExecutionProvider" else -1,
+                det_thresh=detection_threshold,
+                det_size=(det_size, det_size),
+            )
             model_ms = (time.perf_counter() - model_started) * 1000.0
     except Exception as exc:
         _replace_latest(
@@ -327,9 +332,10 @@ class IdentityStage:
         data_dir,
         cache_path,
         det_size=416,
-        interval=0.5,
+        detection_threshold=0.4,
+        interval=0.3,
         unknown_retry=1.0,
-        locked_unknown_retry=15.0,
+        locked_unknown_retry=3.0,
         max_unknown_attempts=3,
         absent_timeout=1.5,
         threshold=0.45,
@@ -375,6 +381,7 @@ class IdentityStage:
                 str(data_dir),
                 str(cache_path),
                 det_size,
+                detection_threshold,
                 threshold,
                 rebuild_cache,
                 debug,
@@ -389,6 +396,8 @@ class IdentityStage:
             daemon=True,
         )
         self.interval = interval
+        self.detection_threshold = detection_threshold
+        self.recognition_threshold = threshold
         self.unknown_retry = unknown_retry
         self.locked_unknown_retry = locked_unknown_retry
         self.max_unknown_attempts = max_unknown_attempts
@@ -453,7 +462,9 @@ class IdentityStage:
         if state == IdentityState.LOCKED_KNOWN:
             return False
         cooldown = self.interval
-        if state == IdentityState.UNKNOWN:
+        if self.result.face_found is False:
+            cooldown = self.interval
+        elif state == IdentityState.UNKNOWN:
             cooldown = self.unknown_retry
         elif state == IdentityState.LOCKED_UNKNOWN:
             cooldown = self.locked_unknown_retry

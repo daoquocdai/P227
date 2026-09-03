@@ -529,6 +529,7 @@ function DashboardApp({
           >
             <RouteContent
               path={activePath}
+              user={user}
             />
           </div>
         </main>
@@ -607,8 +608,10 @@ function DashboardApp({
 
 function RouteContent({
   path,
+  user,
 }: {
   path: RoutePath;
+  user: AuthUser;
 }) {
   if (path === "/camera") {
     return <CameraPage />;
@@ -631,7 +634,7 @@ function RouteContent({
   }
 
   if (path === "/settings") {
-    return <SettingsPage />;
+    return <SettingsPage user={user} />;
   }
 
   return <OverviewPage />;

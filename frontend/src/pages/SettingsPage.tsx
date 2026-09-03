@@ -1,9 +1,12 @@
-import { Bell, Camera, Check, Clock3, History, LockKeyhole, Plus, RefreshCw, Save, Settings, ShieldCheck, SlidersHorizontal, UserPlus, UsersRound, X } from "lucide-react";
+import { Bell, Camera, Check, Clock3, History, LockKeyhole, PhoneCall, Plus, RefreshCw, Save, Settings, ShieldCheck, SlidersHorizontal, UserPlus, UsersRound, X } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import type { AuthUser } from "../api/auth";
 import {
   createSettingsUser, getSettings, saveGeneral, saveNotifications, setSettingsCameraActive, setSettingsCameraVision,
   setSettingsUserActive, setUserPermission, type PermissionKey, type SettingsData, type SettingsUser,
 } from "../api/settings";
+import { EmergencyContactsPanel } from "../features/emergencyContacts/EmergencyContactsPanel";
+import { canManageEmergencyContacts } from "../features/emergencyContacts/contactModel";
 import "./settings.css";
 
 const tabs = [
@@ -11,6 +14,7 @@ const tabs = [
   { id: "users", label: "Quản lý người dùng", icon: UsersRound },
   { id: "permissions", label: "Phân quyền", icon: LockKeyhole },
   { id: "notifications", label: "Thông báo", icon: Bell },
+  { id: "emergency_contacts", label: "Liên hệ khẩn cấp", icon: PhoneCall },
 ] as const;
 type Tab = typeof tabs[number]["id"];
 const permissionLabels: Record<PermissionKey,string> = {
@@ -22,7 +26,7 @@ function Toggle({ value, onChange, disabled=false, label }: { value:boolean; onC
   return <button className={`permission-toggle ${value?"on":""}`} role="switch" aria-checked={value} aria-label={label} disabled={disabled} onClick={onChange}><i /></button>;
 }
 
-export default function SettingsPage() {
+export default function SettingsPage({ user }: { user: AuthUser }) {
   const [data,setData]=useState<SettingsData|null>(null); const [tab,setTab]=useState<Tab>("general");
   const [loading,setLoading]=useState(true); const [error,setError]=useState(""); const [saved,setSaved]=useState(false);
   const [invite,setInvite]=useState(false); const [selectedUser,setSelectedUser]=useState("");
@@ -35,6 +39,8 @@ export default function SettingsPage() {
   if(loading)return <section className="settings-page page-wrap"><div className="permission-empty"><RefreshCw/><h3>Đang tải cài đặt…</h3></div></section>;
   if(!data)return <section className="settings-page page-wrap"><div className="permission-empty"><Settings/><h3>{error||"Không có dữ liệu cài đặt"}</h3><button onClick={load}>Thử lại</button></div></section>;
   const selected=data.users.find((user)=>user.id===selectedUser);
+  const canManageContacts=canManageEmergencyContacts(user);
+  const visibleTabs=tabs.filter(({id})=>id!=="emergency_contacts"||canManageContacts);
   const updateData=(next:SettingsData)=>{dirtyRef.current=false;setData(next)};
   const updateDraft=(next:SettingsData)=>{dirtyRef.current=true;setData(next)};
   const saveGeneralSettings=()=>void saveGeneral(data.general).then((general)=>{dirtyRef.current=false;setData({...data,general});flashSaved()}).catch(()=>setError("Không lưu được cài đặt chung"));
@@ -46,9 +52,9 @@ export default function SettingsPage() {
   const addUser=async(event:FormEvent<HTMLFormElement>)=>{event.preventDefault();const form=new FormData(event.currentTarget);try{const user=await createSettingsUser({name:String(form.get("name")),email:String(form.get("email")),password:String(form.get("password")),role:String(form.get("role")) as "admin"|"caregiver"});setData({...data,users:[...data.users,user]});setInvite(false);setSelectedUser(user.id)}catch{setError("Email đã tồn tại hoặc dữ liệu không hợp lệ")}};
 
   return <section className="settings-page page-wrap">
-    <header className="settings-heading"><div><h1>Cài đặt</h1><p>Quản lý cấu hình được lưu trên Local Hub.</p></div><span><ShieldCheck/> Chỉ dành cho quản trị viên</span></header>
+    <header className="settings-heading"><div><h1>Cài đặt</h1><p>Quản lý cấu hình được lưu trên Local Hub.</p></div><span><ShieldCheck/> Theo quyền tài khoản</span></header>
     {error&&<div className="inactive-notice"><LockKeyhole/><span>{error}</span><button onClick={()=>setError("")}><X/></button></div>}
-    <div className="settings-shell"><nav className="settings-tabs">{tabs.map(({id,label,icon:Icon})=><button key={id} className={tab===id?"active":""} onClick={()=>setTab(id)}><Icon/><span>{label}</span></button>)}</nav>
+    <div className="settings-shell"><nav className="settings-tabs">{visibleTabs.map(({id,label,icon:Icon})=><button key={id} className={tab===id?"active":""} onClick={()=>setTab(id)}><Icon/><span>{label}</span></button>)}</nav>
       <main className="settings-content">
         {tab==="general"&&<div className="settings-scroll-content"><header className="section-page-heading"><div><h2>Cài đặt chung</h2><p>Camera, lưu trữ và ngưỡng phát hiện AI.</p></div></header>
           <section className="settings-section-card"><div className="settings-card-heading"><span><Camera/></span><div><h3>Camera</h3><p>{data.cameras.length} camera trong SQLite. Công tắc thể hiện cấu hình ON/OFF; badge thể hiện trạng thái chạy thực tế.</p></div></div><div className="settings-data-list">{data.cameras.map((camera)=><div className="camera-setting-row" key={camera.id}><span className="data-icon"><Camera/></span><div><strong>{camera.name}</strong><small>{camera.location_label||"Chưa đặt vị trí"} · {camera.source_kind} · Vision: {camera.vision_enabled?camera.vision_status:"OFF"}</small></div><span className={`operational-badge ${camera.operational_status}`}>{runtimeLabel(camera.operational_status)}</span><div className="camera-setting-toggles"><label>Camera {camera.is_active?"ON":"OFF"} <Toggle label={`Camera ${camera.name}`} value={camera.is_active} onChange={()=>toggleCamera(camera.id,!camera.is_active)}/></label><label>Vision {camera.vision_enabled?"ON":"OFF"} <Toggle label={`Vision ${camera.name}`} value={camera.vision_enabled} onChange={()=>toggleVision(camera.id,!camera.vision_enabled)}/></label></div></div>)}</div></section>
@@ -61,6 +67,7 @@ export default function SettingsPage() {
         {tab==="permissions"&&<div className="permission-view"><header className="permission-heading"><div><h2>Phân quyền</h2><p>Quyền caregiver được lưu trong `user_permissions`.</p></div></header><div className="permission-layout"><aside className="caregiver-panel"><div className="caregiver-list">{data.users.map((user)=><button key={user.id} className={selectedUser===user.id?"selected":""} onClick={()=>setSelectedUser(user.id)}><span className="caregiver-avatar">{user.name.split(" ").map((part)=>part[0]).slice(-2).join("")}</span><span><strong>{user.name}</strong><small>{user.email}</small></span></button>)}</div></aside>{selected&&<section className="permission-panel"><header><span className="caregiver-avatar large">{selected.name[0]}</span><div><h3>{selected.name}</h3><p>{selected.role}</p></div></header><div className="permission-groups"><section><h4><History/> Quyền hệ thống</h4>{(Object.keys(permissionLabels) as PermissionKey[]).map((key)=><div className="permission-row" key={key}><div><strong>{permissionLabels[key]}</strong><p>{selected.role==="admin"?"Admin luôn có quyền này.":"Cho phép caregiver thực hiện thao tác."}</p></div><Toggle label={permissionLabels[key]} value={selected.permissions[key]} disabled={selected.role==="admin"||!selected.active} onChange={()=>togglePermission(key)}/></div>)}</section></div></section>}</div></div>}
 
         {tab==="notifications"&&<div className="settings-scroll-content"><header className="section-page-heading"><div><h2>Thông báo</h2><p>Cấu hình cách Local Hub thông báo cảnh báo.</p></div></header><section className="settings-section-card"><div className="settings-card-heading"><span><Bell/></span><div><h3>Kênh thông báo</h3><p>SMS bị khóa vì baseline chưa có hạ tầng gửi thật.</p></div></div><div className="notification-options">{(["app","email","sms"] as const).map((key)=><div key={key}><Bell/><span><strong>{key.toUpperCase()}</strong><small>{key==="sms"?"Chưa khả dụng":"Được lưu trên Local Hub"}</small></span><Toggle label={key} disabled={key==="sms"} value={data.notifications[key]} onChange={()=>updateDraft({...data,notifications:{...data.notifications,[key]:!data.notifications[key]}})}/></div>)}</div></section><section className="settings-section-card"><div className="setting-inline-row"><label><span>Mức độ nhận</span><select value={data.notifications.level} onChange={(event)=>updateDraft({...data,notifications:{...data.notifications,level:event.target.value as "all"|"important"}})}><option value="all">Tất cả</option><option value="important">Chỉ high / critical</option></select></label><div><strong>Gộp cảnh báo</strong><small>Gộp cảnh báo liên tiếp.</small></div><Toggle label="Gộp cảnh báo" value={data.notifications.grouped} onChange={()=>updateDraft({...data,notifications:{...data.notifications,grouped:!data.notifications.grouped}})}/></div><div className="quiet-hours"><Toggle label="Giờ yên tĩnh" value={data.notifications.quiet_enabled} onChange={()=>updateDraft({...data,notifications:{...data.notifications,quiet_enabled:!data.notifications.quiet_enabled}})}/><label><span>Từ</span><input type="time" value={data.notifications.quiet_from} onChange={(event)=>updateDraft({...data,notifications:{...data.notifications,quiet_from:event.target.value}})}/></label><label><span>Đến</span><input type="time" value={data.notifications.quiet_to} onChange={(event)=>updateDraft({...data,notifications:{...data.notifications,quiet_to:event.target.value}})}/></label></div><div className="settings-card-actions"><button className={`settings-save ${saved?"saved":""}`} onClick={saveNotificationSettings}>{saved?<><Check/> Đã lưu</>:<><Save/> Lưu thông báo</>}</button></div></section></div>}
+        {tab==="emergency_contacts"&&canManageContacts&&<EmergencyContactsPanel/>}
       </main></div>
     {invite&&<div className="settings-modal-backdrop"><form className="settings-modal" onSubmit={addUser}><header><div><h3>Thêm thành viên</h3><p>Tạo tài khoản cục bộ. Người dùng sẽ đổi mật khẩu sau lần đăng nhập đầu tiên.</p></div><button type="button" onClick={()=>setInvite(false)}><X/></button></header><label><span>Tên</span><input name="name" required/></label><label><span>Email</span><input name="email" type="email" required/></label><label><span>Mật khẩu tạm</span><input name="password" type="password" minLength={8} required/></label><label><span>Vai trò</span><select name="role"><option value="caregiver">Caregiver</option><option value="admin">Admin</option></select></label><footer><button type="button" onClick={()=>setInvite(false)}>Huỷ</button><button type="submit"><Plus/> Thêm</button></footer></form></div>}
   </section>;

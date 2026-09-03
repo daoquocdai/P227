@@ -42,18 +42,6 @@ def delete_camera(path: Path, camera_id: str):
         connection.commit()
 
 
-@pytest.mark.parametrize(
-    ("config_json", "expected"),
-    [
-        ("{}", True),
-        ('{"identity_enabled":true}', True),
-        ('{"identity_enabled":false}', False),
-    ],
-)
-def test_camera_identity_config_uses_enabled_default_and_explicit_overrides(config_json, expected):
-    assert camera_service._identity_enabled(config_json) is expected
-
-
 def test_fresh_database_has_exactly_two_default_cameras_and_restart_is_idempotent(fresh_database):
     initialize_database()
     first = cameras(fresh_database)
@@ -180,32 +168,19 @@ def test_existing_default_name_with_another_id_is_accepted(fresh_database):
     assert (replacement["id"], replacement["source_uri"]) == (replacement_id, "3")
 
 
-def test_camera_identity_setting_persists_without_overwriting_other_config(fresh_database):
+def test_legacy_identity_config_is_ignored_by_product_contract(fresh_database):
     initialize_database()
     with sqlite3.connect(fresh_database) as connection:
         connection.execute(
             "UPDATE camera_sources SET config_json = ? WHERE camera_id = ?",
-            ('{"loop_video":false}', BUILTIN_VIDEO_CAMERA_ID),
+            ('{"loop_video":false,"identity_enabled":false}', BUILTIN_VIDEO_CAMERA_ID),
         )
         connection.commit()
 
-    camera_service.set_identity_enabled(BUILTIN_VIDEO_CAMERA_ID, True)
     initialize_database()
     desired = next(item for item in camera_service.desired_states() if item["id"] == BUILTIN_VIDEO_CAMERA_ID)
     camera = camera_service.get_camera(BUILTIN_VIDEO_CAMERA_ID)
 
-    assert desired["identity_enabled"] is True
     assert desired["loop_video"] is False
-    assert camera["identity_enabled"] is True
-
-
-def test_explicit_identity_off_survives_database_restart(fresh_database):
-    initialize_database()
-    camera_service.set_identity_enabled(BUILTIN_VIDEO_CAMERA_ID, False)
-
-    initialize_database()
-
-    desired = next(item for item in camera_service.desired_states() if item["id"] == BUILTIN_VIDEO_CAMERA_ID)
-    camera = camera_service.get_camera(BUILTIN_VIDEO_CAMERA_ID)
-    assert desired["identity_enabled"] is False
-    assert camera["identity_enabled"] is False
+    assert "identity_enabled" not in desired
+    assert "identity_enabled" not in camera

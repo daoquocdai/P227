@@ -25,6 +25,7 @@ from sda_vision import (
     VisionSession,
     VisionSessionConfig,
 )
+from sda_vision.action_labels import ACTION_CLASSES
 from sda_vision.cli import parse_args
 from sda_vision.contracts import FrameTransform
 from sda_vision.runtime.identity import IdentityResult, IdentityState, _replace_latest
@@ -96,6 +97,18 @@ class PublicImportTests(unittest.TestCase):
 
 
 class ContractTests(unittest.TestCase):
+    def test_deployed_five_class_labels_are_exact_and_stable(self):
+        self.assertEqual(
+            [(item.class_id, item.name, item.label) for item in ACTION_CLASSES.values()],
+            [
+                (0, "fall", "Ngã"),
+                (1, "standing", "Đứng"),
+                (2, "bending", "Cúi"),
+                (3, "sitting", "Ngồi"),
+                (4, "lying", "Nằm"),
+            ],
+        )
+
     def test_padded_inference_bbox_maps_to_source_pixels(self):
         transform = FrameTransform(1920, 1080)
         self.assertEqual(transform.bbox_to_source((0, 0, 1280, 720)), (0, 0, 1920, 1080))
@@ -223,6 +236,36 @@ class ShutdownTests(unittest.TestCase):
 
 
 class SessionControlTests(unittest.TestCase):
+    def test_identity_start_failure_is_isolated_and_not_retried(self):
+        session = VisionSession(VisionSessionConfig(identity_enabled=True, preview="none"))
+        session.action_model = object()
+        with (
+            patch(
+                "sda_vision.session.resolve_face_providers",
+                return_value=SimpleNamespace(providers=("CPUExecutionProvider",), device="CPU"),
+            ),
+            patch("sda_vision.session.face_stage_spec", return_value=object()),
+            patch("sda_vision.session.IdentityStage", side_effect=RuntimeError("model missing")) as stage,
+        ):
+            session._start_identity_stage()
+            session._start_identity_stage()
+        self.assertEqual(stage.call_count, 1)
+        self.assertIsNone(session.identity_stage)
+        self.assertEqual(session.face_startup_error, "model missing")
+        self.assertEqual(session.face_stage.backend, "UNAVAILABLE")
+
+    def test_disabling_vision_stops_identity_worker(self):
+        session = VisionSession(VisionSessionConfig(identity_enabled=True, preview="none"))
+        identity = self.FakeIdentity(IdentityResult())
+        session.identity_stage = identity
+        session.inference_enabled = True
+        session.action_model = object()
+        session._reset_temporal_state = lambda: None
+        session.set_inference_enabled(False)
+        self.assertTrue(identity.stopped)
+        self.assertIsNone(session.identity_stage)
+        self.assertFalse(session._identity_start_attempted)
+
     def test_vision_off_keeps_source_rate_callback_active(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "source.avi"

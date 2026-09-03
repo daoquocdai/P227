@@ -61,7 +61,7 @@ class VisionDetection:
     identity_face_verified: bool | None = None
     face_bbox: tuple[int, int, int, int] | None = None
     association_id: str | int | None = None
-    
+
     # --- Data for SLM ---
     yolo_interaction: str | None = None
     iou_score: float | None = None
@@ -98,6 +98,10 @@ class VisionFrameResult:
     generated_events: tuple[VisionEvent, ...] = ()
     stage_metrics: dict[str, float | None] = field(default_factory=dict)
     fall_diagnostics: tuple[dict[str, Any], ...] = ()
+    action_class_id: int | None = None
+    action_class_name: str | None = None
+    action_label: str | None = None
+    action_confidence: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

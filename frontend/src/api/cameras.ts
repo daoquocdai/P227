@@ -22,7 +22,6 @@ export interface CameraDto {
   active: boolean;
   vision_enabled: boolean;
   vision_status?: "disabled" | "waiting_for_source" | "running" | "error" | null;
-  identity_enabled: boolean;
   source_kind: "video_file" | "webcam" | "rtsp";
   source: string;
   playback_url?: string | null;
@@ -45,6 +44,10 @@ export interface CameraVisionMetadata extends Record<string, unknown> {
   bbox_source_width?: number;
   bbox_source_height?: number;
   current_action?: string;
+  action_class_id?: number | null;
+  action_class_name?: "fall" | "standing" | "bending" | "sitting" | "lying" | null;
+  action_label?: "Ngã" | "Đứng" | "Cúi" | "Ngồi" | "Nằm" | null;
+  action_confidence?: number | null;
   fall_state?: string;
   fall_confidence?: number | null;
 }
@@ -66,8 +69,11 @@ export function getCamera(id: string): Promise<CameraDto> {
   return apiClient(`/cameras/${encodeURIComponent(id)}`);
 }
 
-export function getLatestCameraVision(id: string): Promise<{ result: CameraVisionResult | null }> {
-  return apiClient(`/cameras/${encodeURIComponent(id)}/vision/latest`);
+export function getLatestCameraVision(
+  id: string,
+  signal?: AbortSignal,
+): Promise<{ result: CameraVisionResult | null }> {
+  return apiClient(`/cameras/${encodeURIComponent(id)}/vision/latest`, { signal });
 }
 
 export function updateCameraSource(
@@ -97,8 +103,4 @@ export function setCameraEnabled(id: string, enabled: boolean): Promise<unknown>
 
 export function setCameraVision(id: string, enabled: boolean): Promise<unknown> {
   return apiClient(`/cameras/${encodeURIComponent(id)}/vision/${enabled ? "enable" : "disable"}`, { method: "POST" });
-}
-
-export function setCameraIdentity(id:string,enabled:boolean):Promise<unknown>{
-  return apiClient(`/cameras/${encodeURIComponent(id)}/vision/identity`,{method:"PATCH",body:JSON.stringify({enabled})});
 }

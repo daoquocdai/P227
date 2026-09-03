@@ -11,9 +11,11 @@ interface CameraStreamProps {
   onError?: () => void;
   showBoxes?: boolean;
   result?: CameraVisionResult | null;
+  visionActive?: boolean;
+  overlayResetKey?: string;
 }
 
-export function CameraStream({ cameraId, streamReady, streamUrl, className, onError, showBoxes=false, result=null }: CameraStreamProps) {
+export function CameraStream({ cameraId, streamReady, streamUrl, className, onError, showBoxes=false, result=null, visionActive=false, overlayResetKey=cameraId }: CameraStreamProps) {
   const [generation,setGeneration]=useState(0);
   const retryAttempt=useRef(0);
   const retryTimer=useRef<number|null>(null);
@@ -43,7 +45,7 @@ export function CameraStream({ cameraId, streamReady, streamUrl, className, onEr
     const streamClassName=["camera-stream-image",className].filter(Boolean).join(" ");
     return <span className="camera-media-layer">
       <img ref={imageRef} className={streamClassName} src={configured} alt={`Luồng trực tiếp ${cameraId}`} onError={handleError} onLoad={handleLoad} />
-      <VisionOverlayCanvas mediaRef={imageRef} result={result} visible={showBoxes} />
+      <VisionOverlayCanvas mediaRef={imageRef} result={result} visible={showBoxes} active={visionActive} resetKey={overlayResetKey} />
     </span>;
   }
   return null;

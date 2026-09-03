@@ -24,6 +24,7 @@ from src.api.statistics import router as statistics_router
 from src.api.vision import router as vision_router
 from src.config import get_settings
 from src.database import initialize_database
+from src.logging_filters import install_access_log_filter
 from src.runtime import LocalRuntime
 from src.services.event_service import event_service, vision_event_sink
 from src.services.fall_escalation_service import FallEscalationService
@@ -33,6 +34,7 @@ from src.services.vision_event_dispatcher import ThreadsafeVisionEventDispatcher
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    install_access_log_filter()
     settings = get_settings()
     print(f"Starting {settings.app_name} in {settings.app_env} mode")
     initialize_database()

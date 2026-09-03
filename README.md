@@ -102,7 +102,6 @@ DATABASE_URL=sqlite:///./data/app.db
 VISION_ENGINE=sda
 VISION_DEVICE=auto
 
-VISION_IDENTITY_ENABLED=false
 VISION_IDENTITY_PROVIDER=auto
 VISION_INSIGHTFACE_ROOT=~/.insightface
 ```
@@ -111,8 +110,9 @@ VISION_INSIGHTFACE_ROOT=~/.insightface
 - `VISION_DEVICE=auto` chọn NVIDIA CUDA → AMD ROCm/Windows DirectML → Intel
   OpenVINO GPU → CPU và log runtime thật. Chọn accelerator thủ công không khả
   dụng sẽ báo lỗi thay vì âm thầm fallback.
-- Giữ `VISION_IDENTITY_ENABLED=false` nếu chưa có
-  `<VISION_INSIGHTFACE_ROOT>/models/buffalo_l/`.
+- Identity được yêu cầu khi Vision chạy. Nếu thiếu
+  `<VISION_INSIGHTFACE_ROOT>/models/buffalo_l/`, Identity báo unavailable còn
+  Pose/Action/Fall tiếp tục chạy.
 - Integrated Identity dùng `persons` và `face_profiles` trong SQLite làm nguồn
   dữ liệu. Filesystem/NPZ chỉ còn dành cho SDA CLI standalone.
 - Các biến temporal target-rate/buffer cũ không điều khiển SDA production path.
@@ -216,7 +216,6 @@ có cooldown 60 giây; một Fall gần nhất cũng suppress notification Unkno
 | `GET` | `/api/v1/cameras/{id}/preview` | Latest raw JPEG |
 | `POST` | `/api/v1/cameras/{id}/vision/enable` | Bật Vision |
 | `POST` | `/api/v1/cameras/{id}/vision/disable` | Tắt Vision |
-| `PATCH` | `/api/v1/cameras/{id}/vision/identity` | Bật/tắt Unknown workflow |
 | `GET` | `/api/v1/cameras/{id}/vision/status` | Vision/device/realtime metrics |
 | `GET` | `/api/v1/alerts` | Alerts persisted |
 | `GET` | `/api/v1/alerts/stream` | Realtime SSE |
@@ -235,18 +234,13 @@ curl -X GET http://127.0.0.1:8000/health
 curl -X GET http://127.0.0.1:8000/api/v1/cameras
 ```
 
-**3. Khởi chạy camera, bật Vision Engine & bật tính năng Nhận diện người lạ**
+**3. Khởi chạy camera và bật Vision Engine (gồm Identity stage)**
 ```bash
 # Bật camera
 curl -X POST "http://127.0.0.1:8000/api/v1/cameras/cam-1/start?loop_video=true"
 
-# Bật Vision Engine (Fall Detection luôn ON)
+# Bật Vision Engine (Pose/Action/Fall + Identity)
 curl -X POST http://127.0.0.1:8000/api/v1/cameras/cam-1/vision/enable
-
-# Bật Identity Workflow (Phát hiện người lạ)
-curl -X PATCH http://127.0.0.1:8000/api/v1/cameras/cam-1/vision/identity \
-  -H "Content-Type: application/json" \
-  -d '{"enabled": true}'
 ```
 
 **4. Xem trạng thái chi tiết Vision (Metrics, Latency, Device runtime)**

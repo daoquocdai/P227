@@ -44,56 +44,42 @@ def map_vision_result(
     result,
     *,
     camera_location: str,
-    identity_enabled: bool,
     source_width: int | None = None,
     source_height: int | None = None,
 ) -> VisionResult:
     detections = []
-    if identity_enabled:
-        for item in result.detections:
-            track_id = item.association_id if isinstance(item.association_id, int) else None
-            metadata = {
-                "bbox_coordinate_space": "source_pixels",
-                "identity_state": item.identity_state,
-                "identity_status": item.identity_status,
-                "identity_name": item.identity_name,
-                "identity_person_id": item.identity_person_id,
-                "identity_confidence": item.identity_confidence,
-                "identity_similarity": item.identity_confidence,
-                "identity_face_detected": item.face_bbox is not None,
-                "identity_face_verified": item.identity_face_verified,
-            }
-            if item.face_bbox is not None:
-                metadata.update(
-                    identity_face_bbox_xyxy=item.face_bbox,
-                    identity_face_bbox_frame_id=result.frame_sequence,
-                    identity_face_bbox_coordinate_space="source_pixels",
-                )
-            detections.append(
-                VisionDetection(
-                    label=item.label,
-                    confidence=float(item.confidence or 0.0),
-                    bbox_xyxy=item.bbox,
-                    track_id=track_id,
-                    metadata=metadata,
-                )
+    for item in result.detections:
+        track_id = item.association_id if isinstance(item.association_id, int) else None
+        metadata = {
+            "bbox_coordinate_space": "source_pixels",
+            "identity_state": item.identity_state,
+            "identity_status": item.identity_status,
+            "identity_name": item.identity_name,
+            "identity_person_id": item.identity_person_id,
+            "identity_confidence": item.identity_confidence,
+            "identity_similarity": item.identity_confidence,
+            "identity_face_detected": item.face_bbox is not None,
+            "identity_face_verified": item.identity_face_verified,
+        }
+        if item.face_bbox is not None:
+            metadata.update(
+                identity_face_bbox_xyxy=item.face_bbox,
+                identity_face_bbox_frame_id=result.frame_sequence,
+                identity_face_bbox_coordinate_space="source_pixels",
             )
-    else:
-        for item in result.detections:
-            detections.append(
-                VisionDetection(
-                    label=item.label,
-                    confidence=float(item.confidence or 0.0),
-                    bbox_xyxy=item.bbox,
-                    metadata={"bbox_coordinate_space": "source_pixels"},
-                )
+        detections.append(
+            VisionDetection(
+                label=item.label,
+                confidence=float(item.confidence or 0.0),
+                bbox_xyxy=item.bbox,
+                track_id=track_id,
+                metadata=metadata,
             )
+        )
 
     events = []
     for item in result.generated_events:
         normalized = item.event_type.strip().lower()
-        if not identity_enabled and normalized in {"unknown_person", "person_recognized"}:
-            continue
         metadata = dict(item.metadata)
         metadata.setdefault("event_id", f"sda:{uuid4()}")
         metadata.setdefault("camera_location", camera_location)
@@ -104,7 +90,7 @@ def map_vision_result(
         if item.person_bbox is not None:
             metadata.setdefault("person_bbox_xyxy", item.person_bbox)
             metadata.setdefault("person_bbox_coordinate_space", "source_pixels")
-        if identity_enabled and (item.identity_state is not None or item.identity_name is not None):
+        if item.identity_state is not None or item.identity_name is not None:
             metadata.update(
                 identity_state=item.identity_state,
                 identity_status=("KNOWN" if item.identity_name else "UNKNOWN"),
@@ -139,6 +125,10 @@ def map_vision_result(
             "bbox_source_height": source_height,
             "geometry": {"scale": 1.0, "pad_x": 0.0, "pad_y": 0.0},
             "current_action": result.current_action,
+            "action_class_id": result.action_class_id,
+            "action_class_name": result.action_class_name,
+            "action_label": result.action_label,
+            "action_confidence": result.action_confidence,
             "fall_state": result.fall_state,
             "fall_confidence": result.fall_confidence,
             "fall_diagnostics": list(result.fall_diagnostics),
@@ -397,7 +387,6 @@ class SdaSessionRegistry:
         self._lock = threading.RLock()
         self._records: dict[str, _SessionRecord] = {}
         self._vision_desired: dict[str, bool] = {}
-        self._identity_desired: dict[str, bool] = {}
         self._next_epoch: dict[str, int] = {}
         self._identity_gallery = IdentityGallerySnapshot(0)
         self._gallery_update_ms = 0.0
@@ -411,7 +400,6 @@ class SdaSessionRegistry:
             if existing and self._camera_record_is_running(existing):
                 raise RuntimeError(f"Camera {camera_id} already running")
             inference = self._vision_desired.get(camera_id, True)
-            identity = self._identity_desired.get(camera_id, self.settings.vision_identity_enabled)
             initial_epoch = self._next_epoch.get(camera_id, 0)
             self._next_epoch[camera_id] = initial_epoch + 1
             identity_gallery = self._identity_gallery
@@ -422,7 +410,7 @@ class SdaSessionRegistry:
             source_epoch=initial_epoch,
             loop_video=bool(loop_video),
             inference_enabled=inference,
-            identity_enabled=identity,
+            identity_enabled=True,
             device=self.settings.vision_device,
             vision_fps=self.settings.vision_fps,
             num_poses=getattr(self.settings, "vision_num_poses", 1),
@@ -456,7 +444,6 @@ class SdaSessionRegistry:
             if existing and self._camera_record_is_running(existing):
                 raise RuntimeError(f"Camera {camera_id} already running")
             inference = self._vision_desired.get(camera_id, True)
-            identity = self._identity_desired.get(camera_id, self.settings.vision_identity_enabled)
             initial_epoch = self._next_epoch.get(camera_id, 0)
             identity_gallery = self._identity_gallery
         config = VisionSessionConfig(
@@ -466,7 +453,7 @@ class SdaSessionRegistry:
             camera_location=location or camera_id,
             source_epoch=initial_epoch,
             inference_enabled=inference,
-            identity_enabled=identity,
+            identity_enabled=True,
             device=self.settings.vision_device,
             vision_fps=self.settings.vision_fps,
             num_poses=getattr(self.settings, "vision_num_poses", 1),
@@ -635,12 +622,10 @@ class SdaSessionRegistry:
             record = self._records.get(camera_id)
             if record is None:
                 return
-            identity_enabled = self._identity_desired.get(camera_id, record.session.identity_enabled)
             height, width = exact_frame.shape[:2]
             mapped = map_vision_result(
                 sda_result,
                 camera_location=record.location,
-                identity_enabled=identity_enabled,
                 source_width=width,
                 source_height=height,
             )
@@ -754,7 +739,6 @@ class SdaSessionRegistry:
         with self._lock:
             record = self._records.get(camera_id)
             enabled = self._vision_desired.get(camera_id, True)
-            identity = self._identity_desired.get(camera_id, self.settings.vision_identity_enabled)
             latest = None if record is None else record.latest_result
             metrics = {} if latest is None else latest.metadata.get("stage_metrics", {})
             processed = 0 if record is None else record.processed_frames
@@ -765,7 +749,7 @@ class SdaSessionRegistry:
             offered = processed + dropped
             status = (
                 "disabled"
-                if not enabled
+                if not enabled or (record is not None and record.stop_requested)
                 else (
                     "waiting_for_source"
                     if record is None or not source["running"]
@@ -779,7 +763,10 @@ class SdaSessionRegistry:
                 "processed_frames": processed,
                 "last_processed_frame_id": None if latest is None else latest.frame_id,
                 "current_error": error,
-                "identity_enabled": identity,
+                "identity_status": self._identity_status(enabled, record),
+                "identity_error": (
+                    None if record is None else getattr(record.session, "face_startup_error", None)
+                ),
                 "realtime": {
                     "vision_frames_processed": processed,
                     "vision_frames_offered": offered,
@@ -831,20 +818,17 @@ class SdaSessionRegistry:
         self._events.clear_camera(camera_id)
         return self.vision_status(camera_id)
 
-    def set_identity_enabled(self, camera_id, enabled):
-        with self._lock:
-            self._identity_desired[camera_id] = bool(enabled)
-            record = self._records.get(camera_id)
-            if not enabled and record:
-                record.latest_result = None
-        if record:
-            record.session.set_identity_enabled(bool(enabled))
-        self._events.clear_camera(camera_id)
-        return self.vision_status(camera_id)
-
-    def identity_enabled(self, camera_id):
-        with self._lock:
-            return self._identity_desired.get(camera_id, self.settings.vision_identity_enabled)
+    @staticmethod
+    def _identity_status(vision_enabled, record):
+        if not vision_enabled or (record is not None and record.stop_requested):
+            return "disabled"
+        if record is None or not record.session.source_status()["running"]:
+            return "waiting_for_source"
+        if getattr(record.session, "face_startup_error", None):
+            return "unavailable"
+        if getattr(record.session, "identity_stage", None) is None:
+            return "starting"
+        return "running"
 
     def update_identity_gallery(self, snapshot: IdentityGallerySnapshot):
         started = time.perf_counter()
@@ -920,12 +904,6 @@ class SdaVisionFacade:
 
     def get_status(self, camera_id):
         return self.registry.vision_status(camera_id)
-
-    def set_identity_enabled(self, camera_id, enabled):
-        return self.registry.set_identity_enabled(camera_id, enabled)
-
-    def is_identity_enabled(self, camera_id):
-        return self.registry.identity_enabled(camera_id)
 
     def latest_result(self, camera_id):
         return self.registry.latest_result(camera_id)

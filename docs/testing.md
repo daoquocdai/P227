@@ -57,7 +57,7 @@ chỉ sử dụng video ngã quay sẵn an toàn; không thực hiện ngã th�
 ## Điều kiện môi trường
 
 - Chỉ cài một profile Vision phù hợp với máy.
-- `VISION_IDENTITY_ENABLED=false` là mặc định an toàn khi chưa có `buffalo_l`.
+- Identity unavailable phải được cô lập; Vision/Fall vẫn chạy khi thiếu `buffalo_l`.
 - Không cần OpenAI API key khi `ALERT_AGENT_ENABLED=false`.
 - Test tự động cô lập native model ở application boundary; smoke/E2E mới xác
   nhận camera, model và accelerator trên máy chạy thực tế.
