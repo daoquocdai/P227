@@ -53,6 +53,9 @@ class AlertResponse(BaseModel):
     agent_status: Literal["queued", "running", "completed", "failed", "skipped"] | None = None
     agent_verdict: Literal["CONFIRMED_ALERT", "UNCERTAIN", "DUPLICATE"] | None = None
     agent_severity: Literal["low", "medium", "high", "critical"] | None = None
+    escalation_enabled: bool = False
+    escalation_due_at: str | None = None
+    escalation_status: Literal["pending", "calling", "contacted", "failed", "cancelled"] | None = None
     agent_reason_summary: str | None = None
     incident_id: str | None = None
     incident_status: Literal["OPEN", "ACKNOWLEDGED", "RESOLVED_SAFE"] | None = None

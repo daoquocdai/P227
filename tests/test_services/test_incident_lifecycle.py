@@ -140,6 +140,8 @@ async def test_agent_milestones_are_sparse():
     for index in range(1, 7):
         await service.create(unknown(f"milestone-{index}", "32", seconds=(index - 1) * 20))
     assert [call[-1] for call in calls] == [1, 2, 5]
+    with database_connection() as connection:
+        assert connection.execute("SELECT review_requested_version FROM incidents").fetchone()[0] == 5
 
 
 @pytest.mark.asyncio
@@ -174,4 +176,34 @@ async def test_late_and_out_of_order_agent_writes_are_no_ops():
     assert applied["applied"] is True
     assert stale["no_op_reason"] == "STALE_VERSION"
     assert closed["no_op_reason"] == "INCIDENT_CLOSED"
-    assert (await service.get_alert(first.id))["agent_reason_summary"] == "Latest summary."
+    alert = await service.get_alert(first.id)
+    assert alert["agent_reason_summary"] == "Latest summary."
+    assert alert["severity"] == "critical"
+
+
+@pytest.mark.asyncio
+async def test_human_acknowledgement_takes_precedence_over_delayed_agent_result():
+    from src.agents.alert_tools import AlertAgentTools
+    from src.services.agent_trace_service import AgentTraceService
+    from src.services.sqlite_event_repository import stable_uuid
+
+    service = EventService()
+    accepted = await service.create(unknown("human-first", "32"))
+    event_id = stable_uuid("human-first", "event")
+    trace = AgentTraceService()
+    run = trace.create_or_get_run(accepted.incident_id, event_id, accepted.id, "test-model", 1)
+    tools = AlertAgentTools(accepted.incident_id, event_id, accepted.id, 1, run["id"], trace)
+
+    acknowledged = await service.review(accepted.id, AlertReviewRequest(status="checking", note="Đã xem"))
+    delayed = tools.execute(
+        "enrich_incident_alert",
+        '{"verdict":"UNCERTAIN","severity":"low","reason_summary":"Delayed summary."}',
+    )
+    alert = await service.get_alert(accepted.id)
+
+    assert acknowledged["incident_status"] == "ACKNOWLEDGED"
+    assert delayed["applied"] is False
+    assert delayed["no_op_reason"] == "STALE_VERSION"
+    assert alert["incident_status"] == "ACKNOWLEDGED"
+    assert alert["agent_reason_summary"] is None
+    assert alert["severity"] == "critical"

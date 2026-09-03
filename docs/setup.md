@@ -93,6 +93,16 @@ VISION_IDENTITY_PROVIDER=auto
 VISION_INSIGHTFACE_ROOT=~/.insightface
 
 ALERT_AGENT_ENABLED=false
+
+FALL_ESCALATION_ENABLED=true
+FALL_CALL_AFTER_SECONDS=30
+FALL_ESCALATION_POLL_SECONDS=2
+FALL_CALL_MAX_ATTEMPTS=3
+FALL_CALL_RETRY_SECONDS=10
+EMERGENCY_CALL_PROVIDER=twilio
+TWILIO_ACCOUNT_SID=
+TWILIO_AUTH_TOKEN=
+TWILIO_FROM_PHONE_NUMBER=
 ```
 
 - `VISION_ENGINE=sda` là production engine duy nhất được hỗ trợ.
@@ -101,6 +111,18 @@ ALERT_AGENT_ENABLED=false
 - Identity nên để OFF cho đến khi `buffalo_l` sẵn sàng.
 - Uvicorn CLI bên dưới truyền host/port trực tiếp; các đối số CLI đó thắng giá
   trị `APP_HOST`/`APP_PORT` trong `.env`.
+
+Fall escalation là policy deterministic, không phụ thuộc Alert Agent: `Đã xem`
+vẫn tiếp tục đếm thời gian, `Xác nhận an toàn`/`Báo sai` hủy escalation, còn
+`Cần trợ giúp` làm incident đủ điều kiện gọi ngay. Quản lý số E.164 qua API
+`/api/v1/emergency-contacts` (quyền `manage_persons`). Twilio dùng inline TwiML;
+thiếu credentials không ngăn app khởi động và attempt sẽ được ghi là thất bại.
+
+Để test không tốn cuộc gọi, đặt `EMERGENCY_CALL_PROVIDER=logging`, thêm contact,
+gửi một `FALL_CONFIRMED` qua API Vision rồi xem các trường `escalation_*` của
+alert. Provider này chỉ log destination suffix và luôn ghi `DEV_LOG_ONLY`, không
+bao giờ giả báo đã liên hệ thành công. Chỉ chuyển sang `twilio` sau khi điền đủ
+ba biến `TWILIO_*` bằng credentials/số gọi thật.
 
 ## 5. Model assets
 

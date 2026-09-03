@@ -76,29 +76,44 @@ class IncidentCoordinator:
         if active and self._within_window(active["last_seen_at"], occurred_at, merge_seconds):
             version = active["version"] + 1
             count = active["occurrence_count"] + 1
+            review_required = count in self.milestones
             connection.execute(
-                """UPDATE incidents SET last_seen_at=?, occurrence_count=?, version=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                """UPDATE incidents SET last_seen_at=?, occurrence_count=?, version=?,
+                   review_requested_version=CASE WHEN ? THEN ? ELSE review_requested_version END,
+                   updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
                    WHERE id=? AND status IN ('OPEN','ACKNOWLEDGED')""",
-                (occurred_at, count, version, active["id"]),
+                (occurred_at, count, version, int(review_required), version, active["id"]),
             )
             connection.execute(
                 "INSERT INTO incident_events (incident_id,event_id) VALUES (?,?)", (active["id"], event_id)
             )
             self._action(connection, active["id"], "occurrence_attached", event_id, version, None)
             return IncidentCorrelationResult(
-                active["id"], version, count, updated=True, review_required=count in self.milestones
+                active["id"], version, count, updated=True, review_required=review_required
             )
 
         incident_id = str(uuid4())
+        review_required = 1 in self.milestones
         connection.execute(
             """INSERT INTO incidents
-               (id,camera_id,incident_type,status,opened_at,last_seen_at,occurrence_count,track_id,source_session,episode_key,version)
-               VALUES (?,?,?,'OPEN',?,?,1,?,?,?,1)""",
-            (incident_id, camera_id, incident_type, occurred_at, occurred_at, track_id, source_session, episode_key),
+               (id,camera_id,incident_type,status,opened_at,last_seen_at,occurrence_count,track_id,
+                source_session,episode_key,version,review_requested_version)
+               VALUES (?,?,?,'OPEN',?,?,1,?,?,?,1,?)""",
+            (
+                incident_id,
+                camera_id,
+                incident_type,
+                occurred_at,
+                occurred_at,
+                track_id,
+                source_session,
+                episode_key,
+                int(review_required),
+            ),
         )
         connection.execute("INSERT INTO incident_events (incident_id,event_id) VALUES (?,?)", (incident_id, event_id))
         self._action(connection, incident_id, "created", event_id, 1, None)
-        return IncidentCorrelationResult(incident_id, 1, 1, created=True, review_required=1 in self.milestones)
+        return IncidentCorrelationResult(incident_id, 1, 1, created=True, review_required=review_required)
 
     @staticmethod
     def _matching(connection, camera_id, incident_type, track_id, source_session, episode_key, *, resolved):

@@ -2,9 +2,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
-
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+DEFAULT_VISION_IDENTITY_ENABLED = True
 
 
 class Settings(BaseSettings):
@@ -36,7 +37,7 @@ class Settings(BaseSettings):
     vision_num_poses: int = Field(default=1, ge=1, le=5)
     vision_input_width: int = Field(default=1280, ge=320, le=3840)
     vision_input_height: int = Field(default=720, ge=240, le=2160)
-    vision_identity_enabled: bool = False
+    vision_identity_enabled: bool = DEFAULT_VISION_IDENTITY_ENABLED
     vision_identity_process_priority: Literal["normal", "below_normal"] = "normal"
     vision_identity_cpu_affinity: tuple[int, ...] | None = None
     vision_allow_unblurred_event_snapshot: bool = False
@@ -58,7 +59,6 @@ class Settings(BaseSettings):
             return normalized
         raise ValueError("VISION_DEVICE must be auto, cpu, cuda, amd, or intel")
 
-
     # LLM
     openai_api_key: str = ""
     model_name: str = "gpt-4o-mini"
@@ -73,6 +73,17 @@ class Settings(BaseSettings):
     unknown_incident_merge_seconds: int = Field(default=120, ge=60, le=3600)
     fall_incident_merge_seconds: int = Field(default=90, ge=60, le=3600)
     alert_agent_review_milestones: str = "1,2,5,10,20,50"
+
+    # Deterministic fall emergency escalation (independent from Alert Agent/LLM).
+    fall_escalation_enabled: bool = True
+    fall_call_after_seconds: int = Field(default=30, gt=0, le=86400)
+    fall_escalation_poll_seconds: float = Field(default=2.0, ge=0.25, le=60)
+    fall_call_max_attempts: int = Field(default=3, ge=1, le=10)
+    fall_call_retry_seconds: int = Field(default=10, gt=0, le=3600)
+    emergency_call_provider: Literal["twilio", "logging"] = "twilio"
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_from_phone_number: str = ""
 
     # Database
     database_url: str = "sqlite:///./data/app.db"

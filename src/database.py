@@ -185,6 +185,7 @@ def _apply_runtime_migrations(connection: sqlite3.Connection) -> None:
             source_session TEXT, episode_key TEXT, version INTEGER NOT NULL DEFAULT 1,
             review_requested_version INTEGER NOT NULL DEFAULT 0, summary_version INTEGER NOT NULL DEFAULT 0,
             agent_summary TEXT, acknowledged_at TEXT, acknowledged_by TEXT REFERENCES users(id),
+            help_requested_at TEXT,
             resolved_at TEXT, resolved_by TEXT REFERENCES users(id), resolution_reason TEXT,
             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
             updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
@@ -204,6 +205,42 @@ def _apply_runtime_migrations(connection: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
         );
         CREATE INDEX IF NOT EXISTS idx_incident_actions_incident ON incident_actions(incident_id, created_at, id);
+        CREATE TABLE IF NOT EXISTS emergency_contacts (
+            id TEXT PRIMARY KEY NOT NULL CHECK (length(id) = 36),
+            display_name TEXT NOT NULL CHECK (length(trim(display_name)) > 0),
+            relationship_label TEXT,
+            phone_e164 TEXT NOT NULL CHECK (
+                substr(phone_e164, 1, 1) = '+' AND substr(phone_e164, 2, 1) BETWEEN '1' AND '9' AND
+                substr(phone_e164, 2) NOT GLOB '*[^0-9]*' AND length(phone_e164) BETWEEN 9 AND 16
+            ),
+            priority INTEGER NOT NULL DEFAULT 1 CHECK (priority >= 1),
+            is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_emergency_contacts_active_priority
+            ON emergency_contacts(is_active, priority, created_at, id);
+        CREATE TABLE IF NOT EXISTS emergency_escalation_attempts (
+            id TEXT PRIMARY KEY NOT NULL CHECK (length(id) = 36),
+            incident_id TEXT NOT NULL REFERENCES incidents(id) ON UPDATE CASCADE ON DELETE CASCADE,
+            contact_id TEXT REFERENCES emergency_contacts(id) ON UPDATE CASCADE ON DELETE RESTRICT,
+            channel TEXT NOT NULL DEFAULT 'call' CHECK (channel = 'call'),
+            stage TEXT NOT NULL DEFAULT 'fall_unconfirmed' CHECK (stage = 'fall_unconfirmed'),
+            status TEXT NOT NULL CHECK (status IN ('pending', 'claimed', 'succeeded', 'failed', 'cancelled')),
+            attempt_number INTEGER NOT NULL CHECK (attempt_number >= 1),
+            incident_version INTEGER NOT NULL CHECK (incident_version >= 1),
+            idempotency_key TEXT NOT NULL UNIQUE,
+            provider_reference TEXT,
+            error_code TEXT CHECK (error_code IS NULL OR length(error_code) <= 100),
+            retryable INTEGER NOT NULL DEFAULT 0 CHECK (retryable IN (0, 1)),
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            UNIQUE (incident_id, stage, contact_id, attempt_number)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_emergency_escalation_success
+            ON emergency_escalation_attempts(incident_id, stage) WHERE status = 'succeeded';
+        CREATE INDEX IF NOT EXISTS idx_emergency_escalation_incident
+            ON emergency_escalation_attempts(incident_id, stage, created_at, id);
         """
     )
     alert_columns = {row[1] for row in connection.execute("PRAGMA table_info(alerts)").fetchall()}
@@ -224,6 +261,9 @@ def _apply_runtime_migrations(connection: sqlite3.Connection) -> None:
     connection.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_runs_incident_generation ON agent_runs(incident_id, review_generation) WHERE incident_id IS NOT NULL"
     )
+    incident_columns = {row[1] for row in connection.execute("PRAGMA table_info(incidents)").fetchall()}
+    if "help_requested_at" not in incident_columns:
+        connection.execute("ALTER TABLE incidents ADD COLUMN help_requested_at TEXT")
     action_sql = connection.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_actions'"
     ).fetchone()[0]

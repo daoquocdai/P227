@@ -24,3 +24,15 @@ def test_modal_contain_preserves_landscape_portrait_and_square_aspect_ratios():
         assert rendered[0] <= container[0]
         assert rendered[1] <= container[1]
         assert rendered[0] / rendered[1] == source[0] / source[1]
+
+
+def test_fall_alert_renders_need_help_and_persisted_escalation_state():
+    conversation = (ROOT / "frontend/src/features/alerts/AlertConversation.tsx").read_text(encoding="utf-8")
+    service = (ROOT / "frontend/src/features/alerts/alertService.ts").read_text(encoding="utf-8")
+
+    assert 'onStatus("need_help"' in conversation
+    assert "Chưa xác nhận an toàn" in conversation
+    assert "Đang liên hệ người thân" in conversation
+    assert "Đã liên hệ người thân" in conversation
+    assert "escalation_status" in service
+    assert "escalation_due_at" in service

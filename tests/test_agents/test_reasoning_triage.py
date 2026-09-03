@@ -1,5 +1,3 @@
-import pytest
-
 from src.agents.nodes.reasoning import evaluate_triage_severity
 
 
@@ -37,6 +35,16 @@ def test_triage_stranger_frequent():
     )
     assert res["threat_level"] == "HIGH"
     assert "liên tục" in res["reasoning"]
+
+
+def test_triage_single_stranger_uses_allowed_alert_severity():
+    res = evaluate_triage_severity(
+        incident_type="unknown_person",
+        occurrence_count=1,
+        location="Sân trước",
+    )
+    assert res["threat_level"] == "WARNING"
+    assert res["severity"] == "medium"
 
 
 def test_triage_known_person_suppression():

@@ -1,12 +1,13 @@
 import multiprocessing as mp
 import pickle
-from collections import deque
-from pathlib import Path
 import sys
 import tempfile
 import threading
 import unittest
+from collections import deque
+from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import cv2
 import numpy as np
@@ -14,13 +15,19 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from sda_vision import (IdentityGalleryEntry, IdentityGallerySnapshot,
-                        VisionCallbacks, VisionDetection, VisionEvent,
-                        VisionFrameResult, VisionSession, VisionSessionConfig)
+from sda_vision import (
+    IdentityGalleryEntry,
+    IdentityGallerySnapshot,
+    VisionCallbacks,
+    VisionDetection,
+    VisionEvent,
+    VisionFrameResult,
+    VisionSession,
+    VisionSessionConfig,
+)
 from sda_vision.cli import parse_args
 from sda_vision.contracts import FrameTransform
-from sda_vision.runtime.identity import _replace_latest
-from sda_vision.runtime.identity import IdentityResult, IdentityState
+from sda_vision.runtime.identity import IdentityResult, IdentityState, _replace_latest
 from sda_vision.runtime.timing import PoseSample
 
 
@@ -167,6 +174,52 @@ class ShutdownTests(unittest.TestCase):
         session.shutdown()
         session.shutdown()
         self.assertEqual((source.calls, identity.calls, pose.calls, action.calls), (1, 1, 1, 1))
+
+    def test_identity_worker_restarts_once_after_vision_lifecycle_shutdown(self):
+        stages = []
+
+        class IdentityResource(self.Resource):
+            def __init__(self, *args, **kwargs):
+                super().__init__()
+                self.start_calls = 0
+                stages.append(self)
+
+            def start(self):
+                self.start_calls += 1
+
+        class ActionResource:
+            def close(self):
+                pass
+
+        face_spec = SimpleNamespace(providers=("CPUExecutionProvider",), device="CPU")
+        with (
+            patch("sda_vision.session.resolve_face_providers", return_value=face_spec),
+            patch("sda_vision.session.face_stage_spec", return_value=object()),
+            patch("sda_vision.session.IdentityStage", IdentityResource),
+        ):
+            session = VisionSession(VisionSessionConfig(identity_enabled=True, preview="none"))
+            session.action_model = ActionResource()
+
+            session.init_models()
+            session.init_models()
+            first = session.identity_stage
+            self.assertEqual(len(stages), 1)
+            self.assertEqual(first.start_calls, 1)
+
+            session.shutdown_vision()
+            self.assertEqual(first.calls, 1)
+            self.assertIsNone(session.identity_stage)
+            self.assertFalse(session._identity_start_attempted)
+
+            session.action_model = ActionResource()
+            session.init_models()
+            session.init_models()
+            second = session.identity_stage
+            self.assertEqual(len(stages), 2)
+            self.assertIsNot(second, first)
+            self.assertEqual(second.start_calls, 1)
+
+            session.shutdown_vision()
 
 
 class SessionControlTests(unittest.TestCase):

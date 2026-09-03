@@ -3,6 +3,7 @@ import { AlertConversation } from "./AlertConversation";
 import { AlertList } from "./AlertList";
 import { fetchAlerts, markAlertRead, updateAlertStatus } from "./alertService";
 import type { AlertEvent, AlertFilter } from "./alert.types";
+import "./agentSeverity.css";
 import "./alerts.css";
 import "./snapshotApi.css";
 

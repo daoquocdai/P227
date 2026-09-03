@@ -14,6 +14,7 @@ from src.api.alerts import router as alerts_router
 from src.api.auth import router as auth_router
 from src.api.camera_stream import router as camera_stream_router
 from src.api.cameras import router as cameras_router
+from src.api.emergency_contacts import router as emergency_contacts_router
 from src.api.history import router as history_router
 from src.api.overview import router as overview_router
 from src.api.persons import router as persons_router
@@ -25,6 +26,7 @@ from src.config import get_settings
 from src.database import initialize_database
 from src.runtime import LocalRuntime
 from src.services.event_service import event_service, vision_event_sink
+from src.services.fall_escalation_service import FallEscalationService
 from src.services.operational_metrics_collector import OperationalMetricsCollector
 from src.services.vision_event_dispatcher import ThreadsafeVisionEventDispatcher
 
@@ -40,6 +42,10 @@ async def lifespan(app: FastAPI):
     app.state.alert_agent = alert_agent
     app.state.qa_agent = SecurityQAAgent(api_key=settings.openai_api_key, model=settings.alert_agent_model)
     app.state.summary_agent = IncidentSummaryAgent(api_key=settings.openai_api_key)
+    fall_escalation = FallEscalationService(settings)
+    fall_escalation.start()
+    event_service.set_escalation_notify(fall_escalation.request_evaluation)
+    app.state.fall_escalation = fall_escalation
     vision_event_sink.start()
     consumer = asyncio.create_task(vision_event_sink.consume(), name="vision-event-consumer")
     dispatcher = ThreadsafeVisionEventDispatcher(vision_event_sink)
@@ -60,6 +66,8 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        event_service.set_escalation_notify(None)
+        await fall_escalation.stop()
         event_service.set_agent_enqueue(None)
         await alert_agent.stop()
         metrics_collector.stop()
@@ -97,6 +105,7 @@ app.include_router(auth_router, prefix="/api/v1")
 
 app.include_router(alerts_router, prefix="/api/v1")
 app.include_router(cameras_router, prefix="/api/v1")
+app.include_router(emergency_contacts_router, prefix="/api/v1")
 app.include_router(camera_stream_router, prefix="/api/v1")
 app.include_router(history_router, prefix="/api/v1")
 app.include_router(overview_router, prefix="/api/v1")

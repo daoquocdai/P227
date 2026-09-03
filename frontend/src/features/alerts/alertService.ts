@@ -30,13 +30,16 @@ interface BackendAlert {
   last_seen_at?: string;
   acknowledged_at?: string | null;
   resolved_at?: string | null;
+  escalation_enabled?: boolean;
+  escalation_due_at?: string | null;
+  escalation_status?: "pending" | "calling" | "contacted" | "failed" | "cancelled" | null;
 }
 
 const statusValues: AlertStatus[] = ["pending", "checking", "resolved", "safe", "false_alarm", "need_help"];
 
 function eventPresentation(eventType: string): { type: AlertType; title: string; severity: AlertSeverity } {
   const normalized = eventType.toUpperCase();
-  if (normalized.includes("FALL")) return { type: "fall", title: "Có khả năng té ngã", severity: "high" };
+  if (normalized.includes("FALL")) return { type: "fall", title: "Có khả năng té ngã", severity: "critical" };
   if (normalized.includes("UNKNOWN") || normalized.includes("INTRUDER")) return { type: "stranger", title: "Có người lạ xuất hiện", severity: "critical" };
   if (normalized.includes("INACTIVITY") || normalized.includes("IMMOBILE")) return { type: "inactivity", title: "Không phát hiện hoạt động", severity: "medium" };
   if (normalized.includes("ARRIVAL") || normalized.includes("RECOGNIZED")) return { type: "arrival", title: "Người thân đã về nhà", severity: "info" };
@@ -76,6 +79,9 @@ function toAlertEvent(alert: BackendAlert): AlertEvent {
     firstSeenAt: toIsoTimestamp(alert.first_seen_at ?? alert.timestamp),
     lastSeenAt: toIsoTimestamp(alert.last_seen_at ?? alert.timestamp),
     acknowledgedAt: alert.acknowledged_at ?? undefined, resolvedAt: alert.resolved_at ?? undefined,
+    escalationEnabled: alert.escalation_enabled ?? false,
+    escalationDueAt: alert.escalation_due_at ?? undefined,
+    escalationStatus: alert.escalation_status ?? undefined,
   };
 }
 

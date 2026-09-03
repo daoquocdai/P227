@@ -195,7 +195,7 @@ class SQLiteEventRepository:
                     agent_review_required=incident.review_required,
                 )
 
-            severity = "high" if alert_type == "fall" else "critical"
+            severity = "critical" if alert_type == "unknown_person" or event.event_type == "FALL_CONFIRMED" else "high"
             connection.execute(
                 "INSERT INTO alerts (id, event_id, incident_id, alert_type, severity, status) VALUES (?, ?, ?, ?, ?, 'open')",
                 (alert_id, event_id, incident.incident_id, alert_type, severity),
@@ -226,7 +226,18 @@ class SQLiteEventRepository:
                    i.last_seen_at AS incident_last_seen_at, i.occurrence_count,
                    i.version AS incident_version, i.agent_summary,
                    i.acknowledged_at AS incident_acknowledged_at,
+                   i.help_requested_at AS incident_help_requested_at,
                    i.resolved_at AS incident_resolved_at,
+                   EXISTS(SELECT 1 FROM incident_events ie2 JOIN events e2 ON e2.id=ie2.event_id
+                    WHERE ie2.incident_id=i.id
+                      AND json_extract(e2.metadata_json,'$.source_event_type')='FALL_CONFIRMED') AS fall_confirmed,
+                   (SELECT eea.status FROM emergency_escalation_attempts eea
+                    WHERE eea.incident_id=i.id AND eea.stage='fall_unconfirmed'
+                    ORDER BY CASE eea.status WHEN 'claimed' THEN 0 WHEN 'succeeded' THEN 1 ELSE 2 END,
+                             eea.created_at DESC, eea.id DESC LIMIT 1) AS escalation_attempt_status,
+                   EXISTS(SELECT 1 FROM emergency_escalation_attempts eea
+                    WHERE eea.incident_id=i.id AND eea.stage='fall_unconfirmed'
+                      AND eea.status='succeeded') AS escalation_succeeded,
                    (SELECT ma.relative_path FROM media_assets ma
                     WHERE ma.event_id = e.id ORDER BY ma.created_at DESC LIMIT 1) AS snapshot_path,
                    (SELECT aa.human_verdict FROM alert_actions aa
@@ -274,8 +285,11 @@ class SQLiteEventRepository:
                 if review.status in {"checking", "need_help"}:
                     incident_status = "ACKNOWLEDGED"
                     connection.execute(
-                        "UPDATE incidents SET status=?,acknowledged_at=COALESCE(acknowledged_at,?),version=version+1,updated_at=? WHERE id=?",
-                        (incident_status, now, now, current["incident_id"]),
+                        """UPDATE incidents SET status=?,acknowledged_at=COALESCE(acknowledged_at,?),
+                           help_requested_at=CASE WHEN ?='need_help' THEN COALESCE(help_requested_at,?)
+                                                  ELSE help_requested_at END,
+                           version=version+1,updated_at=? WHERE id=?""",
+                        (incident_status, now, review.status, now, now, current["incident_id"]),
                     )
                     self._incident_user_action(
                         connection, current["incident_id"], "acknowledged", incident["version"] + 1, review.note
@@ -394,6 +408,32 @@ class SQLiteEventRepository:
         metadata = json.loads(row["metadata_json"] or "{}")
         snapshot_path = row["snapshot_path"] or metadata.get("snapshot_path")
         source_event_type = metadata.get("source_event_type", row["alert_type"])
+        settings = get_settings()
+        escalation_enabled = bool(
+            settings.fall_escalation_enabled and row["alert_type"] == "fall" and row["fall_confirmed"]
+        )
+        escalation_due_at = None
+        escalation_status = None
+        if row["alert_type"] == "fall" and row["fall_confirmed"]:
+            opened_at = datetime.fromisoformat((row["incident_opened_at"] or row["occurred_at"]).replace("Z", "+00:00"))
+            escalation_due_at = (opened_at + timedelta(seconds=settings.fall_call_after_seconds)).isoformat()
+            if row["escalation_succeeded"]:
+                escalation_status = "contacted"
+            elif not escalation_enabled or row["incident_status"] == "RESOLVED_SAFE":
+                escalation_status = "cancelled"
+            elif row["escalation_attempt_status"] == "claimed":
+                escalation_status = "calling"
+            elif row["escalation_attempt_status"] == "failed":
+                escalation_status = "failed"
+            else:
+                escalation_status = "pending"
+        product_severity = (
+            "critical"
+            if row["alert_type"] == "fall"
+            and row["fall_confirmed"]
+            and row["incident_status"] in {"OPEN", "ACKNOWLEDGED"}
+            else row["severity"]
+        )
         return {
             "id": row["id"],
             "event_id": metadata.get("external_event_id", row["event_id"]),
@@ -408,7 +448,7 @@ class SQLiteEventRepository:
                 row["immobility_duration_ms"] / 1000 if row["immobility_duration_ms"] is not None else None
             ),
             "snapshot_url": snapshot_url(snapshot_path),
-            "severity": row["severity"],
+            "severity": product_severity,
             "status": cls._ui_status(row["db_status"], row["verdict"], row["latest_action"]),
             "feedback": row["verdict"],
             "review_note": row["review_note"],
@@ -427,6 +467,9 @@ class SQLiteEventRepository:
             "agent_status": row["agent_status"],
             "agent_verdict": row["agent_verdict"],
             "agent_severity": row["agent_severity"],
+            "escalation_enabled": escalation_enabled,
+            "escalation_due_at": escalation_due_at,
+            "escalation_status": escalation_status,
         }
 
     @staticmethod

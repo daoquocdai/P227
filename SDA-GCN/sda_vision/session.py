@@ -1714,6 +1714,7 @@ class VisionSession:
             }
             self.identity_stage.stop()
             self.identity_stage = None
+        self._identity_start_attempted = False
         if self.pose_model:
             self.pose_model.close()
             self.pose_model = None

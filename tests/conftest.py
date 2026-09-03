@@ -15,6 +15,10 @@ def preserve_application_database(tmp_path_factory, monkeypatch):
     database_path = tmp_path_factory.mktemp("application-db") / "application.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{database_path.as_posix()}")
     monkeypatch.setenv("METRICS_COLLECTION_ENABLED", "false")
+    monkeypatch.setenv("EMERGENCY_CALL_PROVIDER", "logging")
+    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "")
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "")
+    monkeypatch.setenv("TWILIO_FROM_PHONE_NUMBER", "")
     get_settings.cache_clear()
     initialize_database()
     with database_connection() as connection:

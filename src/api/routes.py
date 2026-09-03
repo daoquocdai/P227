@@ -1,5 +1,7 @@
 from fastapi import APIRouter
 
+from src.config import get_settings
+
 router = APIRouter()
 
 
@@ -10,5 +12,5 @@ async def system_status():
         "status": "ready",
         "service": "GuardianCam Local Hub",
         "vision_integration": "in_process_queue",
-        "agent_enabled": False,
+        "agent_enabled": get_settings().alert_agent_enabled,
     }

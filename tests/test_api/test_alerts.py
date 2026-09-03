@@ -3,11 +3,15 @@ from uuid import uuid4
 
 import pytest
 
+from src.agents.alert_tools import AlertAgentTools
+from src.database import database_connection
 from src.models.schemas import VisionEventRequest
+from src.services.agent_trace_service import AgentTraceService
 from src.services.event_service import event_service
+from src.services.sqlite_event_repository import stable_uuid
 
 
-def vision_event(event_id: str | None = None, event_type: str = "FALL_SUSPECTED") -> VisionEventRequest:
+def vision_event(event_id: str | None = None, event_type: str = "FALL_CONFIRMED") -> VisionEventRequest:
     return VisionEventRequest(
         event_id=event_id or f"test-{uuid4()}",
         camera_id="camera-bedroom",
@@ -89,7 +93,7 @@ async def test_alert_detail_and_hitl_status_round_trip(client):
     )
     assert checking.status_code == 200
     assert checking.json()["status"] == "checking"
-    assert checking.json()["severity"] == "high"
+    assert checking.json()["severity"] == "critical"
     assert checking.json()["is_read"] is True
 
     help_requested = await client.patch(
@@ -102,6 +106,16 @@ async def test_alert_detail_and_hitl_status_round_trip(client):
     assert detail.status_code == 200
     assert detail.json()["status"] == "need_help"
     assert detail.json()["event_id"] == accepted.event_id
+    assert detail.json()["escalation_enabled"] is True
+    assert detail.json()["escalation_due_at"] is not None
+    assert detail.json()["escalation_status"] in {"pending", "failed"}
+    with database_connection() as connection:
+        assert (
+            connection.execute(
+                "SELECT help_requested_at FROM incidents WHERE id=?", (accepted.incident_id,)
+            ).fetchone()[0]
+            is not None
+        )
 
 
 @pytest.mark.asyncio
@@ -116,3 +130,45 @@ async def test_vision_ingestion_is_end_to_end_and_idempotent(client):
     assert duplicate.json()["duplicate"] is True
     alerts = (await client.get("/api/v1/alerts")).json()
     assert len([item for item in alerts if item["event_id"] == event_id]) == 1
+
+
+@pytest.mark.asyncio
+async def test_alert_api_returns_persisted_agent_enrichment(client):
+    accepted = await event_service.create(vision_event("api-agent-enrichment"))
+    event_id = stable_uuid(accepted.event_id, "event")
+    trace = AgentTraceService()
+    run = trace.create_or_get_run(
+        accepted.incident_id,
+        event_id,
+        accepted.id,
+        "test-model",
+        accepted.incident_version,
+    )
+    tools = AlertAgentTools(
+        accepted.incident_id,
+        event_id,
+        accepted.id,
+        accepted.incident_version,
+        run["id"],
+        trace,
+    )
+    result = tools.execute(
+        "enrich_incident_alert",
+        '{"verdict":"CONFIRMED_ALERT","severity":"critical","reason_summary":"API enrichment visible."}',
+    )
+    trace.complete(run["id"], result["verdict"], result["severity"], result["reason_summary"], 1)
+
+    response = await client.get(f"/api/v1/alerts/{accepted.id}")
+
+    assert response.status_code == 200
+    assert response.json()["severity"] == "critical"
+    assert response.json()["agent_status"] == "completed"
+    assert response.json()["agent_verdict"] == "CONFIRMED_ALERT"
+    assert response.json()["agent_reason_summary"] == "API enrichment visible."
+    with database_connection() as connection:
+        assert (
+            connection.execute("SELECT summary_version FROM incidents WHERE id=?", (accepted.incident_id,)).fetchone()[
+                0
+            ]
+            == accepted.incident_version
+        )

@@ -131,3 +131,21 @@ async def test_optional_media_insert_failure_preserves_event_alert_and_broadcast
         assert connection.execute("SELECT 1 FROM media_assets WHERE event_id = ?", (event_id,)).fetchone() is None
     assert accepted.accepted is True
     publish.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_agent_enqueue_failure_preserves_persisted_baseline_alert(monkeypatch):
+    publish = AsyncMock()
+    monkeypatch.setattr("src.services.event_service.alert_broadcaster.publish", publish)
+    service = EventService()
+
+    def fail_enqueue(*_args):
+        raise RuntimeError("agent queue unavailable")
+
+    service.set_agent_enqueue(fail_enqueue)
+    accepted = await service.create(event("enqueue-failure"))
+    alert = await service.get_alert(accepted.id)
+
+    assert accepted.alert_created is True
+    assert alert["status"] == "pending"
+    publish.assert_awaited_once()

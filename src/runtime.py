@@ -56,7 +56,10 @@ class LocalRuntime:
             camera_id = desired["id"]
             if desired["vision_enabled"]:
                 self.vision.enable(camera_id)
-                self.vision.set_identity_enabled(camera_id, desired.get("identity_enabled", False))
+                self.vision.set_identity_enabled(
+                    camera_id,
+                    desired.get("identity_enabled", self.settings.vision_identity_enabled),
+                )
             else:
                 self.vision.disable(camera_id)
             if desired["camera_enabled"]:
@@ -98,7 +101,10 @@ class LocalRuntime:
             return self.vision.disable(public_id)
         self.vision.enable(public_id)
         desired = next(item for item in camera_service.desired_states() if item["id"] == public_id)
-        self.vision.set_identity_enabled(public_id, desired.get("identity_enabled", False))
+        self.vision.set_identity_enabled(
+            public_id,
+            desired.get("identity_enabled", self.settings.vision_identity_enabled),
+        )
         return self.vision.get_status(public_id)
 
     def restart_camera_if_enabled(self, camera_id: str) -> None:

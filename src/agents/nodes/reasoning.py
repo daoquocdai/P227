@@ -71,7 +71,7 @@ def evaluate_triage_severity(
 
     return {
         "threat_level": threat,
-        "severity": threat.lower() if threat != "UNKNOWN" else "low",
+        "severity": "medium" if threat == "WARNING" else threat.lower() if threat != "UNKNOWN" else "low",
         "verdict": verdict,
         "action": action,
         "reasoning": reason,

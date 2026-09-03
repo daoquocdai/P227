@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from src.config import DEFAULT_VISION_IDENTITY_ENABLED
 from src.database import database_connection
 
 
@@ -277,7 +278,11 @@ class CameraService:
 
     @staticmethod
     def _identity_enabled(config_json: str | None) -> bool:
-        return bool(CameraService._config(config_json).get("identity_enabled", False))
+        return bool(
+            CameraService._config(config_json).get(
+                "identity_enabled", DEFAULT_VISION_IDENTITY_ENABLED
+            )
+        )
 
     @staticmethod
     def _config(config_json: str | None) -> dict:

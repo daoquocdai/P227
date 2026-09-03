@@ -133,26 +133,41 @@ class AlertAgentTools:
 
     def _enrich(self, d):
         with database_connection() as c:
-            i = c.execute(
-                "SELECT status,version,summary_version FROM incidents WHERE id=?", (self.incident_id,)
+            already_applied = c.execute(
+                """SELECT 1 FROM incident_actions ia
+                   JOIN incidents i ON i.id=ia.incident_id
+                   WHERE ia.incident_id=? AND ia.event_id=? AND ia.incident_version=?
+                     AND ia.action_type='agent_summary_applied'
+                     AND i.status IN ('OPEN','ACKNOWLEDGED') LIMIT 1""",
+                (self.incident_id, self.event_id, self.expected_version),
             ).fetchone()
-            if not i:
-                raise AlertAgentToolError("current incident not found")
-            reason = None
-            if i["status"] == "RESOLVED_SAFE":
-                reason = "INCIDENT_CLOSED"
-            elif i["version"] != self.expected_version or i["summary_version"] >= self.expected_version:
-                reason = "STALE_VERSION"
-            if reason:
+            if already_applied:
+                return {**d.model_dump(), "applied": False, "no_op_reason": "IDEMPOTENT_REUSE"}
+            updated = c.execute(
+                """UPDATE incidents
+                   SET agent_summary=?,summary_version=?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                   WHERE id=? AND status IN ('OPEN','ACKNOWLEDGED')
+                     AND version=? AND summary_version<?""",
+                (
+                    d.reason_summary,
+                    self.expected_version,
+                    self.incident_id,
+                    self.expected_version,
+                    self.expected_version,
+                ),
+            )
+            if updated.rowcount == 0:
+                current = c.execute(
+                    "SELECT status FROM incidents WHERE id=?", (self.incident_id,)
+                ).fetchone()
+                if not current:
+                    raise AlertAgentToolError("current incident not found")
+                reason = "INCIDENT_CLOSED" if current["status"] == "RESOLVED_SAFE" else "STALE_VERSION"
                 c.execute(
                     "INSERT INTO incident_actions (id,incident_id,action_type,event_id,incident_version,note) VALUES (?,?,'agent_result_stale',?,?,?)",
                     (str(uuid4()), self.incident_id, self.event_id, self.expected_version, reason),
                 )
                 return {**d.model_dump(), "applied": False, "no_op_reason": reason}
-            c.execute(
-                "UPDATE incidents SET agent_summary=?,summary_version=?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?",
-                (d.reason_summary, self.expected_version, self.incident_id),
-            )
             c.execute(
                 "UPDATE alerts SET severity=?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND incident_id=?",
                 (d.severity, self.alert_id, self.incident_id),

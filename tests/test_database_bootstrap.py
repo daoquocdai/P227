@@ -42,6 +42,18 @@ def delete_camera(path: Path, camera_id: str):
         connection.commit()
 
 
+@pytest.mark.parametrize(
+    ("config_json", "expected"),
+    [
+        ("{}", True),
+        ('{"identity_enabled":true}', True),
+        ('{"identity_enabled":false}', False),
+    ],
+)
+def test_camera_identity_config_uses_enabled_default_and_explicit_overrides(config_json, expected):
+    assert camera_service._identity_enabled(config_json) is expected
+
+
 def test_fresh_database_has_exactly_two_default_cameras_and_restart_is_idempotent(fresh_database):
     initialize_database()
     first = cameras(fresh_database)
@@ -58,6 +70,16 @@ def test_fresh_database_has_exactly_two_default_cameras_and_restart_is_idempoten
         DEFAULT_VIDEO_SOURCE,
         DEFAULT_VIDEO_SOURCE,
     )
+
+    with sqlite3.connect(fresh_database) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'emergency_%'"
+            )
+        }
+        assert tables == {"emergency_contacts", "emergency_escalation_attempts"}
+        assert "help_requested_at" in {row[1] for row in connection.execute("PRAGMA table_info(incidents)")}
 
 
 @pytest.mark.parametrize("missing_id", [BUILTIN_LAPTOP_CAMERA_ID, BUILTIN_VIDEO_CAMERA_ID])
@@ -175,3 +197,15 @@ def test_camera_identity_setting_persists_without_overwriting_other_config(fresh
     assert desired["identity_enabled"] is True
     assert desired["loop_video"] is False
     assert camera["identity_enabled"] is True
+
+
+def test_explicit_identity_off_survives_database_restart(fresh_database):
+    initialize_database()
+    camera_service.set_identity_enabled(BUILTIN_VIDEO_CAMERA_ID, False)
+
+    initialize_database()
+
+    desired = next(item for item in camera_service.desired_states() if item["id"] == BUILTIN_VIDEO_CAMERA_ID)
+    camera = camera_service.get_camera(BUILTIN_VIDEO_CAMERA_ID)
+    assert desired["identity_enabled"] is False
+    assert camera["identity_enabled"] is False

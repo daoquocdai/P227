@@ -1,5 +1,5 @@
 export type AlertType = "fall" | "inactivity" | "stranger" | "camera" | "arrival";
-export type AlertSeverity = "info" | "medium" | "high" | "critical";
+export type AlertSeverity = "info" | "low" | "medium" | "high" | "critical";
 export type AlertStatus = "pending" | "checking" | "resolved" | "safe" | "false_alarm" | "need_help";
 export type ChatRole = "assistant" | "user";
 export type MessageContentType = "text" | "event" | "snapshot" | "camera" | "confidence" | "success" | "help" | "false_alarm";
@@ -33,6 +33,9 @@ export interface AlertEvent {
   lastSeenAt?: string;
   acknowledgedAt?: string;
   resolvedAt?: string;
+  escalationEnabled?: boolean;
+  escalationDueAt?: string;
+  escalationStatus?: "pending" | "calling" | "contacted" | "failed" | "cancelled";
 }
 
 export interface ChatMessage {

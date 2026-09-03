@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -15,6 +16,8 @@ from src.services.sqlite_event_repository import (
     SQLiteEventRepository,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class EventService:
     """Application service shared by Vision ingestion and dashboard APIs."""
@@ -23,9 +26,13 @@ class EventService:
         self._repository = repository or SQLiteEventRepository()
         self._lock = asyncio.Lock()
         self._agent_enqueue: Callable[[str, str, str, str, int], bool] | None = None
+        self._escalation_notify: Callable[[], None] | None = None
 
     def set_agent_enqueue(self, callback: Callable[[str, str, str, str, int], bool] | None) -> None:
         self._agent_enqueue = callback
+
+    def set_escalation_notify(self, callback: Callable[[], None] | None) -> None:
+        self._escalation_notify = callback
 
     async def create(self, event: VisionEventRequest) -> VisionEventAccepted:
         async with self._lock:
@@ -42,9 +49,16 @@ class EventService:
             message_type = "alert_created" if result.alert_created else "alert_updated"
             await alert_broadcaster.publish({"type": message_type, "alert": alert})
             if self._agent_enqueue is not None and result.agent_review_required and result.incident_id:
-                self._agent_enqueue(
-                    result.incident_id, event.event_id, result.id, event.event_type, result.incident_version or 1
-                )
+                try:
+                    self._agent_enqueue(
+                        result.incident_id,
+                        event.event_id,
+                        result.id,
+                        event.event_type,
+                        result.incident_version or 1,
+                    )
+                except Exception:  # noqa: BLE001 - Agent integration must not fail baseline ingestion
+                    logger.exception("Alert Agent enqueue failed; baseline alert preserved event=%s", event.event_id)
         return result
 
     async def list_alerts(self) -> list[dict]:
@@ -64,6 +78,11 @@ class EventService:
     async def review(self, alert_id: str, review: AlertReviewRequest) -> dict:
         async with self._lock:
             alert = self._repository.review(alert_id, review)
+        if self._escalation_notify is not None and review.status == "need_help":
+            try:
+                self._escalation_notify()
+            except Exception:  # noqa: BLE001 - human action must survive escalation worker failure
+                logger.exception("Could not notify fall escalation worker alert=%s", alert_id)
         message_type = (
             "alert_resolved" if review.status in {"safe", "resolved", "false_alarm"} else "alert_acknowledged"
         )

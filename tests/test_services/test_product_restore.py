@@ -14,6 +14,11 @@ def test_restore_persisted_state_isolates_invalid_camera(monkeypatch):
     ]
     monkeypatch.setattr(camera_service, "desired_states", lambda: desired)
     monkeypatch.setattr(camera_service, "public_id", lambda camera_id: camera_id)
+    monkeypatch.setattr(
+        camera_service,
+        "get_camera",
+        lambda camera_id: {"source_kind": "video_file", "location": camera_id},
+    )
 
     def resolve(camera_id):
         if camera_id == "invalid":
@@ -32,3 +37,37 @@ def test_restore_persisted_state_isolates_invalid_camera(monkeypatch):
     unavailable.assert_called_once_with("invalid", "missing source")
     assert runtime.vision.get_status("active")["enabled"] is True
     assert runtime.vision.get_status("invalid")["enabled"] is False
+
+
+def test_restore_persisted_state_applies_identity_values(monkeypatch):
+    runtime = LocalRuntime(vision_engine=MockVisionEngine())
+    runtime.settings.vision_identity_enabled = True
+    desired = [
+        {
+            "id": "explicit-on",
+            "camera_enabled": False,
+            "vision_enabled": True,
+            "loop_video": False,
+            "identity_enabled": True,
+        },
+        {
+            "id": "explicit-off",
+            "camera_enabled": False,
+            "vision_enabled": True,
+            "loop_video": False,
+            "identity_enabled": False,
+        },
+        {
+            "id": "missing-fallback",
+            "camera_enabled": False,
+            "vision_enabled": True,
+            "loop_video": False,
+        },
+    ]
+    monkeypatch.setattr(camera_service, "desired_states", lambda: desired)
+
+    runtime.restore_persisted_state()
+
+    assert runtime.vision.get_status("explicit-on")["identity_enabled"] is True
+    assert runtime.vision.get_status("explicit-off")["identity_enabled"] is False
+    assert runtime.vision.get_status("missing-fallback")["identity_enabled"] is True
