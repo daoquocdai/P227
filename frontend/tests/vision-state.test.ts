@@ -9,6 +9,7 @@ import {
   isFallAction,
   updateVisionOverlayState,
   visionActionPresentation,
+  visionBBoxLabelLayout,
   VISION_ACTION_ANALYZING,
   VISION_ACTION_GRACE_MS,
   VISION_OVERLAY_GRACE_MS,
@@ -66,7 +67,7 @@ test("UI formats every authoritative Vietnamese action label", () => {
   );
 });
 
-test("action status is available without a bbox and later falls back to analyzing", () => {
+test("no bbox renders no action status", () => {
   const withoutBox = result(1, 1, false);
   withoutBox.metadata.action_label = "Đứng";
   withoutBox.metadata.action_confidence = 0.91;
@@ -75,12 +76,18 @@ test("action status is available without a bbox and later falls back to analyzin
   );
   assert.equal(selected.display, null);
   assert.equal(selected.actionDisplay, "Trạng thái: Đứng (91%)");
-  assert.equal(visionActionPresentation(selected.display, selected.state).placement, "global");
+  assert.equal(
+    visionActionPresentation(selected.display, selected.state, selected.actionDisplay).placement,
+    null,
+  );
   const expired = updateVisionOverlayState(
     selected.state, null, 100 + VISION_ACTION_GRACE_MS, true, "camera:on",
   );
   assert.equal(expired.actionDisplay, VISION_ACTION_ANALYZING);
-  assert.equal(visionActionPresentation(expired.display, expired.state).placement, null);
+  assert.equal(
+    visionActionPresentation(expired.display, expired.state, expired.actionDisplay).placement,
+    null,
+  );
 });
 
 test("action with a valid bbox is placed inside the bbox, not globally", () => {
@@ -92,30 +99,51 @@ test("action with a valid bbox is placed inside the bbox, not globally", () => {
   const selected = updateVisionOverlayState(
     emptyVisionOverlayState("camera:on"), withBox, 100, true, "camera:on",
   );
-  assert.deepEqual(visionActionPresentation(selected.display, selected.state), {
+  assert.deepEqual(visionActionPresentation(selected.display, selected.state, selected.actionDisplay), {
     placement: "bbox",
     tone: "normal",
   });
   assert.match(
     canvasSource,
-    /drawLabel\(identityLabel\(detection\)[\s\S]*actionY[\s\S]*drawLabel\(refreshed\.actionDisplay/,
+    /drawLabel\(identityLabel\(detection\)[\s\S]*context\.rect\(x, y, width, height\)[\s\S]*refreshed\.actionDisplay/,
   );
 });
 
-test("global fallback disappears when a bbox returns", () => {
+test("status returns inside bbox without any global fallback", () => {
   const withoutBox = result(1, 1, false);
   withoutBox.metadata.action_label = "Cúi";
   withoutBox.metadata.action_confidence = 0.8;
   const fallback = updateVisionOverlayState(
     emptyVisionOverlayState("camera:on"), withoutBox, 100, true, "camera:on",
   );
-  assert.equal(visionActionPresentation(fallback.display, fallback.state).placement, "global");
+  assert.equal(
+    visionActionPresentation(fallback.display, fallback.state, fallback.actionDisplay).placement,
+    null,
+  );
 
   const withBox = result(2, 1, true);
   withBox.metadata.action_label = "Cúi";
   withBox.metadata.action_confidence = 0.82;
   const restored = updateVisionOverlayState(fallback.state, withBox, 200, true, "camera:on");
-  assert.equal(visionActionPresentation(restored.display, restored.state).placement, "bbox");
+  assert.equal(
+    visionActionPresentation(restored.display, restored.state, restored.actionDisplay).placement,
+    "bbox",
+  );
+});
+
+test("identity is above bbox while status is padded inside its top-left corner", () => {
+  assert.deepEqual(visionBBoxLabelLayout(100, 80, 20, 0, 4), {
+    identityX: 100,
+    identityY: 60,
+    actionX: 104,
+    actionY: 84,
+  });
+  assert.deepEqual(visionBBoxLabelLayout(100, 10, 20, 0, 4), {
+    identityX: 100,
+    identityY: 0,
+    actionX: 104,
+    actionY: 14,
+  });
 });
 
 test("fall class selects red presentation", () => {
@@ -127,7 +155,10 @@ test("fall class selects red presentation", () => {
   const selected = updateVisionOverlayState(
     emptyVisionOverlayState("camera:on"), fall, 100, true, "camera:on",
   );
-  assert.equal(visionActionPresentation(selected.display, selected.state).tone, "fall");
+  assert.equal(
+    visionActionPresentation(selected.display, selected.state, selected.actionDisplay).tone,
+    "fall",
+  );
   assert.equal(isFallAction({ action_class_id: 0, action_class_name: "standing" }), true);
   assert.equal(isFallAction({ action_class_id: 4, action_class_name: "fall" }), true);
   assert.match(canvasSource, /"#ef4444" : "#00ff00"/);
@@ -143,7 +174,10 @@ test("standing and other non-fall classes select green presentation", () => {
   const selected = updateVisionOverlayState(
     emptyVisionOverlayState("camera:on"), standing, 100, true, "camera:on",
   );
-  assert.equal(visionActionPresentation(selected.display, selected.state).tone, "normal");
+  assert.equal(
+    visionActionPresentation(selected.display, selected.state, selected.actionDisplay).tone,
+    "normal",
+  );
 });
 
 test("poll guard prevents overlap and rejects stale frames", () => {

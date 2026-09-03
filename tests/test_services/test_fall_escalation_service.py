@@ -226,19 +226,28 @@ async def test_restart_due_and_restart_after_success_are_idempotent():
 
 @pytest.mark.asyncio
 async def test_contact_priority_inactive_skip_and_permanent_failure_fallback():
+async def test_inactive_primary_skipped_active_secondary_becomes_primary_no_further_fallback():
+    """Inactive contact 1 is skipped; contact 2 becomes the primary.
+    A non-retryable failure on contact 2 must NOT fall back to contact 3.
+    """
     now = datetime.now(UTC)
     add_contact("+84900000001", priority=1, active=False, name="Inactive")
     add_contact("+84900000002", priority=2, name="Primary active")
     add_contact("+84900000003", priority=3, name="Secondary")
+    add_contact("+84900000003", priority=3, name="Secondary – must never be called")
     await create_fall(opened_at=now - timedelta(seconds=31))
     provider = FakeEmergencyCallProvider(
         [CallResult(False, error_code="INVALID_NUMBER", retryable=False), CallResult(True, "secondary-call")]
+        [CallResult(False, error_code="INVALID_NUMBER", retryable=False)]
     )
     service = FallEscalationService(settings(), provider, now=lambda: now)
 
+    # Tick 1: should call contact 2 (the first active contact).
     await service.evaluate_once()
+    # Tick 2: non-retryable – must stop, never attempt contact 3.
     await service.evaluate_once()
     assert [call["phone_number"] for call in provider.calls] == ["+84900000002", "+84900000003"]
+    assert [call["phone_number"] for call in provider.calls] == ["+84900000002"]
 
 
 @pytest.mark.asyncio
@@ -343,3 +352,155 @@ async def test_worker_start_stop_does_not_leak_task():
     await asyncio.sleep(0)
     await service.stop()
     assert task is not None and task.done()
+
+
+# ---------------------------------------------------------------------------
+# Primary-contact policy tests (A–F, L)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_A_no_active_contacts_provider_not_called_and_no_active_contact_persisted():
+    """A: No active contacts → provider.call NOT called, NO_ACTIVE_CONTACT persisted."""
+    now = datetime.now(UTC)
+    accepted = await create_fall(opened_at=now - timedelta(seconds=31))
+    provider = FakeEmergencyCallProvider()
+
+    await FallEscalationService(settings(), provider, now=lambda: now).evaluate_once()
+
+    assert provider.calls == []
+    with database_connection() as connection:
+        assert (
+            connection.execute(
+                "SELECT error_code FROM emergency_escalation_attempts WHERE incident_id=?",
+                (accepted.incident_id,),
+            ).fetchone()[0]
+            == "NO_ACTIVE_CONTACT"
+        )
+
+
+@pytest.mark.asyncio
+async def test_B_one_active_contact_called_exactly_once_with_correct_phone():
+    """B: One active contact → called exactly once with the exact phone_e164."""
+    now = datetime.now(UTC)
+    add_contact("+84912345678")
+    await create_fall(opened_at=now - timedelta(seconds=31))
+    provider = FakeEmergencyCallProvider()
+
+    await FallEscalationService(settings(), provider, now=lambda: now).evaluate_once()
+
+    assert len(provider.calls) == 1
+    assert provider.calls[0]["phone_number"] == "+84912345678"
+
+
+@pytest.mark.asyncio
+async def test_C_multiple_contacts_only_priority1_called():
+    """C: Priorities 1, 2, 3 → only priority-1 contact is called."""
+    now = datetime.now(UTC)
+    add_contact("+84900000001", priority=1, name="P1")
+    add_contact("+84900000002", priority=2, name="P2")
+    add_contact("+84900000003", priority=3, name="P3")
+    await create_fall(opened_at=now - timedelta(seconds=31))
+    provider = FakeEmergencyCallProvider()
+
+    await FallEscalationService(settings(), provider, now=lambda: now).evaluate_once()
+
+    assert len(provider.calls) == 1
+    assert provider.calls[0]["phone_number"] == "+84900000001"
+
+
+@pytest.mark.asyncio
+async def test_D_primary_non_retryable_failure_stops_no_fallback_to_contact2():
+    """D: Non-retryable failure on primary → escalation stops, contact 2 never called."""
+    now = datetime.now(UTC)
+    add_contact("+84900000001", priority=1, name="P1")
+    add_contact("+84900000002", priority=2, name="P2")
+    await create_fall(opened_at=now - timedelta(seconds=31))
+    provider = FakeEmergencyCallProvider(
+        [CallResult(False, error_code="INVALID_NUMBER", retryable=False)]
+    )
+    service = FallEscalationService(settings(), provider, now=lambda: now)
+
+    await service.evaluate_once()  # calls P1, gets non-retryable failure
+    await service.evaluate_once()  # must not call P2
+
+    assert len(provider.calls) == 1
+    assert provider.calls[0]["phone_number"] == "+84900000001"
+
+
+@pytest.mark.asyncio
+async def test_E_primary_retryable_failure_retries_same_contact_never_switches():
+    """E: Retryable failure → retries go to the same primary contact only."""
+    clock = [datetime.now(UTC)]
+    add_contact("+84900000001", priority=1, name="P1")
+    add_contact("+84900000002", priority=2, name="P2 – must never be called")
+    await create_fall(opened_at=clock[0] - timedelta(seconds=31))
+    provider = FakeEmergencyCallProvider(
+        [CallResult(False, error_code="TIMEOUT", retryable=True)] * 3
+        + [CallResult(True, provider_reference="CA-final")]
+    )
+    service = FallEscalationService(
+        settings(fall_call_max_attempts=4, fall_call_retry_seconds=10),
+        provider,
+        now=lambda: clock[0],
+    )
+
+    await service.evaluate_once()  # attempt 1 → retryable failure
+    await service.evaluate_once()  # too soon, no call
+    clock[0] += timedelta(seconds=11)
+    await service.evaluate_once()  # attempt 2 → same contact
+    clock[0] += timedelta(seconds=11)
+    await service.evaluate_once()  # attempt 3 → same contact
+    clock[0] += timedelta(seconds=11)
+    await service.evaluate_once()  # attempt 4 → succeeds
+
+    called_phones = [c["phone_number"] for c in provider.calls]
+    assert all(p == "+84900000001" for p in called_phones), f"Should only call P1, got: {called_phones}"
+    assert "+84900000002" not in called_phones
+
+
+@pytest.mark.asyncio
+async def test_F_primary_success_call_sid_persisted_no_duplicate():
+    """F: Successful call → Call SID persisted, no subsequent duplicate call."""
+    now = datetime.now(UTC)
+    add_contact("+84901111111")
+    accepted = await create_fall(opened_at=now - timedelta(seconds=31))
+    provider = FakeEmergencyCallProvider([CallResult(True, provider_reference="CA999")])
+    service = FallEscalationService(settings(), provider, now=lambda: now)
+
+    assert await service.evaluate_once() == 1
+    assert await service.evaluate_once() == 0  # idempotent second tick
+
+    assert len(provider.calls) == 1
+    with database_connection() as connection:
+        row = connection.execute(
+            "SELECT provider_reference, status FROM emergency_escalation_attempts WHERE incident_id=?",
+            (accepted.incident_id,),
+        ).fetchone()
+    assert row["status"] == "succeeded"
+    assert row["provider_reference"] == "CA999"
+
+
+@pytest.mark.asyncio
+async def test_L_resolved_safe_before_provider_execution_cancels_call():
+    """L: Incident resolved-safe between claim and provider call → provider not called."""
+    now = datetime.now(UTC)
+    add_contact()
+    accepted = await create_fall(opened_at=now - timedelta(seconds=31))
+    provider = FakeEmergencyCallProvider()
+
+    class SafeRacePrimaryService(FallEscalationService):
+        def _revalidate_claim(self, claim):
+            with database_connection() as connection:
+                connection.execute("UPDATE incidents SET status='RESOLVED_SAFE' WHERE id=?", (claim.incident_id,))
+            return super()._revalidate_claim(claim)
+
+    await SafeRacePrimaryService(settings(), provider, now=lambda: now).evaluate_once()
+
+    assert provider.calls == []
+    with database_connection() as connection:
+        status = connection.execute(
+            "SELECT status FROM emergency_escalation_attempts WHERE incident_id=?",
+            (accepted.incident_id,),
+        ).fetchone()[0]
+    assert status == "cancelled"

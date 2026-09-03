@@ -2,10 +2,32 @@ import type { CameraVisionResult } from "../../api/cameras";
 
 export const VISION_OVERLAY_GRACE_MS = 450;
 export const VISION_ACTION_GRACE_MS = 750;
-export const VISION_ACTION_ANALYZING = "Trạng thái: Đang phân tích";
+export const VISION_ACTION_ANALYZING = "Đang phân tích";
 
-export type VisionActionPlacement = "bbox" | "global" | null;
+export type VisionActionPlacement = "bbox" | null;
 export type VisionActionTone = "fall" | "normal";
+
+export interface VisionBBoxLabelLayout {
+  identityX: number;
+  identityY: number;
+  actionX: number;
+  actionY: number;
+}
+
+export function visionBBoxLabelLayout(
+  bboxLeft: number,
+  bboxTop: number,
+  labelHeight: number,
+  canvasTop: number,
+  padding: number,
+): VisionBBoxLabelLayout {
+  return {
+    identityX: bboxLeft,
+    identityY: Math.max(canvasTop, bboxTop - labelHeight),
+    actionX: bboxLeft + padding,
+    actionY: bboxTop + padding,
+  };
+}
 
 export function formatActionDisplay(metadata: CameraVisionResult["metadata"]): string | null {
   if (typeof metadata.action_label !== "string" || !metadata.action_label) return null;
@@ -55,10 +77,11 @@ export function isFallAction(metadata: CameraVisionResult["metadata"]): boolean 
 export function visionActionPresentation(
   display: CameraVisionResult | null,
   state: VisionOverlayState,
+  actionDisplay: string | null,
 ): { placement: VisionActionPlacement; tone: VisionActionTone } {
   const hasActionState = Boolean(state.retainedAction && state.actionExpiresAt > 0);
   return {
-    placement: display ? "bbox" : hasActionState ? "global" : null,
+    placement: display && actionDisplay ? "bbox" : null,
     tone: hasActionState
       ? (state.retainedActionIsFall ? "fall" : "normal")
       : (display && isFallAction(display.metadata) ? "fall" : "normal"),

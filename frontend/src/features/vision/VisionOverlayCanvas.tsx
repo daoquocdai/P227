@@ -4,11 +4,13 @@ import {
   emptyVisionOverlayState,
   updateVisionOverlayState,
   visionActionPresentation,
+  visionBBoxLabelLayout,
   type VisionOverlayState,
 } from "./visionOverlayState";
 
 type MediaElement = HTMLVideoElement | HTMLImageElement;
 const DISPLAY_BBOX_HORIZONTAL_INSET_RATIO = 0.025;
+const BBOX_LABEL_PADDING = 4;
 
 interface VisionOverlayCanvasProps {
   result: CameraVisionResult | null;
@@ -90,7 +92,11 @@ export function VisionOverlayCanvas({ result, visible, active, resetKey, mediaRe
     context.font = `600 ${fontSize}px system-ui`;
     context.lineWidth = 2;
     const displayResult = refreshed.display;
-    const actionPresentation = visionActionPresentation(displayResult, refreshed.state);
+    const actionPresentation = visionActionPresentation(
+      displayResult,
+      refreshed.state,
+      refreshed.actionDisplay,
+    );
     const actionColor = actionPresentation.tone === "fall" ? "#f87171" : "#86efac";
     context.strokeStyle = actionPresentation.tone === "fall" ? "#ef4444" : "#00ff00";
 
@@ -111,15 +117,6 @@ export function VisionOverlayCanvas({ result, visible, active, resetKey, mediaRe
       context.restore();
     };
 
-    if (actionPresentation.placement === "global" && refreshed.actionDisplay) {
-      drawLabel(
-        refreshed.actionDisplay,
-        offsetX + 8,
-        offsetY + 8,
-        Math.max(1, renderedWidth - 16),
-        actionColor,
-      );
-    }
     if (!visibleRef.current || !displayResult) return;
     const sourceWidth = finiteNumber(displayResult.metadata.bbox_source_width) && displayResult.metadata.bbox_source_width > 0
       ? displayResult.metadata.bbox_source_width : mediaWidth;
@@ -146,11 +143,28 @@ export function VisionOverlayCanvas({ result, visible, active, resetKey, mediaRe
         width -= inset * 2;
       }
       context.strokeRect(x, y, width, height);
-      drawLabel(identityLabel(detection), x, y, width);
+      const labelHeight = fontSize + 9;
+      const labelLayout = visionBBoxLabelLayout(
+        x,
+        y,
+        labelHeight,
+        offsetY,
+        BBOX_LABEL_PADDING,
+      );
+      drawLabel(identityLabel(detection), labelLayout.identityX, labelLayout.identityY, width);
       if (!actionDrawn && actionPresentation.placement === "bbox" && refreshed.actionDisplay) {
-        const labelHeight = fontSize + 9;
-        const actionY = Math.min(y + labelHeight, Math.max(y, y + height - labelHeight));
-        drawLabel(refreshed.actionDisplay, x, actionY, width, actionColor);
+        context.save();
+        context.beginPath();
+        context.rect(x, y, width, height);
+        context.clip();
+        drawLabel(
+          refreshed.actionDisplay,
+          labelLayout.actionX,
+          labelLayout.actionY,
+          Math.max(1, width - BBOX_LABEL_PADDING * 2),
+          actionColor,
+        );
+        context.restore();
         actionDrawn = true;
       }
     }

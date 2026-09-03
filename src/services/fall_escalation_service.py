@@ -181,6 +181,10 @@ class FallEscalationService:
                 (incident_id, STAGE),
             ).fetchone():
                 return None
+            # Determine the primary contact for this incident.
+            # The primary contact is the first active contact in (priority, created_at, id) order.
+            # Once established, ALL retry attempts go to the same primary contact;
+            # there is NO fallback to a second contact on failure.
             contacts = connection.execute(
                 "SELECT * FROM emergency_contacts WHERE is_active=1 ORDER BY priority, created_at, id"
             ).fetchall()
@@ -204,6 +208,22 @@ class FallEscalationService:
                 if attempts is None:
                     attempt_number = 1
                 elif attempts["error_code"] in GLOBAL_PROVIDER_FAILURES:
+
+            # Resolve primary contact: prefer the contact already used in the
+            # attempt chain (preserves identity across contact-list changes),
+            # otherwise use the current first active contact.
+            prior_attempt = connection.execute(
+                """SELECT contact_id FROM emergency_escalation_attempts
+                   WHERE incident_id=? AND stage=? AND contact_id IS NOT NULL
+                   ORDER BY attempt_number ASC LIMIT 1""",
+                (incident_id, STAGE),
+            ).fetchone()
+            if prior_attempt is not None:
+                # Stick to the contact already in use for this incident.
+                primary_id = prior_attempt["contact_id"]
+                contact = next((c for c in contacts if c["id"] == primary_id), None)
+                if contact is None:
+                    # Primary contact has since been deactivated; treat as no contact.
                     return None
                 elif attempts["status"] == "failed" and attempts["retryable"]:
                     if attempts["attempt_number"] >= self.settings.fall_call_max_attempts:
@@ -217,6 +237,23 @@ class FallEscalationService:
                 elif attempts["status"] == "failed":
                     continue
                 else:
+            else:
+                contact = contacts[0]
+
+            attempts = connection.execute(
+                """SELECT * FROM emergency_escalation_attempts
+                   WHERE incident_id=? AND stage=? AND contact_id=? ORDER BY attempt_number DESC LIMIT 1""",
+                (incident_id, STAGE, contact["id"]),
+            ).fetchone()
+
+            if attempts is None:
+                attempt_number = 1
+            elif attempts["error_code"] in GLOBAL_PROVIDER_FAILURES:
+                # Global provider failure (e.g. TWILIO_UNAVAILABLE) – stop entirely.
+                return None
+            elif attempts["status"] == "failed" and attempts["retryable"]:
+                if attempts["attempt_number"] >= self.settings.fall_call_max_attempts:
+                    # Max retries exhausted for primary contact – stop without fallback.
                     return None
                 attempt_id = str(uuid4())
                 connection.execute(
@@ -231,8 +268,27 @@ class FallEscalationService:
                         incident["version"],
                         f"{incident_id}:{STAGE}:{contact['id']}:{attempt_number}",
                     ),
+                retry_at = _parse_timestamp(attempts["updated_at"]) + timedelta(
+                    seconds=self.settings.fall_call_retry_seconds
                 )
                 return ClaimedCall(
+                if retry_at > now:
+                    # Not yet time for the next retry.
+                    return None
+                attempt_number = attempts["attempt_number"] + 1
+            elif attempts["status"] == "failed":
+                # Non-retryable failure for primary contact – stop without fallback.
+                return None
+            else:
+                # Already succeeded or in-flight.
+                return None
+
+            attempt_id = str(uuid4())
+            connection.execute(
+                """INSERT INTO emergency_escalation_attempts
+                   (id,incident_id,contact_id,status,attempt_number,incident_version,idempotency_key)
+                   VALUES (?,?,?,'claimed',?,?,?)""",
+                (
                     attempt_id,
                     incident_id,
                     incident["alert_id"],
@@ -240,6 +296,19 @@ class FallEscalationService:
                     contact["phone_e164"],
                     incident["location_label"],
                 )
+                    attempt_number,
+                    incident["version"],
+                    f"{incident_id}:{STAGE}:{contact['id']}:{attempt_number}",
+                ),
+            )
+            return ClaimedCall(
+                attempt_id,
+                incident_id,
+                incident["alert_id"],
+                contact["id"],
+                contact["phone_e164"],
+                incident["location_label"],
+            )
         return None
 
     @staticmethod
