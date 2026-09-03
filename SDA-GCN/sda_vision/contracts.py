@@ -115,6 +115,17 @@ class VisionSourceFrame:
     frame: object
 
 
+def effective_inference_dimensions(
+    source_width: int,
+    source_height: int,
+    configured_width: int = 1280,
+    configured_height: int = 720,
+) -> tuple[int, int]:
+    if source_width < source_height:
+        return configured_height, configured_width
+    return configured_width, configured_height
+
+
 @dataclass(frozen=True, slots=True)
 class FrameTransform:
     source_width: int

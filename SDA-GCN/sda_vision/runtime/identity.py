@@ -404,6 +404,7 @@ class IdentityStage:
         self.absent_timeout = absent_timeout
         self.result = IdentityResult()
         self.failed_attempts = 0
+        self.no_face_attempts = 0
         self.last_attempt_at = 0.0
         self.last_present_at = 0.0
         self.association_bbox = None
@@ -452,6 +453,7 @@ class IdentityStage:
             gallery_version=getattr(self, "gallery_version", None), association_id=association_id
         )
         self.failed_attempts = 0
+        self.no_face_attempts = 0
         self.last_attempt_at = 0.0
         if not preserve_association:
             self.association_bbox = None
@@ -462,12 +464,18 @@ class IdentityStage:
         if state == IdentityState.LOCKED_KNOWN:
             return False
         cooldown = self.interval
-        if self.result.face_found is False:
-            cooldown = self.interval
+        if state == IdentityState.LOCKED_UNKNOWN:
+            cooldown = self.locked_unknown_retry
+        elif self.result.face_found is False:
+            no_face_attempts = getattr(self, "no_face_attempts", 0)
+            if no_face_attempts <= 0:
+                cooldown = self.interval
+            elif no_face_attempts == 1:
+                cooldown = max(self.interval, 0.5)
+            else:
+                cooldown = max(self.interval, 1.0)
         elif state == IdentityState.UNKNOWN:
             cooldown = self.unknown_retry
-        elif state == IdentityState.LOCKED_UNKNOWN:
-            cooldown = self.locked_unknown_retry
         return now - self.last_attempt_at >= cooldown
 
     def submit(self, crop, bbox, now=None, source_time_s=None, frame_sequence=None):
@@ -540,7 +548,9 @@ class IdentityStage:
             self.result = IdentityResult(IdentityState.KNOWN, **common)
             self.result = IdentityResult(IdentityState.LOCKED_KNOWN, **common)
             self.failed_attempts = 0
+            self.no_face_attempts = 0
         elif latest.get("face_found"):
+            self.no_face_attempts = 0
             self.failed_attempts += 1
             state = (
                 IdentityState.LOCKED_UNKNOWN
@@ -568,6 +578,7 @@ class IdentityStage:
         else:
             # No usable face is inconclusive: retain the current state and
             # attempt count, but expose that this inference did not verify a face.
+            self.no_face_attempts = getattr(self, "no_face_attempts", 0) + 1
             self.result = replace(
                 self.result,
                 timestamp=latest["timestamp"],

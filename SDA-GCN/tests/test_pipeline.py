@@ -45,6 +45,7 @@ class IdentityStateTests(unittest.TestCase):
         stage.absent_timeout = 1.5
         stage.result = IdentityResult()
         stage.failed_attempts = 0
+        stage.no_face_attempts = 0
         stage.last_attempt_at = 0.0
         stage.last_present_at = 0.0
         stage.association_bbox = None
@@ -104,12 +105,38 @@ class IdentityStateTests(unittest.TestCase):
         self.assertEqual(stage.result.state, IdentityState.UNKNOWN)
         self.assertEqual(stage.failed_attempts, 1)
 
-    def test_no_face_uses_fast_retry_even_after_unknown_lock(self):
+    def test_no_face_backoff_increases_and_caps(self):
         stage = self.make_stage()
-        stage.result = IdentityResult(IdentityState.LOCKED_UNKNOWN, face_found=False)
+        stage.result = IdentityResult(IdentityState.UNVERIFIED, face_found=False)
         stage.last_attempt_at = 10.0
         self.assertFalse(stage._due(10.29))
         self.assertTrue(stage._due(10.3))
+        stage.no_face_attempts = 1
+        self.assertFalse(stage._due(10.49))
+        self.assertTrue(stage._due(10.5))
+        stage.no_face_attempts = 2
+        self.assertFalse(stage._due(10.99))
+        self.assertTrue(stage._due(11.0))
+
+    def test_locked_unknown_keeps_three_second_retry_after_no_face(self):
+        stage = self.make_stage()
+        stage.result = IdentityResult(IdentityState.LOCKED_UNKNOWN, face_found=False)
+        stage.no_face_attempts = 3
+        stage.last_attempt_at = 10.0
+        self.assertFalse(stage._due(12.99))
+        self.assertTrue(stage._due(13.0))
+
+    def test_face_result_and_association_reset_clear_no_face_backoff(self):
+        stage = self.make_stage()
+        stage.no_face_attempts = 3
+        stage._results.put({"known": False, "face_found": True,
+                            "confidence": 0.1, "timestamp": 1.0,
+                            "bbox": (0, 0, 10, 10), "inference_ms": 10.0})
+        stage.poll()
+        self.assertEqual(stage.no_face_attempts, 0)
+        stage.no_face_attempts = 3
+        stage.reset()
+        self.assertEqual(stage.no_face_attempts, 0)
 
     def test_bbox_association_change_invalidates_lock(self):
         stage = self.make_stage()

@@ -27,7 +27,7 @@ from sda_vision import (
 )
 from sda_vision.action_labels import ACTION_CLASSES
 from sda_vision.cli import parse_args
-from sda_vision.contracts import FrameTransform
+from sda_vision.contracts import FrameTransform, effective_inference_dimensions
 from sda_vision.runtime.identity import IdentityResult, IdentityState, _replace_latest
 from sda_vision.runtime.timing import PoseSample
 
@@ -112,8 +112,46 @@ class ContractTests(unittest.TestCase):
     def test_padded_inference_bbox_maps_to_source_pixels(self):
         transform = FrameTransform(1920, 1080)
         self.assertEqual(transform.bbox_to_source((0, 0, 1280, 720)), (0, 0, 1920, 1080))
-        portrait = FrameTransform(480, 640)
-        self.assertEqual(portrait.bbox_to_source((370, 0, 910, 720)), (0, 0, 480, 640))
+        portrait_size = effective_inference_dimensions(480, 640)
+        portrait = FrameTransform(480, 640, *portrait_size)
+        self.assertEqual(portrait.bbox_to_source((0, 160, 720, 1120)), (0, 0, 480, 640))
+
+    def test_effective_inference_dimensions_follow_source_orientation(self):
+        self.assertEqual(effective_inference_dimensions(1920, 1080), (1280, 720))
+        self.assertEqual(effective_inference_dimensions(1080, 1920), (720, 1280))
+
+    def test_portrait_bbox_maps_back_to_source_pixels(self):
+        width, height = effective_inference_dimensions(1080, 1920)
+        transform = FrameTransform(1080, 1920, width, height)
+        self.assertEqual(
+            transform.bbox_to_source((72, 128, 648, 1152)),
+            (108, 192, 972, 1728),
+        )
+
+    def test_canceled_pending_fall_clears_stale_action_metadata(self):
+        session = VisionSession.__new__(VisionSession)
+        session.config = SimpleNamespace(raw_classifier=False, source_epoch=0)
+        moved = np.zeros((25, 3), dtype=np.float32)
+        moved[2, 0] = 1.0
+        session.pose_samples_by_track = {7: deque([PoseSample(2.0, moved)])}
+        session.pending_events_by_track = {7: {
+            "started_source_time_s": 0.0,
+            "state": "WARNING_PENDING",
+            "anchor_kpts": np.zeros((25, 3), dtype=np.float32),
+            "next_check_source_time_s": 1.0,
+            "conf": 0.9,
+        }}
+        session.current_action_by_track = {7: "Phat hien nga"}
+        session.action_color_by_track = {7: (0, 0, 255)}
+        session.action_class_by_track = {7: (ACTION_CLASSES[0], 0.9)}
+        session._pending_fall_diagnostics = []
+        session.log_level = "error"
+
+        session.detect_fall_for_track(2.0, 7)
+
+        self.assertIsNone(session.pending_events_by_track[7])
+        self.assertEqual(session.current_action_by_track[7], "Binh thuong")
+        self.assertNotIn(7, session.action_class_by_track)
 
     def test_configurable_frame_transform_preserves_aspect_ratio(self):
         full_hd = FrameTransform(1920, 1080, 1280, 720)

@@ -27,7 +27,14 @@ from ultralytics import YOLO
 from .action_labels import action_class
 from .callbacks import VisionCallbacks
 from .config import VisionSessionConfig
-from .contracts import FrameTransform, VisionDetection, VisionEvent, VisionFrameResult, VisionSourceFrame
+from .contracts import (
+    FrameTransform,
+    VisionDetection,
+    VisionEvent,
+    VisionFrameResult,
+    VisionSourceFrame,
+    effective_inference_dimensions,
+)
 from .runtime.hardware import (
     FaceAccelerationError,
     probe_capabilities,
@@ -727,8 +734,10 @@ class VisionSession:
 
         x_center = (person_box[0] + person_box[2]) / 2
         y_center = (person_box[1] + person_box[3]) / 2
-        x_ratio = x_center / self.orig_w
-        y_ratio = y_center / self.orig_h
+        inference_width = self._frame_transform.inference_width
+        inference_height = self._frame_transform.inference_height
+        x_ratio = x_center / inference_width
+        y_ratio = y_center / inference_height
 
         if x_ratio < 0.1:
             last_pos = "Sát mép trái"
@@ -894,6 +903,7 @@ class VisionSession:
 
             if self.pending_events_by_track.get(track_id) is None:
                 self.current_action_by_track[track_id] = "Binh thuong"
+                self.action_class_by_track.pop(track_id, None)
                 self.action_color_by_track[track_id] = (0, 255, 0)
 
         else:
@@ -1374,13 +1384,16 @@ class VisionSession:
             frame = snapshot.frame.copy()
 
             h, w = frame.shape[:2]
-            self._frame_transform = FrameTransform(w, h, self.orig_w, self.orig_h)
-            scale = min(self.orig_w / w, self.orig_h / h)
+            inference_w, inference_h = effective_inference_dimensions(
+                w, h, self.orig_w, self.orig_h
+            )
+            self._frame_transform = FrameTransform(w, h, inference_w, inference_h)
+            scale = self._frame_transform.scale
             new_w, new_h = int(w * scale), int(h * scale)
             frame = cv2.resize(frame, (new_w, new_h))
 
-            pad_w = self.orig_w - new_w
-            pad_h = self.orig_h - new_h
+            pad_w = inference_w - new_w
+            pad_h = inference_h - new_h
             frame = cv2.copyMakeBorder(
                 frame,
                 pad_h // 2,
@@ -1477,6 +1490,11 @@ class VisionSession:
                 self._latest_detections = []
 
             if new_pose_packet and pose_packet.result.pose_landmarks:
+                pose_height, pose_width = pose_packet.frame.shape[:2]
+                source_height, source_width = pose_packet.source_frame.shape[:2]
+                self._frame_transform = FrameTransform(
+                    source_width, source_height, pose_width, pose_height
+                )
                 rects = []
                 landmark_list = []
                 for landmarks in pose_packet.result.pose_landmarks:
@@ -1485,10 +1503,10 @@ class VisionSession:
                     x_min, x_max = min(xs), max(xs)
                     y_min, y_max = min(ys), max(ys)
                     pad = 30
-                    x1 = max(0, int(x_min * self.orig_w) - pad)
-                    y1 = max(0, int(y_min * self.orig_h) - pad)
-                    x2 = min(self.orig_w, int(x_max * self.orig_w) + pad)
-                    y2 = min(self.orig_h, int(y_max * self.orig_h) + pad)
+                    x1 = max(0, int(x_min * pose_width) - pad)
+                    y1 = max(0, int(y_min * pose_height) - pad)
+                    x2 = min(pose_width, int(x_max * pose_width) + pad)
+                    y2 = min(pose_height, int(y_max * pose_height) + pad)
                     if (x2 - x1) >= 20 and (y2 - y1) >= 20:
                         rects.append((x1, y1, x2, y2))
                         landmark_list.append(landmarks)

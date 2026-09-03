@@ -1,6 +1,11 @@
 import type { CameraVisionResult } from "../../api/cameras";
 
 export const VISION_OVERLAY_GRACE_MS = 450;
+export const VISION_ACTION_GRACE_MS = 750;
+export const VISION_ACTION_ANALYZING = "Trạng thái: Đang phân tích";
+
+export type VisionActionPlacement = "bbox" | "global" | null;
+export type VisionActionTone = "fall" | "normal";
 
 export function formatActionDisplay(metadata: CameraVisionResult["metadata"]): string | null {
   if (typeof metadata.action_label !== "string" || !metadata.action_label) return null;
@@ -12,16 +17,52 @@ export function formatActionDisplay(metadata: CameraVisionResult["metadata"]): s
 export interface VisionOverlayState {
   resetKey: string;
   sourceEpoch: number | null;
+  latestFrameId: number | null;
   retained: CameraVisionResult | null;
   expiresAt: number;
+  retainedAction: string | null;
+  actionExpiresAt: number;
+  retainedActionIsFall: boolean;
 }
 
 export function emptyVisionOverlayState(resetKey: string): VisionOverlayState {
-  return { resetKey, sourceEpoch: null, retained: null, expiresAt: 0 };
+  return {
+    resetKey,
+    sourceEpoch: null,
+    latestFrameId: null,
+    retained: null,
+    expiresAt: 0,
+    retainedAction: null,
+    actionExpiresAt: 0,
+    retainedActionIsFall: false,
+  };
 }
 
 export function hasVisualBBox(result: CameraVisionResult | null): result is CameraVisionResult {
-  return Boolean(result?.detections.some((detection) => detection.bbox_xyxy));
+  return Boolean(result?.detections.some((detection) => {
+    const bbox = detection.bbox_xyxy;
+    return bbox?.length === 4
+      && bbox.every((value) => typeof value === "number" && Number.isFinite(value))
+      && bbox[2] > bbox[0]
+      && bbox[3] > bbox[1];
+  }));
+}
+
+export function isFallAction(metadata: CameraVisionResult["metadata"]): boolean {
+  return metadata.action_class_id === 0 || metadata.action_class_name === "fall";
+}
+
+export function visionActionPresentation(
+  display: CameraVisionResult | null,
+  state: VisionOverlayState,
+): { placement: VisionActionPlacement; tone: VisionActionTone } {
+  const hasActionState = Boolean(state.retainedAction && state.actionExpiresAt > 0);
+  return {
+    placement: display ? "bbox" : hasActionState ? "global" : null,
+    tone: hasActionState
+      ? (state.retainedActionIsFall ? "fall" : "normal")
+      : (display && isFallAction(display.metadata) ? "fall" : "normal"),
+  };
 }
 
 export function updateVisionOverlayState(
@@ -30,19 +71,56 @@ export function updateVisionOverlayState(
   now: number,
   active: boolean,
   resetKey: string,
-): { state: VisionOverlayState; display: CameraVisionResult | null } {
+): { state: VisionOverlayState; display: CameraVisionResult | null; actionDisplay: string | null } {
   let state = previous.resetKey === resetKey ? previous : emptyVisionOverlayState(resetKey);
-  if (!active) return { state: emptyVisionOverlayState(resetKey), display: null };
+  if (!active) {
+    return { state: emptyVisionOverlayState(resetKey), display: null, actionDisplay: null };
+  }
 
-  const epoch = typeof incoming?.metadata.source_epoch === "number" ? incoming.metadata.source_epoch : null;
+  const epoch = incoming
+    ? (typeof incoming.metadata.source_epoch === "number" ? incoming.metadata.source_epoch : 0)
+    : null;
   if (epoch !== null && state.sourceEpoch !== null && epoch !== state.sourceEpoch) {
-    state = emptyVisionOverlayState(resetKey);
+    if (epoch < state.sourceEpoch) incoming = null;
+    else state = emptyVisionOverlayState(resetKey);
   }
-  if (epoch !== null) state = { ...state, sourceEpoch: epoch };
-  if (hasVisualBBox(incoming)) {
-    state = { ...state, retained: incoming, expiresAt: now + VISION_OVERLAY_GRACE_MS };
+  const duplicateOrStale = Boolean(
+    incoming
+    && epoch !== null
+    && state.sourceEpoch === epoch
+    && state.latestFrameId !== null
+    && incoming.frame_id <= state.latestFrameId,
+  );
+  if (incoming && !duplicateOrStale) {
+    const action = formatActionDisplay(incoming.metadata);
+    state = {
+      ...state,
+      sourceEpoch: epoch ?? state.sourceEpoch,
+      latestFrameId: incoming.frame_id,
+      ...(hasVisualBBox(incoming)
+        ? { retained: incoming, expiresAt: now + VISION_OVERLAY_GRACE_MS }
+        : {}),
+      ...(action
+        ? {
+          retainedAction: action,
+          actionExpiresAt: now + VISION_ACTION_GRACE_MS,
+          retainedActionIsFall: isFallAction(incoming.metadata),
+        }
+        : {}),
+    };
   }
-  if (state.retained && state.expiresAt > now) return { state, display: state.retained };
-  state = { ...state, retained: null, expiresAt: 0 };
-  return { state, display: null };
+  const display = state.retained && state.expiresAt > now ? state.retained : null;
+  const actionDisplay = state.retainedAction && state.actionExpiresAt > now
+    ? state.retainedAction
+    : VISION_ACTION_ANALYZING;
+  if (!display || actionDisplay === VISION_ACTION_ANALYZING) {
+    state = {
+      ...state,
+      ...(!display ? { retained: null, expiresAt: 0 } : {}),
+      ...(actionDisplay === VISION_ACTION_ANALYZING
+        ? { retainedAction: null, actionExpiresAt: 0, retainedActionIsFall: false }
+        : {}),
+    };
+  }
+  return { state, display, actionDisplay };
 }

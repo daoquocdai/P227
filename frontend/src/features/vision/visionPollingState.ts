@@ -3,6 +3,12 @@ export interface VisionFrameCursor {
   frameId: number;
 }
 
+export const VISION_POLL_INTERVAL_MS = 200;
+
+export function nextVisionPollDelay(elapsedRequestMs: number): number {
+  return Math.max(0, VISION_POLL_INTERVAL_MS - elapsedRequestMs);
+}
+
 export class VisionLatestPollGuard {
   private generation = 0;
   private inFlight = false;
@@ -29,7 +35,7 @@ export class VisionLatestPollGuard {
     if (
       this.latest
       && (candidate.epoch < this.latest.epoch
-        || (candidate.epoch === this.latest.epoch && candidate.frameId < this.latest.frameId))
+        || (candidate.epoch === this.latest.epoch && candidate.frameId <= this.latest.frameId))
     ) return false;
     this.latest = candidate;
     return true;

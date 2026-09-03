@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { deleteCamera, getCamera, getCameras, getLatestCameraVision, updateCamera, type CameraDto, type CameraEventDto, type CameraVisionResult } from "../api/cameras";
 import { CameraStream } from "../components";
 import { WebcamView } from "../features/webcam/WebcamView";
-import { VisionLatestPollGuard } from "../features/vision/visionPollingState";
+import { nextVisionPollDelay, VISION_POLL_INTERVAL_MS, VisionLatestPollGuard } from "../features/vision/visionPollingState";
 import "./cameraViewer.css";
 import "./cameraApi.css";
 
@@ -54,12 +54,16 @@ export default function CameraPage() {
     let timer: number | undefined;
     let controller: AbortController | null = null;
     const guard = new VisionLatestPollGuard();
-    const schedule = () => {
-      if (!cancelled) timer = window.setTimeout(poll, 200);
+    const schedule = (delay: number) => {
+      if (!cancelled) timer = window.setTimeout(poll, delay);
     };
     const poll = async () => {
+      const startedAt = performance.now();
       const token = guard.begin();
-      if (token === null) return;
+      if (token === null) {
+        schedule(VISION_POLL_INTERVAL_MS);
+        return;
+      }
       controller = new AbortController();
       try {
         const response = await getLatestCameraVision(selected.id, controller.signal);
@@ -80,7 +84,7 @@ export default function CameraPage() {
       } finally {
         guard.finish(token);
         controller = null;
-        schedule();
+        schedule(nextVisionPollDelay(performance.now() - startedAt));
       }
     };
     void poll();
