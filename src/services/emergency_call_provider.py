@@ -87,7 +87,8 @@ class TwilioEmergencyCallProvider:
 
         if 200 <= response.status_code < 300:
             try:
-                reference = response.json().get("sid")
+                body = response.json()
+                reference = body.get("sid") if isinstance(body, dict) else None
             except ValueError:
                 reference = None
             return CallResult(True, provider_reference=reference)
@@ -97,10 +98,14 @@ class TwilioEmergencyCallProvider:
         twilio_message: str | None = None
         try:
             body = response.json()
-            twilio_code = body.get("code")
-            twilio_message = body.get("message")
+            if isinstance(body, dict):
+                twilio_code = body.get("code")
+                twilio_message = body.get("message")
         except ValueError:
             pass
+
+        if twilio_message:
+            twilio_message = str(twilio_message)[:200]
 
         if twilio_code is not None:
             error_code = f"TWILIO_{twilio_code}"

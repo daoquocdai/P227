@@ -181,14 +181,24 @@ class FallEscalationService:
                 (incident_id, STAGE),
             ).fetchone():
                 return None
-            # Determine the primary contact for this incident.
-            # The primary contact is the first active contact in (priority, created_at, id) order.
-            # Once established, ALL retry attempts go to the same primary contact;
-            # there is NO fallback to a second contact on failure.
-            contacts = connection.execute(
-                "SELECT * FROM emergency_contacts WHERE is_active=1 ORDER BY priority, created_at, id"
-            ).fetchall()
-            if not contacts:
+            first_attempt = connection.execute(
+                """SELECT contact_id FROM emergency_escalation_attempts
+                   WHERE incident_id=? AND stage=? AND contact_id IS NOT NULL
+                   ORDER BY attempt_number, created_at, id LIMIT 1""",
+                (incident_id, STAGE),
+            ).fetchone()
+            if first_attempt is None:
+                contact = connection.execute(
+                    """SELECT * FROM emergency_contacts WHERE is_active=1
+                       ORDER BY priority, created_at, id LIMIT 1"""
+                ).fetchone()
+            else:
+                contact = connection.execute(
+                    "SELECT * FROM emergency_contacts WHERE id=?",
+                    (first_attempt["contact_id"],),
+                ).fetchone()
+
+            if first_attempt is None and contact is None:
                 inserted = connection.execute(
                     """INSERT OR IGNORE INTO emergency_escalation_attempts
                        (id,incident_id,contact_id,status,attempt_number,incident_version,idempotency_key,error_code)
@@ -199,88 +209,42 @@ class FallEscalationService:
                     logger.error("Fall escalation has no active emergency contact incident=%s", incident_id)
                     return PersistedStateChange(incident["alert_id"])
                 return None
-            for contact in contacts:
-                attempts = connection.execute(
-                    """SELECT * FROM emergency_escalation_attempts
-                       WHERE incident_id=? AND stage=? AND contact_id=? ORDER BY attempt_number DESC LIMIT 1""",
-                    (incident_id, STAGE, contact["id"]),
-                ).fetchone()
-                if attempts is None:
-                    attempt_number = 1
-                elif attempts["error_code"] in GLOBAL_PROVIDER_FAILURES:
-
-            # Resolve primary contact: prefer the contact already used in the
-            # attempt chain (preserves identity across contact-list changes),
-            # otherwise use the current first active contact.
-            prior_attempt = connection.execute(
-                """SELECT contact_id FROM emergency_escalation_attempts
-                   WHERE incident_id=? AND stage=? AND contact_id IS NOT NULL
-                   ORDER BY attempt_number ASC LIMIT 1""",
-                (incident_id, STAGE),
-            ).fetchone()
-            if prior_attempt is not None:
-                # Stick to the contact already in use for this incident.
-                primary_id = prior_attempt["contact_id"]
-                contact = next((c for c in contacts if c["id"] == primary_id), None)
-                if contact is None:
-                    # Primary contact has since been deactivated; treat as no contact.
-                    return None
-                elif attempts["status"] == "failed" and attempts["retryable"]:
-                    if attempts["attempt_number"] >= self.settings.fall_call_max_attempts:
-                        continue
-                    retry_at = _parse_timestamp(attempts["updated_at"]) + timedelta(
-                        seconds=self.settings.fall_call_retry_seconds
-                    )
-                    if retry_at > now:
-                        return None
-                    attempt_number = attempts["attempt_number"] + 1
-                elif attempts["status"] == "failed":
-                    continue
-                else:
-            else:
-                contact = contacts[0]
 
             attempts = connection.execute(
                 """SELECT * FROM emergency_escalation_attempts
                    WHERE incident_id=? AND stage=? AND contact_id=? ORDER BY attempt_number DESC LIMIT 1""",
                 (incident_id, STAGE, contact["id"]),
             ).fetchone()
-
             if attempts is None:
                 attempt_number = 1
+            elif not contact["is_active"]:
+                if attempts["status"] == "failed" and attempts["retryable"]:
+                    connection.execute(
+                        """UPDATE emergency_escalation_attempts
+                           SET error_code='PRIMARY_CONTACT_INACTIVE', retryable=0,
+                               updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                           WHERE id=?""",
+                        (attempts["id"],),
+                    )
+                    logger.error(
+                        "Fall escalation primary contact is inactive incident=%s contact_id=%s",
+                        incident_id,
+                        contact["id"],
+                    )
+                    return PersistedStateChange(incident["alert_id"])
+                return None
             elif attempts["error_code"] in GLOBAL_PROVIDER_FAILURES:
-                # Global provider failure (e.g. TWILIO_UNAVAILABLE) – stop entirely.
                 return None
             elif attempts["status"] == "failed" and attempts["retryable"]:
                 if attempts["attempt_number"] >= self.settings.fall_call_max_attempts:
-                    # Max retries exhausted for primary contact – stop without fallback.
                     return None
-                attempt_id = str(uuid4())
-                connection.execute(
-                    """INSERT INTO emergency_escalation_attempts
-                       (id,incident_id,contact_id,status,attempt_number,incident_version,idempotency_key)
-                       VALUES (?,?,?,'claimed',?,?,?)""",
-                    (
-                        attempt_id,
-                        incident_id,
-                        contact["id"],
-                        attempt_number,
-                        incident["version"],
-                        f"{incident_id}:{STAGE}:{contact['id']}:{attempt_number}",
-                    ),
                 retry_at = _parse_timestamp(attempts["updated_at"]) + timedelta(
                     seconds=self.settings.fall_call_retry_seconds
                 )
-                return ClaimedCall(
                 if retry_at > now:
-                    # Not yet time for the next retry.
                     return None
                 attempt_number = attempts["attempt_number"] + 1
-            elif attempts["status"] == "failed":
-                # Non-retryable failure for primary contact – stop without fallback.
-                return None
             else:
-                # Already succeeded or in-flight.
                 return None
 
             attempt_id = str(uuid4())
@@ -291,11 +255,7 @@ class FallEscalationService:
                 (
                     attempt_id,
                     incident_id,
-                    incident["alert_id"],
                     contact["id"],
-                    contact["phone_e164"],
-                    incident["location_label"],
-                )
                     attempt_number,
                     incident["version"],
                     f"{incident_id}:{STAGE}:{contact['id']}:{attempt_number}",
@@ -309,15 +269,16 @@ class FallEscalationService:
                 contact["phone_e164"],
                 incident["location_label"],
             )
-        return None
 
     @staticmethod
     def _revalidate_claim(claim: ClaimedCall) -> bool:
         with database_connection(initialize=False) as connection:
             connection.execute("BEGIN IMMEDIATE")
             state = connection.execute(
-                """SELECT i.status AS incident_status, e.status AS attempt_status
+                """SELECT i.status AS incident_status, e.status AS attempt_status,
+                          c.is_active AS contact_is_active
                    FROM incidents i JOIN emergency_escalation_attempts e ON e.incident_id=i.id
+                   JOIN emergency_contacts c ON c.id=e.contact_id
                    WHERE i.id=? AND e.id=?""",
                 (claim.incident_id, claim.attempt_id),
             ).fetchone()
@@ -326,6 +287,14 @@ class FallEscalationService:
             if state["incident_status"] == "RESOLVED_SAFE":
                 connection.execute(
                     """UPDATE emergency_escalation_attempts SET status='cancelled',error_code='RESOLVED_SAFE',
+                       updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND status='claimed'""",
+                    (claim.attempt_id,),
+                )
+                return False
+            if not state["contact_is_active"]:
+                connection.execute(
+                    """UPDATE emergency_escalation_attempts SET status='cancelled',
+                       error_code='PRIMARY_CONTACT_INACTIVE', retryable=0,
                        updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND status='claimed'""",
                     (claim.attempt_id,),
                 )
